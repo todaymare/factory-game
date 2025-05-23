@@ -1,0 +1,13 @@
+[package]
+name = "prototype_v2"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+glam = { version = "*", features = ["rand"] }
+gl = "*"
+glfw = "*"
+sti = { path = "./vendor/sti" }
+freetype = "*"
+rand = "*"
+obj-rs = "*"
