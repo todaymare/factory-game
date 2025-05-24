@@ -44,9 +44,19 @@ impl<G: Key, K: Key, V, A: Alloc> KGenMap<G, K, V, A> {
     }
 
 
-    pub fn for_each<F: FnMut(&mut V)>(&mut self, mut f: F) {
+    pub fn for_each_mut<F: FnMut(&mut V)>(&mut self, mut f: F) {
         for v in self.vec.iter_mut() {
             let KGenVal::Occupied(v) = &mut v.1
+            else { continue };
+
+            f(v);
+        }
+    }
+
+
+    pub fn for_each<F: FnMut(&V)>(&self, mut f: F) {
+        for v in self.vec.iter() {
+            let KGenVal::Occupied(v) = &v.1
             else { continue };
 
             f(v);
@@ -82,6 +92,8 @@ impl<G: Key, K: Key, V, A: Alloc> KGenMap<G, K, V, A> {
         let key = self.vec.push((G::ZERO, KGenVal::Occupied(value)));
         KeyGen::new(G::ZERO, key)
     }
+
+
 
 
     pub fn remove(&mut self, kg: KeyGen<G, K>) -> V {

@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use glam::{IVec3, Vec3, Vec4};
 
-use crate::{chunk::{draw_quad, VoxelKind}, mesh::Mesh, quad::{Direction, Quad}, structure::{Structure, StructureKind}, Game, PhysicsBody, World};
+use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, structures::strct::{Structure, StructureKind}, voxel_world::{chunk::Chunk, voxel::VoxelKind}, Game, PhysicsBody, Tick};
 
 
 #[derive(Clone)]
 pub struct DroppedItem {
     pub item: Item,
     pub body: PhysicsBody,
-    pub creation_tick: u32,
+    pub creation_tick: Tick,
 }
 
 

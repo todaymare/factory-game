@@ -3,7 +3,7 @@ use std::{collections::{hash_map::Entry, HashMap}, io::BufReader, mem::offset_of
 use glam::{Vec3, Vec4};
 use obj::{raw::object::Polygon, LoadError, Obj, ObjResult};
 
-use crate::shader::ShaderProgram;
+use crate::{directions::Direction, quad::Quad, shader::ShaderProgram};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -165,4 +165,29 @@ impl Vertex {
     pub fn new(pos: Vec3, normal: Vec3, colour: Vec4) -> Self {
         Self { position: pos, normal, colour }
     }
+}
+
+
+pub fn draw_quad(verticies: &mut Vec<Vertex>, indicies: &mut Vec<u32>, quad: Quad) {
+    let normal = match quad.direction {
+        Direction::Left => Vec3::new(1.0, 0.0, 0.0),
+        Direction::Right => Vec3::new(-1.0, 0.0, 0.0),
+        Direction::Down => Vec3::new(0.0, -1.0, 0.0),
+        Direction::Up => Vec3::new(0.0, 1.0, 0.0),
+        Direction::Back => Vec3::new(0.0, 0.0, -1.0),
+        Direction::Forward => Vec3::new(0.0, 0.0, 1.0),
+    };
+
+    let k = verticies.len() as u32;
+    let mut i = 0;
+    for corner in quad.corners {
+        let mut colour = quad.color;
+        colour = colour * 0.9 + colour * (i as f32 * 0.1);
+        colour.w = quad.color.w;
+        verticies.push(Vertex::new(Vec3::new(corner[0] as f32, corner[1] as f32, corner[2] as f32), normal, colour));
+        i += 1;
+    }
+
+
+    indicies.extend_from_slice(&[k, k+1, k+2, k+2, k+3, k]);
 }

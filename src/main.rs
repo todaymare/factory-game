@@ -4,33 +4,31 @@
 
 pub mod shader;
 pub mod mesh;
-pub mod chunk;
 pub mod quad;
 pub mod renderer;
 pub mod input;
 pub mod items;
-pub mod structure;
+pub mod structures;
 pub mod gen_map;
 pub mod voxel_world;
+pub mod directions;
 
 use core::{f32, time};
-use std::{char, collections::{HashMap, HashSet}, f32::consts::{PI, TAU}, fmt::{Display, Write}, fs, io::BufReader, ops::Bound, simd::f32x4, time::Instant};
+use std::{char, collections::{HashMap, HashSet}, f32::consts::{PI, TAU}, fmt::{Display, Write}, fs, io::BufReader, ops::{self, Bound}, simd::f32x4, time::Instant};
 
-use chunk::{Chunk, Voxel, VoxelKind, CHUNK_SIZE};
+use directions::CardinalDirection;
+use voxel_world::{chunk::{Chunk, CHUNK_SIZE}, split_world_pos, voxel::{Voxel, VoxelKind}, VoxelWorld};
 use gen_map::KGenMap;
-use gl::BindFragDataLocationIndexed::load_with;
-use glam::{IVec2, IVec3, Mat4, Vec2, Vec3, Vec4};
+use glam::{IVec3, Mat4, Vec2, Vec3, Vec4};
 use glfw::{GlfwReceiver, Key, MouseButton, WindowEvent};
 use input::InputManager;
 use items::{DroppedItem, Item, ItemKind, ItemMeshes};
 use mesh::{Mesh, Vertex};
-use obj::Obj;
-use quad::Direction;
-use rand::{random, seq::IndexedRandom};
+use rand::random;
 use renderer::Renderer;
 use shader::{Shader, ShaderProgram};
-use sti::{define_key, println, vec::KVec};
-use structure::{rotate_block_vector, CompassDirection, Structure, StructureData, StructureGen, StructureId, StructureKey, StructureKind, WorkQueue};
+use sti::define_key;
+use structures::{strct::{Structure, StructureKind}, Structures};
 
 define_key!(EntityId(u32));
 
@@ -48,21 +46,19 @@ const DROPPED_ITEM_SCALE : f32 = 0.25;
 
 fn main() {
     let mut game = Game {
-        world: World {
-            chunks: HashMap::new(),
-            camera: Camera {
-                position: Vec3::ZERO,
-                direction: Vec3::Z,
-                up: Vec3::new(0.0, 1.0, 0.0),
-                pitch: 0.0,
-                yaw: 90.0f32.to_radians(),
+        world: VoxelWorld::new(),
+        structures: Structures::new(),
 
-            },
+        camera: Camera {
+            position: Vec3::ZERO,
+            direction: Vec3::Z,
+            up: Vec3::new(0.0, 1.0, 0.0),
+            pitch: 0.0,
+            yaw: 90.0f32.to_radians(),
+
         },
 
-        work_queue: WorkQueue::new(),
-        structures: KGenMap::new(),
-        structure_blocks: HashMap::new(),
+
 
         player: Player {
             body: PhysicsBody {
@@ -79,7 +75,7 @@ fn main() {
         },
 
         dropped_items: vec![],
-        current_tick: 0,
+        current_tick: Tick::initial(),
     };
 
 
@@ -130,20 +126,20 @@ fn main() {
         // handle mouse movement 
         {
             let dt = input.mouse_delta();
-            game.world.camera.yaw += dt.x * delta_time * MOUSE_SENSITIVITY;
-            game.world.camera.pitch -= dt.y * delta_time * MOUSE_SENSITIVITY;
+            game.camera.yaw += dt.x * delta_time * MOUSE_SENSITIVITY;
+            game.camera.pitch -= dt.y * delta_time * MOUSE_SENSITIVITY;
             
-            game.world.camera.yaw = game.world.camera.yaw % 360f32.to_radians();
+            game.camera.yaw = game.camera.yaw % 360f32.to_radians();
 
-            game.world.camera.pitch = game.world.camera.pitch.clamp((-89.9f32).to_radians(), 89f32.to_radians()) % 360f32.to_radians();
+            game.camera.pitch = game.camera.pitch.clamp((-89.9f32).to_radians(), 89f32.to_radians()) % 360f32.to_radians();
 
-            let yaw = game.world.camera.yaw;
-            let pitch = game.world.camera.pitch;
+            let yaw = game.camera.yaw;
+            let pitch = game.camera.pitch;
             let x = yaw.cos() * pitch.cos();
             let y = pitch.sin();
             let z = yaw.sin() * pitch.cos();
 
-            game.world.camera.direction = Vec3::new(x, y, z).normalize();
+            game.camera.direction = Vec3::new(x, y, z).normalize();
         }
 
 
@@ -151,15 +147,15 @@ fn main() {
         {
             let mut dir = Vec3::ZERO;
             if input.is_key_pressed(Key::W) {
-                dir += game.world.camera.direction;
+                dir += game.camera.direction;
             } else if input.is_key_pressed(Key::S) {
-                dir -= game.world.camera.direction;
+                dir -= game.camera.direction;
             }
 
             if input.is_key_pressed(Key::D) {
-                dir += game.world.camera.direction.cross(game.world.camera.up);
+                dir += game.camera.direction.cross(game.camera.up);
             } else if input.is_key_pressed(Key::A) {
-                dir -= game.world.camera.direction.cross(game.world.camera.up);
+                dir -= game.camera.direction.cross(game.camera.up);
             }
 
             dir.y = 0.0;
@@ -175,16 +171,16 @@ fn main() {
 
 
             if input.is_key_pressed(Key::Q) {
-                let raycast = game.world.raycast_voxel(game.world.camera.position,
-                                                  game.world.camera.direction,
+                let raycast = game.world.raycast_voxel(game.camera.position,
+                                                  game.camera.direction,
                                                   PLAYER_REACH);
                 if let Some((pos, _)) = raycast {
                     let voxel = game.world.get_voxel(pos);
                     if voxel.kind.is_structure() {
-                        let structure = game.structure_blocks.get(&pos).unwrap();
-                        let structure = &mut game.structures[structure.0];
+                        let structure = game.world.structure_blocks.get(&pos).unwrap();
+                        let structure = game.structures.get_mut(*structure);
 
-                        let item = structure.try_take(&mut game.work_queue);
+                        let item = structure.try_take();
                         if let Some(item) = item {
                             game.player.add_item(item);
                         }
@@ -218,9 +214,9 @@ fn main() {
                 }
 
 
-                let Some((pos, _))= game.world.raycast_voxel(game.world.camera.position,
-                                                  game.world.camera.direction,
-                                                  PLAYER_REACH)
+                let Some((pos, _))= game.world.raycast_voxel(game.camera.position,
+                                                             game.camera.direction,
+                                                             PLAYER_REACH)
                 else {
                     game.player.mining_progress = None;
                     break 'input_block;
@@ -240,7 +236,7 @@ fn main() {
                 }
 
 
-                let item = game.break_block(pos);
+                let item = game.world.break_block(&mut game.structures, pos);
 
 
                 let dropped_item = DroppedItem {
@@ -261,35 +257,48 @@ fn main() {
 
 
             'input_block: {
-                if input.is_button_pressed(MouseButton::Button2) && game.player.interact_delay < 0.0 {
-                    let raycast = game.world.raycast_voxel(game.world.camera.position,
-                                                      game.world.camera.direction,
-                                                      PLAYER_REACH);
-                    if let Some((pos, normal)) = raycast {
-                        let voxel = game.world.get_voxel_mut(pos + normal);
-                        if ! voxel.kind.is_air() {
-                            break 'input_block;
-                        }
-
-                        let Some(item_in_hand) = game.player.inventory.get(game.player.hand)
-                        else { break 'input_block };
-
-
-                        if let Some(voxel) = item_in_hand.kind.as_voxel() {
-                            let _ = game.player.take_item(game.player.hand, 1).unwrap();
-
-                            game.world.get_voxel_mut(pos+normal).kind = voxel;
-                            game.player.interact_delay = PLAYER_INTERACT_DELAY;
-                        } else if let Some(structure_kind) = item_in_hand.kind.as_structure() {
-                            if game.can_place_structure(structure_kind, pos+normal, game.world.camera.compass_direction()) {
-                                let structure = Structure::from_kind(structure_kind, pos+normal, game.world.camera.compass_direction());
-                                let _ = game.player.take_item(game.player.hand, 1).unwrap();
-                                game.add_structure(structure);
-                                game.player.interact_delay = PLAYER_INTERACT_DELAY;
-                            }
-                        }
-                    }
+                if game.player.interact_delay > 0.0 {
+                    break 'input_block;
                 }
+
+                if !input.is_button_pressed(MouseButton::Button2) {
+                    break 'input_block;
+                }
+
+
+                let Some((pos, normal)) = game.world.raycast_voxel(game.camera.position,
+                                                                   game.camera.direction,
+                                                                   PLAYER_REACH)
+                else { break 'input_block };
+
+                let place_position = pos + normal;
+
+                let voxel = game.world.get_voxel(place_position);
+                if !voxel.kind.is_air() { break 'input_block }
+
+                let Some(item_in_hand) = game.player.inventory.get(game.player.hand)
+                else { break 'input_block };
+
+                if let Some(voxel) = item_in_hand.kind.as_voxel() {
+                    let _ = game.player.take_item(game.player.hand, 1).unwrap();
+
+                    game.world.get_voxel_mut(place_position).kind = voxel;
+
+                } else if let Some(structure_kind) = item_in_hand.kind.as_structure() {
+
+                    if !game.can_place_structure(structure_kind, place_position, game.camera.compass_direction()) {
+                        break 'input_block;
+                    }
+
+                    let structure = Structure::from_kind(structure_kind, pos+normal, game.camera.compass_direction());
+                    let _ = game.player.take_item(game.player.hand, 1).unwrap();
+                    game.structures.add_structure(&mut game.world, structure);
+                }
+
+
+
+                game.player.interact_delay = PLAYER_INTERACT_DELAY;
+
             }
         }
 
@@ -311,7 +320,7 @@ fn main() {
                 world_shader.use_program();
                 
                 let projection = glam::Mat4::perspective_rh_gl(80.0f32.to_radians(), 1920.0/1080.0, 0.01, 100_000.0);
-                let view = game.world.camera.view_matrix();
+                let view = game.camera.view_matrix();
 
                 world_shader.set_matrix4(c"projection", projection);
                 world_shader.set_matrix4(c"view", view);
@@ -337,7 +346,7 @@ fn main() {
                     let position = item.body.position;
                     let mesh = meshes.get(item.item.kind);
 
-                    let model = Mat4::from_translation(position) * Mat4::from_scale(Vec3::splat(DROPPED_ITEM_SCALE)) * Mat4::from_rotation_y((game.current_tick - item.creation_tick) as f32 / TICKS_PER_SECOND as f32);
+                    let model = Mat4::from_translation(position) * Mat4::from_scale(Vec3::splat(DROPPED_ITEM_SCALE)) * Mat4::from_rotation_y((game.current_tick - item.creation_tick).u32() as f32 / TICKS_PER_SECOND as f32);
                     world_shader.set_matrix4(c"model", model);
 
                     mesh.draw();
@@ -359,8 +368,8 @@ fn main() {
 
             // render block outline
             {
-                let raycast = game.world.raycast_voxel(game.world.camera.position,
-                                                  game.world.camera.direction,
+                let raycast = game.world.raycast_voxel(game.camera.position,
+                                                  game.camera.direction,
                                                   PLAYER_REACH);
                 if let Some((pos, _)) = raycast {
                     let voxel = game.world.get_voxel(pos);
@@ -394,19 +403,21 @@ fn main() {
 
                 let _ = writeln!(text, "§eFPS: §{colour_code}{fps}§r");
 
-                let _ = writeln!(text, "§ePITCH: §a{:.1} §eYAW: §a{:.1}§r", game.world.camera.pitch.to_degrees(), game.world.camera.yaw.to_degrees());
-                let _ = writeln!(text, "§ePOSITION: §a{:.1}, {:.1} {:.1}§r", game.world.camera.position.x, game.world.camera.position.y, game.world.camera.position.z);
+                let _ = writeln!(text, "§ePITCH: §a{:.1} §eYAW: §a{:.1}§r", game.camera.pitch.to_degrees(), game.camera.yaw.to_degrees());
+                let _ = writeln!(text, "§ePOSITION: §a{:.1}, {:.1} {:.1}§r", game.camera.position.x, game.camera.position.y, game.camera.position.z);
 
-                let chunk_pos = game.world.camera.position.as_ivec3().div_euclid(IVec3::splat(CHUNK_SIZE as i32));
+                let (chunk_pos, chunk_local_pos) = split_world_pos(game.player.body.position.floor().as_ivec3());
                 let _ = writeln!(text, "§eCHUNK POSITION: §a{}, {}, {}§r", chunk_pos.x, chunk_pos.y, chunk_pos.z);
+                let _ = writeln!(text, "§eCHUNK LOCAL POSITION: §a{}, {}, {}§r", chunk_local_pos.x, chunk_local_pos.y, chunk_local_pos.z);
                 let _ = writeln!(text, "§eCHUNK COUNT: §a{}§r", game.world.chunks.len());
-                let _ = writeln!(text, "§eDIRECTION: §b{:?}§r", game.world.camera.compass_direction());
-                let _ = writeln!(text, "§eDIRECTION VECTOR: §b{:?}§r", game.world.camera.compass_direction().as_ivec3());
+                let _ = writeln!(text, "§eDIRECTION: §b{:?}§r", game.camera.compass_direction());
+                let _ = writeln!(text, "§eDIRECTION VECTOR: §b{:?}§r", game.camera.compass_direction().as_ivec3());
 
 
-                let target_block = game.world.raycast_voxel(game.world.camera.position, game.world.camera.direction, PLAYER_REACH);
+                let target_block = game.world.raycast_voxel(game.camera.position, game.camera.direction, PLAYER_REACH);
                 if let Some(target_block) = target_block {
                     let target_voxel = game.world.get_voxel(target_block.0);
+                    let target_voxel_kind = target_voxel.kind;
 
 
                     let _ = writeln!(text, "§eTARGET LOCATION: §a{}, {}, {}", target_block.0.x, target_block.0.y, target_block.0.z);
@@ -416,12 +427,13 @@ fn main() {
 
 
                     if target_voxel.kind.is_structure() {
-                       let structure = game.structure_blocks.get(&target_block.0).unwrap();
-                       let structure = &game.structures[structure.0];
+                       let structure = game.world.structure_blocks.get(&target_block.0).unwrap();
+                       let structure = game.structures.get(*structure);
 
                        let _ = writeln!(text, "Structure");
                        let _ = writeln!(text, "§e- POSITION: §a{}, {}, {}", structure.position.x, structure.position.y, structure.position.z);
                        let _ = writeln!(text, "§e- DIRECTION: §b{:?}", structure.direction);
+                       let _ = writeln!(text, "§e- IS ASLEEP: §b{}", structure.is_asleep);
 
                        if let Some(input) = &structure.input {
                            let _ = writeln!(text, "§e- INPUT:");
@@ -456,21 +468,21 @@ fn main() {
 
                     if let Some(mining_progress) = game.player.mining_progress {
                         let _ = writeln!(text, "§eMINING PROGRESS: §a{}/{}",
-                                         mining_progress, target_voxel.kind.base_hardness());
+                                         mining_progress, target_voxel_kind.base_hardness());
                     }
                 }
 
 
-                if !game.work_queue.entries.is_empty() {
-                    let mut cursor = game.work_queue.entries.lower_bound_mut(Bound::Unbounded);
+                if !game.structures.work_queue.entries.is_empty() {
+                    let mut cursor = game.structures.work_queue.entries.lower_bound(Bound::Unbounded);
                     let _ = writeln!(text, "§eWORK QUEUE:");
 
                     let mut i = 0;
                     while let Some(((tick, id), ())) = cursor.next() {
-                        let _ = writeln!(text, "§e- §b{:?}§e in §a{} §eticks", game.structures[id.0].data.as_kind(), *tick - game.current_tick);
+                        let _ = writeln!(text, "§e- §b{:?}§e in §a{} §eticks", game.structures.get(*id).data.as_kind(), (*tick - game.current_tick).u32());
                         i += 1;
                         if i > 3 {
-                            let len = game.work_queue.entries.len();
+                            let len = game.structures.work_queue.entries.len();
                             let rem = len - i;
 
                             if rem == 1 {
@@ -532,13 +544,12 @@ fn main() {
 
 
 pub struct Game {
-    world: World,
+    world: VoxelWorld,
+    camera: Camera,
     player: Player,
     dropped_items: Vec<DroppedItem>,
-    current_tick: u32,
-    work_queue: WorkQueue,
-    structures: KGenMap<StructureGen, StructureKey, Structure>,
-    structure_blocks: HashMap<IVec3, StructureId>,
+    current_tick: Tick,
+    structures: Structures,
 }
 
 
@@ -547,7 +558,7 @@ const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32;
 
 
 impl Game {
-    fn can_place_structure(&mut self, structure: StructureKind, pos: IVec3, direction: CompassDirection) -> bool {
+    fn can_place_structure(&mut self, structure: StructureKind, pos: IVec3, direction: CardinalDirection) -> bool {
         let pos = pos - structure.origin(direction);
         let blocks = structure.blocks(direction);
         for offset in blocks {
@@ -560,83 +571,9 @@ impl Game {
     }
 
 
-    fn add_structure(&mut self, structure: Structure) {
-        let id = self.structures.insert(structure);
-        let id = StructureId(id);
-        let structure = self.structures.get(id.0).unwrap();
-
-        let placement_origin = structure.position - structure.data.as_kind().origin(structure.direction);
-
-        let blocks = structure.data.as_kind().blocks(structure.direction);
-        for offset in blocks {
-            let pos = placement_origin + offset;
-            self.world.get_voxel_mut(pos).kind = VoxelKind::StructureBlock;
-            self.structure_blocks.insert(pos, id);
-        }
-
-        id.update(self);
-    }
-
-
-    fn block_item(&mut self, pos: IVec3) -> Item {
-        let voxel = self.world.get_voxel(pos);
-
-        if voxel.kind.is_structure() {
-            let structure_id = *self.structure_blocks.get(&pos).unwrap();
-            let structure = self.structures.get(structure_id.0).unwrap();
-            let kind = structure.data.as_kind().item_kind();
-            Item { amount: 1, kind }
-        } else {
-            let kind = voxel.kind;
-            let item = Item { amount: 1, kind: kind.as_item_kind() };
-            item
-        }
-
-    }
-
-
-    fn break_block(&mut self, pos: IVec3) -> Item {
-        let voxel = self.world.get_voxel_mut(pos);
-
-        let item = if voxel.kind.is_structure() {
-            let structure_id = *self.structure_blocks.get(&pos).unwrap();
-            let structure = self.structures.remove(structure_id.0);
-            let placement_origin = structure.position - structure.data.as_kind().origin(structure.direction);
-            
-            let blocks = structure.data.as_kind().blocks(structure.direction);
-            let kind = structure.data.as_kind().item_kind();
-
-            for offset in blocks {
-                let pos = placement_origin + offset;
-
-                self.world.get_voxel_mut(pos).kind = VoxelKind::Air;
-                self.structure_blocks.remove(&pos).unwrap();
-            }
-
-
-            let mut cursor = self.work_queue.entries.lower_bound_mut(Bound::Unbounded);
-            while let Some(((_, id), ())) = cursor.next() {
-                if *id != structure_id { continue }
-
-                cursor.remove_prev();
-            }
-
-
-            Item { amount: 1, kind }
-
-        } else {
-            let kind = voxel.kind;
-            let item = Item { amount: 1, kind: kind.as_item_kind() };
-            voxel.kind = VoxelKind::Air;
-            item
-        };
-
-        item
-    }
-
-
     fn simulation_tick(&mut self) {
-        self.current_tick += 1;
+        self.current_tick = self.current_tick.inc();
+
         let delta_time = DELTA_TICK;
 
         if let Some(progress) = &mut self.player.mining_progress {
@@ -648,8 +585,8 @@ impl Game {
         {
             self.world.move_physics_body(delta_time, &mut self.player.body);
 
-            self.world.camera.position = self.player.body.position;
-            self.world.camera.position.y += 0.8;
+            self.camera.position = self.player.body.position;
+            self.camera.position.y += 0.8;
 
 
             // iterate through the items in the world and
@@ -659,7 +596,7 @@ impl Game {
                 let mut i = 0;
                 while let Some(item) = self.dropped_items.get(i) {
                     let lifetime = self.current_tick - item.creation_tick;
-                    if lifetime < (0.2 * TICKS_PER_SECOND as f32) as u32 { i += 1; continue }
+                    if lifetime.u32() < (0.2 * TICKS_PER_SECOND as f32) as u32 { i += 1; continue }
 
                     let distance = item.body.position.distance_squared(self.player.body.position);
                     if distance.abs() > 25.0 {
@@ -703,17 +640,7 @@ impl Game {
         }
 
 
-        // handle the work queue
-        {
-            let to_be_updated = self.work_queue.process(self.current_tick);
-            for id in to_be_updated {
-                if let Some(structure) = self.structures.get_mut(id.1.0) {
-                    structure.is_queued = false;
-                    id.1.update(self);
-                }
-            }
-        }
-
+        self.structures.process(&mut self.world);
     }
 }
 
@@ -785,109 +712,53 @@ fn process_events(renderer: &mut Renderer,
 }
 
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
+pub struct Tick(u32);
 
 
-impl World {
-    fn raycast_voxel(&mut self, start: Vec3, dir: Vec3, max_dist: f32) -> Option<(IVec3, IVec3)> {
-        let mut pos = start.floor().as_ivec3();
-        let step = dir.signum();
-
-        let delta = Vec3::new(
-            (1.0 / dir.x).abs(),
-            (1.0 / dir.y).abs(),
-            (1.0 / dir.z).abs()
-        );
+impl Tick {
+    pub const NEVER : Tick = Tick(0);
 
 
-        let mut t_max = {
-            let fract = start - pos.as_vec3();
-            Vec3::new(
-                if dir.x > 0.0 { 1.0 - fract.x } else { fract.x } * delta.x,
-                if dir.y > 0.0 { 1.0 - fract.y } else { fract.y } * delta.y,
-                if dir.z > 0.0 { 1.0 - fract.z } else { fract.z } * delta.z,
-            )
-        };
+    pub fn new(num: u32) -> Self {
+        assert!(Tick(num) != Self::NEVER);
+        Self(num)
+    }
+
+    
+    pub fn initial() -> Self { Self::new(1) }
 
 
-        let mut dist = 0.0;
-        let mut last_move = Vec3::ZERO;
-
-        while dist < max_dist {
-            let voxel = self.get_voxel(pos);
-
-            let is_solid = !voxel.kind.is_air();
-
-            if is_solid {
-                return Some((pos, -last_move.normalize().as_ivec3()));
-            }
-
-            if t_max.x < t_max.y && t_max.x < t_max.z {
-                pos.x += step.x as i32;
-                dist = t_max.x;
-                t_max.x += delta.x;
-                last_move = Vec3::new(step.x, 0.0, 0.0);
-            } else if t_max.y < t_max.z {
-                pos.y += step.y as i32;
-                dist = t_max.y;
-                t_max.y += delta.y;
-                last_move = Vec3::new(0.0, step.y, 0.0);
-            } else {
-                pos.z += step.z as i32;
-                dist = t_max.z;
-                t_max.z += delta.z;
-                last_move = Vec3::new(0.0, 0.0, step.z);
-            }
-
-        }
-        None
+    pub fn inc(mut self) -> Self {
+        self.0 += 1;
+        self
     }
 
 
-    pub fn move_physics_body(&mut self, delta_time: f32, physics_body: &mut PhysicsBody) {
-        physics_body.velocity.y -= 9.8 * delta_time;
-
-        let mut position = physics_body.position;
-
-
-        physics_body.velocity.x *= 1.0 - 2.0 * delta_time;
-        physics_body.velocity.z *= 1.0 - 2.0 * delta_time;
-
-        for axis in 0..3 {
-            let mut new_position = position;
-            new_position[axis] += physics_body.velocity[axis] * delta_time;
-
-            let min = (new_position - physics_body.aabb_dims * 0.5).floor().as_ivec3();
-            let max = (new_position + physics_body.aabb_dims * 0.5).ceil().as_ivec3();
-
-            let mut collided = false;
-
-            for x in min.x..max.x {
-                for y in min.y..max.y {
-                    for z in min.z..max.z {
-                        let voxel_pos = IVec3::new(x, y, z);
-                        if !self.get_voxel(voxel_pos).kind.is_air() {
-                            collided = true;
-                            break;
-                        }
-                    }
-                    if collided { break; }
-                }
-                if collided { break; }
-            }
-
-            if collided {
-                physics_body.velocity[axis] = 0.0;
-            } else {
-                position[axis] = new_position[axis];
-            }
-        }
+    pub fn elapsed_since(self, initial: Tick) -> Tick {
+        Tick(initial.0 - self.0)
+    }
 
 
-        while !self.get_voxel(position.floor().as_ivec3()).kind.is_air() {
-            position.y += 1.0;
-        }
+    pub fn u32(self) -> u32 { self.0 }
 
-        physics_body.position = position;
+}
+
+
+impl ops::Add for Tick {
+    type Output = Tick;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+
+impl ops::Sub for Tick {
+    type Output = Tick;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0)
     }
 }
 
@@ -935,6 +806,7 @@ impl Player {
     }
 }
 
+
 struct Camera {
     position: Vec3,
     direction: Vec3,
@@ -947,34 +819,13 @@ struct Camera {
 }
 
 
-#[derive(Clone, PartialEq, Debug)]
-pub struct AABB {
-    w: f32,
-    h: f32,
-    d: f32,
-}
-
-
-impl AABB {
-    pub fn new(w: f32, h: f32, d: f32) -> Self {
-        Self {
-            w,
-            h,
-            d,
-        }
-    }
-
-}
-
-
-
 impl Camera {
     pub fn view_matrix(&self) -> Mat4 {
         Mat4::look_to_rh(self.position, self.direction, self.up)
     }
 
 
-    pub fn compass_direction(&self) -> CompassDirection {
+    pub fn compass_direction(&self) -> CardinalDirection {
         let mut angle = self.yaw % TAU;
 
         if angle < 0.0 { angle += TAU }
@@ -983,47 +834,12 @@ impl Camera {
         let sector = (angle / (PI/2.0)).round() as i32 % 4;
 
         match sector {
-            0 => CompassDirection::South,
-            1 => CompassDirection::West,
-            2 => CompassDirection::North,
-            3 => CompassDirection::East,
+            0 => CardinalDirection::South,
+            1 => CardinalDirection::West,
+            2 => CardinalDirection::North,
+            3 => CardinalDirection::East,
             _ => unreachable!(),
         }
     }
 }
-
-
-
-struct World {
-    chunks: HashMap<IVec3, Chunk>,
-    camera: Camera,
-}
-
-
-impl World {
-    pub fn get_chunk(&mut self, pos: IVec3) -> &mut Chunk {
-        if !self.chunks.contains_key(&pos) {
-            self.chunks.insert(pos, Chunk::generate(pos));
-        }
-
-        self.chunks.get_mut(&pos).unwrap()
-    }
-
-
-    pub fn get_voxel(&mut self, pos: IVec3) -> &Voxel {
-        let chunk_pos = pos.div_euclid(IVec3::splat(CHUNK_SIZE as i32));
-        let chunk_local_pos = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
-
-        self.get_chunk(chunk_pos).get(chunk_local_pos)
-    }
-
-
-    pub fn get_voxel_mut(&mut self, pos: IVec3) -> &mut Voxel {
-        let chunk_pos = pos.div_euclid(IVec3::splat(CHUNK_SIZE as i32));
-        let chunk_local_pos = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
-
-        self.get_chunk(chunk_pos).get_mut(chunk_local_pos)
-    }
-}
-
 
