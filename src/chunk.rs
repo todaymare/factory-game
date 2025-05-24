@@ -47,7 +47,7 @@ impl VoxelKind {
 
 
     pub fn is_transparent(self) -> bool { 
-        matches!(self, VoxelKind::Air)
+        matches!(self, VoxelKind::Air | VoxelKind::StructureBlock)
     }
 
 

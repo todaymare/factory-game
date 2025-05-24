@@ -11,6 +11,7 @@ pub mod input;
 pub mod items;
 pub mod structure;
 pub mod gen_map;
+pub mod voxel_world;
 
 use core::{f32, time};
 use std::{char, collections::{HashMap, HashSet}, f32::consts::{PI, TAU}, fmt::{Display, Write}, fs, io::BufReader, ops::Bound, simd::f32x4, time::Instant};
@@ -24,11 +25,12 @@ use input::InputManager;
 use items::{DroppedItem, Item, ItemKind, ItemMeshes};
 use mesh::{Mesh, Vertex};
 use obj::Obj;
+use quad::Direction;
 use rand::{random, seq::IndexedRandom};
 use renderer::Renderer;
 use shader::{Shader, ShaderProgram};
 use sti::{define_key, println, vec::KVec};
-use structure::{CompassDirection, Structure, StructureData, StructureGen, StructureId, StructureKey, StructureKind, WorkQueue};
+use structure::{rotate_block_vector, CompassDirection, Structure, StructureData, StructureGen, StructureId, StructureKey, StructureKind, WorkQueue};
 
 define_key!(EntityId(u32));
 
@@ -171,9 +173,30 @@ fn main() {
                 game.player.body.velocity.y = 5.0;
             }
 
+
+            if input.is_key_pressed(Key::Q) {
+                let raycast = game.world.raycast_voxel(game.world.camera.position,
+                                                  game.world.camera.direction,
+                                                  PLAYER_REACH);
+                if let Some((pos, _)) = raycast {
+                    let voxel = game.world.get_voxel(pos);
+                    if voxel.kind.is_structure() {
+                        let structure = game.structure_blocks.get(&pos).unwrap();
+                        let structure = &mut game.structures[structure.0];
+
+                        let item = structure.try_take(&mut game.work_queue);
+                        if let Some(item) = item {
+                            game.player.add_item(item);
+                        }
+                    }
+                }
+            }
+
+
             if input.is_key_just_pressed(Key::P) {
                 renderer.is_wireframe = !renderer.is_wireframe;
             }
+
 
             if input.is_key_just_pressed(Key::X) {
                 game.player.hand += 1;
@@ -258,8 +281,8 @@ fn main() {
                             game.world.get_voxel_mut(pos+normal).kind = voxel;
                             game.player.interact_delay = PLAYER_INTERACT_DELAY;
                         } else if let Some(structure_kind) = item_in_hand.kind.as_structure() {
-                            let structure = Structure { position: pos+normal, data: StructureData::from_kind(structure_kind), direction: game.world.camera.compass_direction() };
-                            if game.can_place_structure(&structure) {
+                            if game.can_place_structure(structure_kind, pos+normal, game.world.camera.compass_direction()) {
+                                let structure = Structure::from_kind(structure_kind, pos+normal, game.world.camera.compass_direction());
                                 let _ = game.player.take_item(game.player.hand, 1).unwrap();
                                 game.add_structure(structure);
                                 game.player.interact_delay = PLAYER_INTERACT_DELAY;
@@ -314,7 +337,7 @@ fn main() {
                     let position = item.body.position;
                     let mesh = meshes.get(item.item.kind);
 
-                    let model = Mat4::from_translation(position) * Mat4::from_scale(Vec3::splat(DROPPED_ITEM_SCALE));
+                    let model = Mat4::from_translation(position) * Mat4::from_scale(Vec3::splat(DROPPED_ITEM_SCALE)) * Mat4::from_rotation_y((game.current_tick - item.creation_tick) as f32 / TICKS_PER_SECOND as f32);
                     world_shader.set_matrix4(c"model", model);
 
                     mesh.draw();
@@ -371,13 +394,14 @@ fn main() {
 
                 let _ = writeln!(text, "§eFPS: §{colour_code}{fps}§r");
 
-                let _ = writeln!(text, "PITCH: §a{:.1} §rYAW: §a{:.1}§r", game.world.camera.pitch.to_degrees(), game.world.camera.yaw.to_degrees());
-                let _ = writeln!(text, "POSITION: §a{:.1}, {:.1} {:.1}§r", game.world.camera.position.x, game.world.camera.position.y, game.world.camera.position.z);
+                let _ = writeln!(text, "§ePITCH: §a{:.1} §eYAW: §a{:.1}§r", game.world.camera.pitch.to_degrees(), game.world.camera.yaw.to_degrees());
+                let _ = writeln!(text, "§ePOSITION: §a{:.1}, {:.1} {:.1}§r", game.world.camera.position.x, game.world.camera.position.y, game.world.camera.position.z);
 
                 let chunk_pos = game.world.camera.position.as_ivec3().div_euclid(IVec3::splat(CHUNK_SIZE as i32));
-                let _ = writeln!(text, "CHUNK POSITION: §a{}, {}, {}§r", chunk_pos.x, chunk_pos.y, chunk_pos.z);
-                let _ = writeln!(text, "CHUNK COUNT: §a{}§r", game.world.chunks.len());
-                let _ = writeln!(text, "DIRECTION: §b{:?}§r", game.world.camera.compass_direction());
+                let _ = writeln!(text, "§eCHUNK POSITION: §a{}, {}, {}§r", chunk_pos.x, chunk_pos.y, chunk_pos.z);
+                let _ = writeln!(text, "§eCHUNK COUNT: §a{}§r", game.world.chunks.len());
+                let _ = writeln!(text, "§eDIRECTION: §b{:?}§r", game.world.camera.compass_direction());
+                let _ = writeln!(text, "§eDIRECTION VECTOR: §b{:?}§r", game.world.camera.compass_direction().as_ivec3());
 
 
                 let target_block = game.world.raycast_voxel(game.world.camera.position, game.world.camera.direction, PLAYER_REACH);
@@ -385,19 +409,45 @@ fn main() {
                     let target_voxel = game.world.get_voxel(target_block.0);
 
 
-                    let _ = writeln!(text, "TARGET LOCATION: {}", target_block.0);
+                    let _ = writeln!(text, "§eTARGET LOCATION: §a{}, {}, {}", target_block.0.x, target_block.0.y, target_block.0.z);
 
 
-                    let _ = write!(text, "TARGET BLOCK: ");
+                    let _ = write!(text, "§eTARGET BLOCK: §b");
 
 
                     if target_voxel.kind.is_structure() {
                        let structure = game.structure_blocks.get(&target_block.0).unwrap();
                        let structure = &game.structures[structure.0];
 
-                       let _ = writeln!(text, "STRUCTURE");
-                       let _ = writeln!(text, "- POSITION: {}", structure.position);
-                       let _ = writeln!(text, "- DIRECTION: {:?}", structure.direction);
+                       let _ = writeln!(text, "Structure");
+                       let _ = writeln!(text, "§e- POSITION: §a{}, {}, {}", structure.position.x, structure.position.y, structure.position.z);
+                       let _ = writeln!(text, "§e- DIRECTION: §b{:?}", structure.direction);
+
+                       if let Some(input) = &structure.input {
+                           let _ = writeln!(text, "§e- INPUT:");
+
+                           for slot in input {
+                               if let Some(item) = slot.item {
+                                   let _ = writeln!(text, "§e  - §b{:?} §e{}x/{}x", item.kind, item.amount, slot.max);
+                               } else if let Some(exp) = slot.expected {
+                                   let _ = writeln!(text, "§e  - §b{:?} §e0/{}", exp, slot.max);
+                               } else {
+                                   let _ = writeln!(text, "§e  - §bEmpty §e0/{}", slot.max);
+                               }
+                           }
+                       }
+
+                       if let Some(slot) = &structure.output{
+                           let _ = writeln!(text, "§e- OUTPUT:");
+
+                           if let Some(item) = slot.item {
+                               let _ = writeln!(text, "§e  - §b{:?} §e{}x/{}x", item.kind, item.amount, slot.max);
+                           } else if let Some(exp) = slot.expected {
+                               let _ = writeln!(text, "§e  - §b{:?} §e0/{}", exp, slot.max);
+                           } else {
+                               let _ = writeln!(text, "§e  - §bEmpty §e0/{}", slot.max);
+                           }
+                       }
                     } else {
 
                        let _ = writeln!(text, "{:?}", target_voxel.kind);
@@ -405,7 +455,7 @@ fn main() {
 
 
                     if let Some(mining_progress) = game.player.mining_progress {
-                        let _ = writeln!(text, "MINING PROGRESS: {}/{}",
+                        let _ = writeln!(text, "§eMINING PROGRESS: §a{}/{}",
                                          mining_progress, target_voxel.kind.base_hardness());
                     }
                 }
@@ -413,27 +463,41 @@ fn main() {
 
                 if !game.work_queue.entries.is_empty() {
                     let mut cursor = game.work_queue.entries.lower_bound_mut(Bound::Unbounded);
-                    let _ = writeln!(text, "WORK QUEUE:");
+                    let _ = writeln!(text, "§eWORK QUEUE:");
 
+                    let mut i = 0;
                     while let Some(((tick, id), ())) = cursor.next() {
-                        let _ = writeln!(text, "- {:?} in {} ticks", game.structures[id.0].data.as_kind(), *tick - game.current_tick);
+                        let _ = writeln!(text, "§e- §b{:?}§e in §a{} §eticks", game.structures[id.0].data.as_kind(), *tick - game.current_tick);
+                        i += 1;
+                        if i > 3 {
+                            let len = game.work_queue.entries.len();
+                            let rem = len - i;
+
+                            if rem == 1 {
+                                let _ = writeln!(text, "§7   ..1 more item");
+                            } else if rem > 1 {
+                                let _ = writeln!(text, "§7   ..{} more items", len - i);
+                            }
+
+                            break;
+                        }
                     }
                 }
                 
 
 
                 if !game.dropped_items.is_empty() {
-                    let _ = writeln!(text, "DROPPED ITEMS:");
+                    let _ = writeln!(text, "§eDROPPED ITEMS:");
 
 
                     for dropped_item in game.dropped_items.iter() {
-                        let _ = writeln!(text, "- {:?}: {:?}", dropped_item.item, dropped_item.body.position);
+                        let _ = writeln!(text, "§e- §b{:?}§e: §a{:.1}, {:.1}, {:.1}", dropped_item.item, dropped_item.body.position.x, dropped_item.body.position.y, dropped_item.body.position.z);
                     }
 
                 }
 
 
-                renderer.draw_text(&text, Vec2::ZERO, 1.4, Vec3::ONE);
+                renderer.draw_text(&text, Vec2::ZERO, 0.4, Vec3::ONE);
             }
 
 
@@ -483,10 +547,11 @@ const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32;
 
 
 impl Game {
-    fn can_place_structure(&mut self, structure: &Structure) -> bool {
-        let blocks = structure.data.as_kind().blocks();
+    fn can_place_structure(&mut self, structure: StructureKind, pos: IVec3, direction: CompassDirection) -> bool {
+        let pos = pos - structure.origin(direction);
+        let blocks = structure.blocks(direction);
         for offset in blocks {
-            if !self.world.get_voxel(structure.position + offset).kind.is_air() {
+            if !self.world.get_voxel(pos + offset).kind.is_air() {
                 return false;
             }
         }
@@ -500,9 +565,9 @@ impl Game {
         let id = StructureId(id);
         let structure = self.structures.get(id.0).unwrap();
 
-        let placement_origin = structure.position - structure.data.as_kind().origin();
+        let placement_origin = structure.position - structure.data.as_kind().origin(structure.direction);
 
-        let blocks = structure.data.as_kind().blocks();
+        let blocks = structure.data.as_kind().blocks(structure.direction);
         for offset in blocks {
             let pos = placement_origin + offset;
             self.world.get_voxel_mut(pos).kind = VoxelKind::StructureBlock;
@@ -513,15 +578,32 @@ impl Game {
     }
 
 
+    fn block_item(&mut self, pos: IVec3) -> Item {
+        let voxel = self.world.get_voxel(pos);
+
+        if voxel.kind.is_structure() {
+            let structure_id = *self.structure_blocks.get(&pos).unwrap();
+            let structure = self.structures.get(structure_id.0).unwrap();
+            let kind = structure.data.as_kind().item_kind();
+            Item { amount: 1, kind }
+        } else {
+            let kind = voxel.kind;
+            let item = Item { amount: 1, kind: kind.as_item_kind() };
+            item
+        }
+
+    }
+
+
     fn break_block(&mut self, pos: IVec3) -> Item {
         let voxel = self.world.get_voxel_mut(pos);
 
         let item = if voxel.kind.is_structure() {
             let structure_id = *self.structure_blocks.get(&pos).unwrap();
             let structure = self.structures.remove(structure_id.0);
-            let placement_origin = structure.position - structure.data.as_kind().origin();
+            let placement_origin = structure.position - structure.data.as_kind().origin(structure.direction);
             
-            let blocks = structure.data.as_kind().blocks();
+            let blocks = structure.data.as_kind().blocks(structure.direction);
             let kind = structure.data.as_kind().item_kind();
 
             for offset in blocks {
@@ -625,7 +707,8 @@ impl Game {
         {
             let to_be_updated = self.work_queue.process(self.current_tick);
             for id in to_be_updated {
-                if self.structures.get(id.1.0).is_some() {
+                if let Some(structure) = self.structures.get_mut(id.1.0) {
+                    structure.is_queued = false;
                     id.1.update(self);
                 }
             }

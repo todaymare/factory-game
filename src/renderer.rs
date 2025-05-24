@@ -201,16 +201,12 @@ impl Renderer {
             [ 0.0, 1.0,   0.0, 1.0 ],
             [ 1.0, 0.0,   1.0, 0.0 ],
             [ 1.0, 1.0,   1.0, 1.0 ],
-
         ];
 
         unsafe {
             gl::BindBuffer(gl::ARRAY_BUFFER, quad_vbo);
             gl::BufferData(gl::ARRAY_BUFFER, size_of_val(&verticies) as isize, verticies.as_ptr().cast(), gl::STATIC_DRAW);
         }
-
-
-
 
 
         let mut this = Self {
@@ -261,14 +257,11 @@ impl Renderer {
 
     pub fn draw_text(&self, text: &str, pos: Vec2, scale: f32, default_colour: Vec3) {
         if self.is_wireframe {
-            unsafe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL); }
+            //unsafe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL); }
         }
 
         self.text_shader.use_program();
         unsafe {
-
-
-
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindVertexArray(self.quad_vao);
 
@@ -303,7 +296,7 @@ impl Renderer {
                             'b' => Vec3::new(0.1, 1.0, 1.0),
                             'c' => Vec3::new(1.0, 0.1, 0.1),
                             'd' => Vec3::new(1.0, 0.1, 1.0),
-                            'e' => Vec3::new(1.0, 1.0, 0.1),
+                            'e' => Vec3::new(1.0, 1.0, 0.7),
                             'f' => Vec3::ONE,
                             'r' => default_colour,
 
