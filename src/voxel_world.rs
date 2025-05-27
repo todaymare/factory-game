@@ -6,11 +6,12 @@ use std::{collections::{HashMap, VecDeque}, ops::Bound};
 use glam::{IVec3, Vec3};
 use voxel::VoxelKind;
 
-use crate::{items::Item, structures::{strct::Structure, StructureId, Structures}, voxel_world::{chunk::{Chunk, CHUNK_SIZE}, voxel::Voxel}, PhysicsBody};
+use crate::{items::{DroppedItem, Item}, structures::{strct::Structure, StructureId, Structures}, voxel_world::{chunk::{Chunk, CHUNK_SIZE}, voxel::Voxel}, PhysicsBody};
 
 pub struct VoxelWorld {
     pub chunks: HashMap<IVec3, Chunk>,
     pub structure_blocks: HashMap<IVec3, StructureId>,
+    pub dropped_items: Vec<DroppedItem>,
 }
 
 
@@ -19,6 +20,7 @@ impl VoxelWorld {
         Self {
             chunks: HashMap::new(),
             structure_blocks: HashMap::new(),
+            dropped_items: vec![],
         }
     }
 
@@ -89,6 +91,25 @@ impl VoxelWorld {
                 cursor.remove_prev();
             }
 
+
+            /*
+            if let Some(inputs) = structure.input {
+                for slot in inputs.iter() {
+                    let Some(item) = slot.item
+                    else { continue };
+
+                    self.dropped_items.push(DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5)));
+
+                }
+            }
+
+
+            if let Some(output) = structure.output {
+                if let Some(item) = output.item {
+                    self.dropped_items.push(DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5)));
+                }
+            }
+            */
 
             Item { amount: 1, kind }
 

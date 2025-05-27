@@ -5,7 +5,7 @@ use glam::{IVec2, Mat4, Quat, Vec2, Vec3};
 use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
 use sti::println;
 
-use crate::shader::{Shader, ShaderProgram, ShaderType};
+use crate::{items::{ItemKind, ItemMeshes}, shader::{Shader, ShaderProgram, ShaderType}, TICKS_PER_SECOND};
 
 
 // the renderer is done,
@@ -28,6 +28,8 @@ pub struct Renderer {
     pub biggest_y_size: f32,
 
     pub is_wireframe: bool,
+
+    pub meshes: ItemMeshes,
 }
 
 
@@ -220,6 +222,7 @@ impl Renderer {
             characters,
             is_wireframe: false,
             biggest_y_size,
+            meshes: ItemMeshes::new(),
         };
 
         this.resize();
@@ -355,7 +358,14 @@ impl Renderer {
             gl::BindBuffer(gl::ARRAY_BUFFER, self.quad_vbo);
             gl::DrawArrays(gl::TRIANGLES, 0, 6);
         }
+    }
 
+
+    pub fn draw_item(&self, shader: &ShaderProgram, item_kind: ItemKind, pos: Vec3, scale: Vec3, rot: f32) {
+        let model = Mat4::from_scale_rotation_translation(scale, Quat::from_rotation_y(rot), pos);
+        shader.set_matrix4(c"model", model);
+
+        self.meshes.get(item_kind).draw();
     }
 
 

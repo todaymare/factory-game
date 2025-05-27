@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, ops::Bound};
 
-use crate::Tick;
+use crate::{gen_map::KeyGen, structures::{StructureGen, StructureKey}, Tick};
 
 use super::StructureId;
 
@@ -24,4 +24,33 @@ impl WorkQueue {
 
         return result;
     }
+
+
+    pub fn insert(&mut self, tick: Tick, id: StructureId) {
+        self.entries.insert((tick, id), ());
+    }
 }
+
+
+#[test]
+fn test_work_queue() {
+    let mut wq = WorkQueue { entries: BTreeMap::new() };
+
+    let k1 = StructureId(KeyGen::new(StructureGen(0), StructureKey(1)));
+    let k2 = StructureId(KeyGen::new(StructureGen(0), StructureKey(2)));
+    let k3 = StructureId(KeyGen::new(StructureGen(0), StructureKey(3)));
+    let k4 = StructureId(KeyGen::new(StructureGen(0), StructureKey(4)));
+
+    wq.insert(Tick::new(10), k1);
+    wq.insert(Tick::new(15), k2);
+    wq.insert(Tick::new(20), k4);
+    wq.insert(Tick::new(20), k3);
+
+    assert_eq!(&*wq.process(Tick::new(9)), &[]);
+    assert_eq!(&*wq.process(Tick::new(10)), &[(Tick::new(10), k1)]);
+    assert_eq!(&*wq.process(Tick::new(17)), &[(Tick::new(15), k2)]);
+    assert_eq!(&*wq.process(Tick::new(25)), &[(Tick::new(20), k3), (Tick::new(20), k4)]);
+}
+
+
+

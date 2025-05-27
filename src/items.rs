@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use glam::{IVec3, Vec3, Vec4};
+use rand::random;
 
-use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, structures::strct::{Structure, StructureKind}, voxel_world::{chunk::Chunk, voxel::VoxelKind}, Game, PhysicsBody, Tick};
+use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, structures::strct::{Structure, StructureKind}, voxel_world::{chunk::Chunk, voxel::VoxelKind}, Game, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
 
 
 #[derive(Clone)]
@@ -13,7 +14,7 @@ pub struct DroppedItem {
 }
 
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Item {
     pub amount: u32,
     pub kind  : ItemKind,
@@ -39,7 +40,7 @@ pub struct ItemMeshes {
 
 
 impl ItemKind {
-    const ALL : &[ItemKind] = &[
+    pub const ALL : &[ItemKind] = &[
         ItemKind::Voxel(VoxelKind::Dirt),
         ItemKind::Voxel(VoxelKind::Stone),
         ItemKind::CopperOre,
@@ -48,6 +49,8 @@ impl ItemKind {
         ItemKind::IronPlate,
         ItemKind::Structure(StructureKind::Quarry),
         ItemKind::Structure(StructureKind::Inserter),
+        ItemKind::Structure(StructureKind::Chest),
+        ItemKind::Structure(StructureKind::Belt),
     ];
 
 
@@ -101,6 +104,22 @@ impl ItemKind {
 
                 Mesh::new(verticies, indicies)
             }
+        }
+    }
+}
+
+
+impl DroppedItem {
+    pub fn new(item: Item, pos: Vec3) -> Self {
+        DroppedItem {
+            item,
+            body: PhysicsBody {
+                position: pos,
+                velocity: (random::<Vec3>() - Vec3::ONE*0.5) * 5.0,
+                aabb_dims: Vec3::splat(DROPPED_ITEM_SCALE),
+            },
+
+            creation_tick: Tick::NEVER,
         }
     }
 }

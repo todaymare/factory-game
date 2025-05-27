@@ -1,6 +1,6 @@
 use glam::IVec3;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum CardinalDirection {
     North,
     South,

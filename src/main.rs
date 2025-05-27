@@ -12,13 +12,13 @@ pub mod structures;
 pub mod gen_map;
 pub mod voxel_world;
 pub mod directions;
+pub mod belt_network;
 
 use core::{f32, time};
 use std::{char, collections::{HashMap, HashSet}, f32::consts::{PI, TAU}, fmt::{Display, Write}, fs, io::BufReader, ops::{self, Bound}, simd::f32x4, time::Instant};
 
 use directions::CardinalDirection;
 use voxel_world::{chunk::{Chunk, CHUNK_SIZE}, split_world_pos, voxel::{Voxel, VoxelKind}, VoxelWorld};
-use gen_map::KGenMap;
 use glam::{IVec3, Mat4, Vec2, Vec3, Vec4};
 use glfw::{GlfwReceiver, Key, MouseButton, WindowEvent};
 use input::InputManager;
@@ -27,7 +27,7 @@ use mesh::{Mesh, Vertex};
 use rand::random;
 use renderer::Renderer;
 use shader::{Shader, ShaderProgram};
-use sti::define_key;
+use sti::{define_key, key::Key as _, println};
 use structures::{strct::{Structure, StructureKind}, Structures};
 
 define_key!(EntityId(u32));
@@ -74,16 +74,16 @@ fn main() {
             pulling: Vec::new(),
         },
 
-        dropped_items: vec![],
         current_tick: Tick::initial(),
     };
 
 
-    game.player.add_item(Item { amount: 99, kind: items::ItemKind::Structure(StructureKind::Quarry)});
-    game.player.add_item(Item { amount: 99, kind: items::ItemKind::Structure(StructureKind::Inserter)});
+    for kind in ItemKind::ALL.iter().copied() {
+        game.player.add_item(Item { amount: 99, kind });
+
+    }
 
     let mut input = InputManager::default();
-
 
     for x in -RENDER_DISTANCE..RENDER_DISTANCE {
         for y in -RENDER_DISTANCE..RENDER_DISTANCE {
@@ -95,9 +95,6 @@ fn main() {
 
 
     let mut renderer = Renderer::new((1920/2, 1080/2));
-    let meshes = ItemMeshes::new();
-
-
 
     let block_outline_mesh = Mesh::from_obj("block_outline.obj");
 
@@ -180,10 +177,41 @@ fn main() {
                         let structure = game.world.structure_blocks.get(&pos).unwrap();
                         let structure = game.structures.get_mut(*structure);
 
-                        let item = structure.try_take();
-                        if let Some(item) = item {
-                            game.player.add_item(item);
+                        for index in 0..structure.available_items_len() {
+                            let item = structure.try_take(index);
+                            if let Some(item) = item {
+                                let dropped_item = DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5));
+                                game.world.dropped_items.push(dropped_item);
+                                break;
+                            }
+
                         }
+                    }
+                }
+            }
+
+
+            if input.is_key_pressed(Key::R) {
+                let raycast = game.world.raycast_voxel(game.camera.position,
+                                                  game.camera.direction,
+                                                  PLAYER_REACH);
+                if let Some((pos, _)) = raycast {
+                    let voxel = game.world.get_voxel(pos);
+                    if voxel.kind.is_structure() {
+                        let structure = game.world.structure_blocks.get(&pos).unwrap();
+                        let structure = game.structures.get_mut(*structure);
+
+                        let item = game.player.take_item(game.player.hand, 1);
+
+                        if let Some(item) = item {
+                            if structure.can_accept(item) {
+                                structure.give_item(item);
+                            } else {
+                                let dropped_item = DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5));
+                                game.world.dropped_items.push(dropped_item);
+                            }
+                        }
+
                     }
                 }
             }
@@ -239,18 +267,9 @@ fn main() {
                 let item = game.world.break_block(&mut game.structures, pos);
 
 
-                let dropped_item = DroppedItem {
-                    item,
-                    body: PhysicsBody {
-                        position: (pos).as_vec3() + Vec3::new(0.5, 0.5, 0.5),
-                        velocity: (random::<Vec3>() - Vec3::ONE*0.5) * 5.0,
-                        aabb_dims: Vec3::splat(DROPPED_ITEM_SCALE),
-                    },
+                let dropped_item = DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5));
 
-                    creation_tick: game.current_tick,
-                };
-
-                game.dropped_items.push(dropped_item);
+                game.world.dropped_items.push(dropped_item);
                 game.player.mining_progress = None;
             }
 
@@ -294,7 +313,6 @@ fn main() {
                     let _ = game.player.take_item(game.player.hand, 1).unwrap();
                     game.structures.add_structure(&mut game.world, structure);
                 }
-
 
 
                 game.player.interact_delay = PLAYER_INTERACT_DELAY;
@@ -342,17 +360,13 @@ fn main() {
 
             // render items
             {
-                for item in game.dropped_items.iter().chain(game.player.pulling.iter()) {
+                for item in game.world.dropped_items.iter().chain(game.player.pulling.iter()) {
                     let position = item.body.position;
-                    let mesh = meshes.get(item.item.kind);
 
-                    let model = Mat4::from_translation(position) * Mat4::from_scale(Vec3::splat(DROPPED_ITEM_SCALE)) * Mat4::from_rotation_y((game.current_tick - item.creation_tick).u32() as f32 / TICKS_PER_SECOND as f32);
-                    world_shader.set_matrix4(c"model", model);
+                    let scale = Vec3::splat(DROPPED_ITEM_SCALE);
+                    let rot = (game.current_tick - item.creation_tick).u32() as f32 / TICKS_PER_SECOND as f32;
 
-                    mesh.draw();
-
-                    let model = Mat4::from_translation(position + Vec3::Y);
-                    world_shader.set_matrix4(c"model", model);
+                    renderer.draw_item(&world_shader, item.item.kind, position, scale, rot);
                 }
 
             }
@@ -361,7 +375,7 @@ fn main() {
             // render structures
             {
                 game.structures.for_each(|structure| {
-                    structure.render(&renderer, &meshes, &world_shader);
+                    structure.render(&renderer, &world_shader);
                 });
             }
 
@@ -435,6 +449,55 @@ fn main() {
                        let _ = writeln!(text, "§e- DIRECTION: §b{:?}", structure.direction);
                        let _ = writeln!(text, "§e- IS ASLEEP: §b{}", structure.is_asleep);
 
+                       let _ = write!(text, "§e- KIND: §b");
+
+                       match &structure.data {
+                            structures::strct::StructureData::Quarry { current_progress, output } => {
+                                let _ = writeln!(text, "Quarry:");
+                                let _ = writeln!(text, "§e    - CURRENT PROGRESS: §a{}", current_progress);
+                                if let Some(output) = output {
+                                    let _ = writeln!(text, "§e  - OUTPUT: §b{:?}", output);
+                                } else {
+                                    let _ = writeln!(text, "§e  - OUTPUT: §bEmpty");
+                                }
+                            },
+                            structures::strct::StructureData::Inserter { state } => {
+                                let _ = writeln!(text, "Inserter:");
+                                match state {
+                                    structures::strct::InserterState::Searching => {
+                                        let _ = writeln!(text, "§e  - STATE: §aSearching");
+                                    },
+                                    structures::strct::InserterState::Placing(item) => {
+                                        let _ = writeln!(text, "§e  - STATE: §bPlacing");
+                                        let _ = writeln!(text, "§e    - ITEM: §b{:?}", item);
+                                    },
+                                }
+                            },
+
+
+                            structures::strct::StructureData::Chest { inventory } => {
+                                let _ = writeln!(text, "Chest");
+                                let _ = writeln!(text, "§e    - INPUT:");
+
+                                for slot in inventory {
+                                    if let Some(item) = slot.item {
+                                        let _ = writeln!(text, "§e      - §b{:?} §e{}x/{}x", item.kind, item.amount, slot.max);
+                                    } else if let Some(exp) = slot.expected {
+                                        let _ = writeln!(text, "§e      - §b{:?} §e0/{}", exp, slot.max);
+                                    } else {
+                                        let _ = writeln!(text, "§e      - §bEmpty §e0/{}", slot.max);
+                                    }
+                               }
+                            }
+
+
+                            structures::strct::StructureData::Belt { network } => {
+                                let _ = writeln!(text, "Belt");
+                                let _ = writeln!(text, "§e  - NETWORK: §a{}", network.unwrap().usize());
+                            }
+                        }
+
+                       /*
                        if let Some(input) = &structure.input {
                            let _ = writeln!(text, "§e- INPUT:");
 
@@ -455,11 +518,11 @@ fn main() {
                            if let Some(item) = slot.item {
                                let _ = writeln!(text, "§e  - §b{:?} §e{}x/{}x", item.kind, item.amount, slot.max);
                            } else if let Some(exp) = slot.expected {
-                               let _ = writeln!(text, "§e  - §b{:?} §e0/{}", exp, slot.max);
+                               let _ = writeln!(text, "§e  - §b{:?} §e0x/{}", exp, slot.max);
                            } else {
-                               let _ = writeln!(text, "§e  - §bEmpty §e0/{}", slot.max);
+                               let _ = writeln!(text, "§e  - §bEmpty §e0x/{}x", slot.max);
                            }
-                       }
+                       }*/
                     } else {
 
                        let _ = writeln!(text, "{:?}", target_voxel.kind);
@@ -498,11 +561,11 @@ fn main() {
                 
 
 
-                if !game.dropped_items.is_empty() {
+                if !game.world.dropped_items.is_empty() {
                     let _ = writeln!(text, "§eDROPPED ITEMS:");
 
 
-                    for dropped_item in game.dropped_items.iter() {
+                    for dropped_item in game.world.dropped_items.iter() {
                         let _ = writeln!(text, "§e- §b{:?}§e: §a{:.1}, {:.1}, {:.1}", dropped_item.item, dropped_item.body.position.x, dropped_item.body.position.y, dropped_item.body.position.z);
                     }
 
@@ -547,7 +610,6 @@ pub struct Game {
     world: VoxelWorld,
     camera: Camera,
     player: Player,
-    dropped_items: Vec<DroppedItem>,
     current_tick: Tick,
     structures: Structures,
 }
@@ -594,8 +656,14 @@ impl Game {
             // and they have been alive for more than 250ms
             {
                 let mut i = 0;
-                while let Some(item) = self.dropped_items.get(i) {
+                while let Some(item) = self.world.dropped_items.get(i) {
                     let lifetime = self.current_tick - item.creation_tick;
+                    if item.creation_tick == Tick::NEVER {
+                        self.world.dropped_items[i].creation_tick = self.current_tick;
+                        i += 1;
+                        continue;
+                    }
+                    println!("{:?} {:?} {lifetime:?}", self.current_tick, item.creation_tick);
                     if lifetime.u32() < (0.2 * TICKS_PER_SECOND as f32) as u32 { i += 1; continue }
 
                     let distance = item.body.position.distance_squared(self.player.body.position);
@@ -604,7 +672,7 @@ impl Game {
                         continue;
                     }
 
-                    let item = self.dropped_items.remove(i);
+                    let item = self.world.dropped_items.remove(i);
                     self.player.pulling.push(item);
 
                 }
@@ -634,9 +702,12 @@ impl Game {
 
         // handle item physics
         {
-            for item in self.dropped_items.iter_mut() {
+            let mut dropped_items = core::mem::take(&mut self.world.dropped_items);
+            for item in dropped_items.iter_mut() {
                 self.world.move_physics_body(delta_time, &mut item.body)
             }
+
+            self.world.dropped_items = dropped_items;
         }
 
 
@@ -721,7 +792,6 @@ impl Tick {
 
 
     pub fn new(num: u32) -> Self {
-        assert!(Tick(num) != Self::NEVER);
         Self(num)
     }
 
