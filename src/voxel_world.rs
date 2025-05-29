@@ -6,7 +6,7 @@ use std::{collections::{HashMap, VecDeque}, ops::Bound};
 use glam::{IVec3, Vec3};
 use voxel::VoxelKind;
 
-use crate::{items::{DroppedItem, Item}, structures::{strct::Structure, StructureId, Structures}, voxel_world::{chunk::{Chunk, CHUNK_SIZE}, voxel::Voxel}, PhysicsBody};
+use crate::{items::{DroppedItem, Item}, structures::{strct::{InserterState, Structure, StructureData}, StructureId, Structures}, voxel_world::{chunk::{Chunk, CHUNK_SIZE}, voxel::Voxel}, PhysicsBody};
 
 pub struct VoxelWorld {
     pub chunks: HashMap<IVec3, Chunk>,
@@ -70,7 +70,7 @@ impl VoxelWorld {
 
         let item = if voxel.kind.is_structure() {
             let structure_id = *self.structure_blocks.get(&pos).unwrap();
-            let structure = structures.remove(structure_id);
+            let mut structure = structures.remove(structure_id);
             let placement_origin = structure.position - structure.data.as_kind().origin(structure.direction);
             
             let blocks = structure.data.as_kind().blocks(structure.direction);
@@ -92,24 +92,20 @@ impl VoxelWorld {
             }
 
 
-            /*
-            if let Some(inputs) = structure.input {
-                for slot in inputs.iter() {
-                    let Some(item) = slot.item
-                    else { continue };
-
-                    self.dropped_items.push(DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5)));
-
-                }
-            }
-
-
-            if let Some(output) = structure.output {
-                if let Some(item) = output.item {
+            for index in 0..structure.available_items_len() {
+                while let Some(item) = structure.try_take(index) {
                     self.dropped_items.push(DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5)));
                 }
             }
-            */
+
+
+            match structure.data {
+                StructureData::Inserter { state: InserterState::Placing(item) } => {
+                    self.dropped_items.push(DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5)));
+                }
+                _ => (),
+            }
+
 
             Item { amount: 1, kind }
 

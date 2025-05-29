@@ -8,7 +8,7 @@ pub struct KGenMap<G: Key, K: Key, V, A: Alloc = GlobalAlloc> {
 }
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyGen<G: Key, K: Key> {
     pub gen_key: G,
     pub key: K,
@@ -41,6 +41,16 @@ impl<G: Key, K: Key, V, A: Alloc> KGenMap<G, K, V, A> {
             next: None,
             vec: KVec::new_in(alloc),
         }
+    }
+
+
+    pub fn iter(&self) -> impl Iterator<Item=(KeyGen<G, K>, &V)> {
+        self.vec.iter()
+            .enumerate()
+            .filter_map(|(i, x)| match &x.1 {
+                KGenVal::Occupied(v) => Some((KeyGen::new(x.0, unsafe { K::from_usize_unck(i) }), v)),
+                KGenVal::Free { .. } => None,
+            })
     }
 
 
@@ -136,6 +146,38 @@ impl<G: Key, K: Key, V, A: Alloc> KGenMap<G, K, V, A> {
             KGenVal::Occupied(v) => Some(v),
             KGenVal::Free { .. } => None,
         }
+    }
+
+
+
+    pub fn get_many_mut<'a>(&'a mut self, kg: KeyGen<G, K>, kg2: KeyGen<G, K>) -> [Option<&'a mut V>; 2] {
+        assert!(kg != kg2);
+
+        let [kg1v, kg2v] = self.vec.get_disjoint_mut([kg.key.usize(), kg2.key.usize()]).unwrap();
+        
+        [
+        {
+                let (generation, slot) = kg1v;
+                if *generation != kg.gen_key { None }
+                else {
+                    match slot {
+                        KGenVal::Occupied(v) => Some(v),
+                        KGenVal::Free { .. } => None,
+                    }
+                }
+        },
+        {
+                let (generation, slot) = kg2v;
+                if *generation != kg2.gen_key { None }
+                    else {
+                    match slot {
+                        KGenVal::Occupied(v) => Some(v),
+                        KGenVal::Free { .. } => None,
+                    }
+                }
+        },
+        ]
+        
     }
 
 }

@@ -12,7 +12,6 @@ pub mod structures;
 pub mod gen_map;
 pub mod voxel_world;
 pub mod directions;
-pub mod belt_network;
 
 use core::{f32, time};
 use std::{char, collections::{HashMap, HashSet}, f32::consts::{PI, TAU}, fmt::{Display, Write}, fs, io::BufReader, ops::{self, Bound}, simd::f32x4, time::Instant};
@@ -24,11 +23,11 @@ use glfw::{GlfwReceiver, Key, MouseButton, WindowEvent};
 use input::InputManager;
 use items::{DroppedItem, Item, ItemKind, ItemMeshes};
 use mesh::{Mesh, Vertex};
-use rand::random;
+use rand::{random, seq::IndexedRandom};
 use renderer::Renderer;
 use shader::{Shader, ShaderProgram};
-use sti::{define_key, key::Key as _, println};
-use structures::{strct::{Structure, StructureKind}, Structures};
+use sti::{define_key, key::Key as _, println, vec::KVec};
+use structures::{belts::SccId, strct::{rotate_block_vector, Structure, StructureKind}, StructureId, Structures};
 
 define_key!(EntityId(u32));
 
@@ -216,6 +215,72 @@ fn main() {
                 }
             }
 
+            if input.is_key_just_pressed(Key::G) {
+                let belts = game.structures.belts(&game.world);
+
+                // export nodes graph
+                let mut output = String::new();
+                let _ = write!(output, "digraph {{");
+                let _ = write!(output, "node [shape=box];");
+                let _ = write!(output, "edge [color=gray];");
+
+
+                let step = 360.0 / belts.scc_ends.len() as f64;
+                for i in belts.scc_ends.krange() {
+                    let hue = step * i.usize() as f64;
+
+                    let hex = hsl_to_hex(hue, 0.6, 0.8);
+
+
+                    let _ = write!(output, "subgraph cluster_{} {{", i.usize());
+                    let _ = write!(output, "label = \"SCC #{} is_edge: {}\";", i.usize(), belts.edges.contains(&i));
+                    let _ = write!(output, "style = filled;");
+                    let _ = write!(output, "fillcolor = \"{hex}\";");
+
+                    let scc_begin = if i == SccId::ZERO { SccId::ZERO }
+                                    else { belts.scc_ends[unsafe { SccId::from_usize_unck(i.usize() - 1) }] };
+                    let scc_end = belts.scc_ends[i];
+                    let scc_node_ids = &belts.scc_data[scc_begin..scc_end];
+
+                    for &scc_node_id in scc_node_ids {
+                        let node = belts.nodes[scc_node_id].as_ref().unwrap();
+                        let scc_node = &belts.scc_nodes[scc_node_id];
+
+                        let _ = write!(output, "{} [label=\"node_id={} index={} lowest_link={}\"];", scc_node_id.usize(), scc_node_id.usize(), scc_node.index, scc_node.low_link);
+                        for link in &node.outputs {
+                            if let Some(link) = link {
+                                let _ = write!(output, "{} -> {};", scc_node_id.usize(), link.usize());
+                            }
+                        }
+                    }
+
+                    let _ = write!(output, "}}");
+
+                }
+                let _ = write!(output, "}}");
+                fs::write("sscs.dot", output.as_bytes()).unwrap();
+
+
+                let mut output = String::new();
+
+                let _ = write!(output, "digraph {{");
+                let _ = write!(output, "node [shape=box];");
+                let _ = write!(output, "edge [color=gray];");
+                for (structure, id) in belts.structure_to_node {
+                    let structure = game.structures.structs.get(structure.0).unwrap();
+                    let _ = write!(output, "{} [label=\"position: {}, direction: {:?}\"];", id.usize(), structure.position, structure.direction);
+
+                    let node = belts.nodes[id].as_ref().unwrap();
+                    if let Some(out) = node.outputs[0] {
+                        let _ = write!(output, "{} -> {};", id.usize(), out.usize());
+                    }
+                }
+
+                let _ = write!(output, "}}");
+
+                fs::write("nodes.dot", output.as_bytes()).unwrap();
+            }
+
 
             if input.is_key_just_pressed(Key::P) {
                 renderer.is_wireframe = !renderer.is_wireframe;
@@ -326,6 +391,7 @@ fn main() {
                 game.simulation_tick();
                 time_since_last_simulation_step -= DELTA_TICK;
             }
+
         }
 
 
@@ -375,7 +441,7 @@ fn main() {
             // render structures
             {
                 game.structures.for_each(|structure| {
-                    structure.render(&renderer, &world_shader);
+                    structure.render(&game.structures, &renderer, &world_shader);
                 });
             }
 
@@ -491,9 +557,26 @@ fn main() {
                             }
 
 
-                            structures::strct::StructureData::Belt { network } => {
+                            structures::strct::StructureData::Belt { inventory } => {
                                 let _ = writeln!(text, "Belt");
-                                let _ = writeln!(text, "§e  - NETWORK: §a{}", network.unwrap().usize());
+                                let _ = writeln!(text, "§e  - INVENTORY:");
+                                let _ = writeln!(text, "§e    - LEFT LANE:");
+                                for item in inventory[0] {
+                                    if let Some(item) = item {
+                                        let _ = writeln!(text, "§e      - §b{item:?}");
+                                    } else {
+                                        let _ = writeln!(text, "§e      - §bEmpty");
+                                    }
+                                }
+
+                                let _ = writeln!(text, "§e    - RIGHT LANE:");
+                                for item in inventory[1] {
+                                    if let Some(item) = item {
+                                        let _ = writeln!(text, "§e      - §b{item:?}");
+                                    } else {
+                                        let _ = writeln!(text, "§e      - §bEmpty");
+                                    }
+                                }
                             }
                         }
 
@@ -912,4 +995,38 @@ impl Camera {
         }
     }
 }
+
+
+fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_ = h / 60.0;
+    let x = c * (1.0 - (h_ % 2.0 - 1.0).abs());
+    
+    let (r1, g1, b1) = match h_ as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        5 | _ => (c, 0.0, x),
+    };
+
+    let m = l - c / 2.0;
+    let (r, g, b) = (r1 + m, g1 + m, b1 + m);
+
+    let to_255 = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+
+    (to_255(r), to_255(g), to_255(b))
+}
+
+fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {
+    format!("#{:02x}{:02x}{:02x}", r, g, b)
+}
+
+// Usage
+fn hsl_to_hex(h: f64, s: f64, l: f64) -> String {
+    let (r, g, b) = hsl_to_rgb(h, s, l);
+    rgb_to_hex(r, g, b)
+}
+
 

@@ -5,7 +5,7 @@ use glam::{IVec2, Mat4, Quat, Vec2, Vec3};
 use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
 use sti::println;
 
-use crate::{items::{ItemKind, ItemMeshes}, shader::{Shader, ShaderProgram, ShaderType}, TICKS_PER_SECOND};
+use crate::{items::{ItemKind, ItemMeshes}, shader::{Shader, ShaderProgram, ShaderType}, Tick, TICKS_PER_SECOND};
 
 
 // the renderer is done,

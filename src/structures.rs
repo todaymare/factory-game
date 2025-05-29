@@ -1,30 +1,32 @@
 pub mod strct;
 pub mod work_queue;
+pub mod belts;
 
 use std::{collections::BTreeMap, hash::{DefaultHasher, Hash, Hasher}, ops::Bound};
 
-use glam::{IVec3, Mat4, Vec3};
+use glam::{IVec3, Mat4, Vec3, Vec4};
 use glfw::ffi::OPENGL_DEBUG_CONTEXT;
 use sti::{define_key, println, vec::KVec};
-use strct::{rotate_block_vector, InserterState, Structure, StructureData};
+use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use work_queue::WorkQueue;
 
-use crate::{directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind, ItemMeshes}, mesh::Mesh, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Game, Tick};
+use crate::{directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind, ItemMeshes}, mesh::Mesh, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Game, Tick, DROPPED_ITEM_SCALE};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
 
 
-#[derive(Debug, PartialEq, Clone, Copy, Eq)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub struct StructureId(pub KeyGen<StructureGen, StructureKey>);
 
 
 
 pub struct Structures {
-    structs: KGenMap<StructureGen, StructureKey, Structure>,
+    pub structs: KGenMap<StructureGen, StructureKey, Structure>,
     pub work_queue: WorkQueue,
     to_be_awoken: Vec<StructureId>,
     current_tick: Tick,
+    belt_pulse_lifetime: f32,
 }
 
 
@@ -35,7 +37,7 @@ impl Structures {
             work_queue: WorkQueue::new(),
             current_tick: Tick::initial(),
             to_be_awoken: vec![],
-            //belt_networks: Networks::new(), 
+            belt_pulse_lifetime: 0.0,
         }
     }
 
@@ -87,6 +89,45 @@ impl Structures {
 
     pub fn process(&mut self, world: &mut VoxelWorld) {
         self.current_tick = self.current_tick.inc();
+        if self.current_tick.0 % 15 == 0 {
+            println!("update beltz");
+            let belts = self.belts(world);
+
+            for &node in belts.worklist.iter().rev() {
+
+                let node = belts.node(node);
+                
+                let (Some(structure), mut output_structure) = (if let Some(out) = node.outputs[0] {
+                    let out = belts.node(out);
+                    self.structs.get_many_mut(node.structure_id.0, out.structure_id.0).into()
+                } else {
+                    (self.structs.get_mut(node.structure_id.0), None)
+                })
+                else { unreachable!() };
+
+                let StructureData::Belt { inventory } = &mut structure.data 
+                else { unreachable!() };
+
+                for lane in [0, 1] {
+                    let mut index = 0;
+                    while let Some(item) = inventory[lane].get_mut(index) {
+                        if index == 0 && let Some(output_structure) = &mut output_structure {
+                            let StructureData::Belt { inventory, .. } = &mut output_structure.data
+                            else { unreachable!() };
+
+                            if inventory[lane][1].is_none() {
+                                inventory[lane][1] = item.take();
+                            }
+                        } else if index > 0 && inventory[lane][index-1].is_none() {
+                            let item = inventory[lane].get_mut(index).unwrap();
+                            inventory[lane][index-1] = item.take();
+                        }
+
+                        index += 1;
+                    }
+                }
+            }
+        }
         let to_be_updated = self.work_queue.process(self.current_tick);
 
         let mut to_be_awoken = core::mem::take(&mut self.to_be_awoken);
@@ -105,101 +146,7 @@ impl Structures {
     pub fn add_structure(&mut self, world: &mut VoxelWorld, structure: Structure) {
         let id = self.insert(structure);
         let structure = &mut self.structs[id.0];
-        let zz = structure.zero_zero();
 
-        /*
-        match &mut structure.data {
-            StructureData::Belt { network } => {
-                let dir = structure.direction;
-
-                let prev_pos = zz + rotate_block_vector(dir, IVec3::new(-1, 0, 0));
-                let next_offset = rotate_block_vector(dir, IVec3::new(1, 0, 0));
-
-                let mut belt_network = None;
-
-                'block: {
-                    let Some(prev_belt) = world.structure_blocks.get(&prev_pos)
-                    else { break 'block };
-
-                    let prev_belt = &self.structs[prev_belt.0];
-                    if prev_belt.direction != dir {
-                        break 'block;
-                    }
-
-                    let StructureData::Belt { network } = prev_belt.data
-                    else { break 'block };
-
-                    belt_network = Some(network.unwrap());
-                }
-
-
-                'block: {
-                    match belt_network {
-                        Some(value) => {
-                            let mut next_pos = zz + next_offset;
-                            let mut old_network = None;
-                            loop {
-                                let Some(next_belt) = world.structure_blocks.get_mut(&next_pos)
-                                else { break 'block };
-
-                                let next_belt = &mut self.structs[next_belt.0];
-                                if next_belt.direction != dir { break; }
-
-
-                                let StructureData::Belt { network } = &mut next_belt.data
-                                else { break; };
-
-                                if let Some(old_network) = old_network {
-                                    assert_eq!(old_network, network.unwrap());
-                                } else {
-                                    old_network = Some(network.unwrap());
-                                }
-
-                                *network = Some(value);
-                                next_pos += next_offset;
-                            }
-
-                            
-                        },
-
-
-                        None => {
-                            let next_pos = zz + next_offset;
-                            let Some(next_belt) = world.structure_blocks.get(&next_pos)
-                            else { break 'block };
-
-                            let next_belt = &self.structs[next_belt.0];
-                            if next_belt.direction != dir { break 'block; }
-
-                            let StructureData::Belt { network } = next_belt.data
-                            else { break 'block };
-
-                            belt_network = Some(network.unwrap());
-
-                        },
-                    }
-                }
-
-
-                let structure = &mut self.structs[id.0];
-                let StructureData::Belt { network } = &mut structure.data
-                else { unreachable!() };
-
-                *network = match belt_network {
-                    Some(v) => Some(v),
-                    None => {
-                        let belt_network = BeltNetwork::with_size(2);
-                        let belt_network = self.belt_networks.insert(belt_network);
-                        Some(belt_network)
-                    },
-                };
-            },
-
-            _ => (),
-        }
-
-                */
-        let structure = &mut self.structs[id.0];
         let placement_origin = structure.zero_zero();
 
         let blocks = structure.data.as_kind().blocks(structure.direction);
@@ -329,10 +276,8 @@ impl Structure {
                         let Some(output_structure_id) = world.structure_blocks.get(&output_structure_position)
                         else { break 'body };
 
-
                         let input_structure = structures.get(*input_structure_id);
                         let available_items_len = input_structure.available_items_len();
-
                         for index in 0..available_items_len {
                             let input_structure = structures.get(*input_structure_id);
                             let Some(mut item) = input_structure.available_item(index)
@@ -344,7 +289,8 @@ impl Structure {
                             item.amount = 1;
 
                             let output_structure = structures.get(*output_structure_id);
-                            if !output_structure.can_accept(item) {
+                            if !output_structure.can_accept(item)
+                                && output_structure.data.as_kind() != StructureKind::Belt {
                                 // better luck next time
                                 continue;
                             }
@@ -365,14 +311,32 @@ impl Structure {
 
                         let item = *item;
                         let output_structure = structures.get_mut(*output_structure_id);
+                        if let StructureData::Belt { inventory } = &mut output_structure.data {
+                            let lane = placement_lane(dir, output_structure.direction);
+                            let inv = &mut inventory[lane];
+
+                            for slot in inv {
+                                if slot.is_none() {
+                                    *slot = Some(item);
+                                    final_state = InserterState::Searching;
+                                    break 'body;
+                                }
+                            }
+
+                            structures.schedule_in(id, 10);
+                            return;
+                        }
+
+
                         if !output_structure.can_accept(item) {
                             println!("[warn] inserter's output changed it's mind :(");
-                            structures.schedule_in(id, 5);
+                            structures.schedule_in(id, 10);
                             return;
                         }
 
                         output_structure.give_item(item);
                         final_state = InserterState::Searching;
+                        structures.schedule_in(id, 1);
                     },
 
                 } }
@@ -385,7 +349,7 @@ impl Structure {
                 *state = final_state;
 
                 match state {
-                    strct::InserterState::Searching => structures.schedule_in(id, 1),
+                    strct::InserterState::Searching => structures.schedule_in(id, 10),
                     strct::InserterState::Placing(_) => structures.schedule_in(id, 20),
                 };
 
@@ -450,7 +414,7 @@ impl Structure {
 
 
 
-    pub fn render(&self, renderer: &Renderer, shader: &ShaderProgram) {
+    pub fn render(&self, _: &Structures, renderer: &Renderer, shader: &ShaderProgram) {
         let kind = self.data.as_kind();
 
         let position = self.position - self.data.as_kind().origin(self.direction);
@@ -471,7 +435,6 @@ impl Structure {
         let rot = rot + 90f32.to_radians();
         let model = Mat4::from_translation(mesh_position) * Mat4::from_rotation_y(rot);
         shader.set_matrix4(c"model", model);
-
         mesh.draw();
 
         match &self.data {
@@ -493,6 +456,26 @@ impl Structure {
                     renderer.draw_item(shader, item.kind, pos, Vec3::splat(0.1), 0.00);
                 }
             },
+
+
+            StructureData::Belt { inventory, .. } => {
+                let base = mesh_position + rotate_block_vector(self.direction, IVec3::new(-3, 3, 0)).as_vec3() / 4.0;
+                let mut left_base = base + rotate_block_vector(self.direction, IVec3::new(0, 0, -1)).as_vec3() * 0.3;
+                for item in inventory[1] {
+                    left_base += rotate_block_vector(self.direction, IVec3::new(1, 0, 0)).as_vec3() * 0.5;
+                    if let Some(item) = item {
+                        renderer.draw_item(shader, item.kind, left_base, Vec3::splat(DROPPED_ITEM_SCALE), 0.0);
+                    }
+                }
+
+                let mut right_base = base + rotate_block_vector(self.direction, IVec3::new(0, 0, 1)).as_vec3() * 0.3;
+                for item in inventory[0] {
+                    right_base += rotate_block_vector(self.direction, IVec3::new(1, 0, 0)).as_vec3() * 0.5;
+                    if let Some(item) = item {
+                        renderer.draw_item(shader, item.kind, right_base, Vec3::splat(DROPPED_ITEM_SCALE), 0.0);
+                    }
+                }
+            }
             _ => (),
         }
     }
@@ -520,3 +503,20 @@ pub fn rotate_vector(direction: Vec3, v: Vec3) -> IVec3 {
     )
 }
 
+
+
+fn placement_lane(inserter_dir: CardinalDirection, belt_dir: CardinalDirection) -> usize {
+    use CardinalDirection as CD;
+
+    match (inserter_dir, belt_dir) {
+        (CD::North, CD::East) => 1,
+        (CD::North, CD::West) => 0,
+        (CD::South, CD::East) => 0,
+        (CD::South, CD::West) => 1,
+        (CD::East, CD::North) => 0,
+        (CD::East, CD::South) => 1,
+        (CD::West, CD::North) => 1,
+        (CD::West, CD::South) => 0,
+        _ => 0,
+    }
+}

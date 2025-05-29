@@ -12,8 +12,8 @@ pub enum CardinalDirection {
 impl CardinalDirection {
     pub fn as_ivec3(self) -> IVec3 {
         match self {
-            CardinalDirection::North => IVec3::new(0, 0, 1),
-            CardinalDirection::South => IVec3::new(0, 0, -1),
+            CardinalDirection::South => IVec3::new(0, 0, 1),
+            CardinalDirection::North => IVec3::new(0, 0, -1),
             CardinalDirection::East => IVec3::new(1, 0, 0),
             CardinalDirection::West => IVec3::new(-1, 0, 0),
         }

@@ -1,7 +1,7 @@
 use glam::IVec3;
 use rand::seq::IndexedRandom;
 
-use crate::{belt_network::BeltLineId, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh, Tick};
+use crate::{directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh, Tick};
 
 use super::Slot;
 
@@ -31,7 +31,7 @@ pub enum StructureData {
 
 
     Belt {
-        network: Option<BeltLineId>,
+        inventory: [[Option<Item>; 2]; 2],
     },
 
 }
@@ -59,7 +59,7 @@ impl StructureData {
             StructureKind::Quarry => Self::Quarry { current_progress: 0, output: None },
             StructureKind::Inserter => Self::Inserter { state: InserterState::Searching },
             StructureKind::Chest => Self::Chest { inventory: vec![Slot { item: None, expected: None, max: 16 }; 32] },
-            StructureKind::Belt => Self::Belt { network: None },
+            StructureKind::Belt => Self::Belt { inventory: [[None; 2]; 2] },
         }
     }
 
@@ -107,19 +107,16 @@ impl Structure {
             },
 
 
-            StructureData::Belt { .. } => {
-                todo!();
-                /*
-                for arr in 0..slots.len() {
-                    let arr = &slots[arr];
+            StructureData::Belt { inventory } => {
+                for arr in 0..inventory.len() {
+                    let arr = &inventory[arr];
                     for i in 0..arr.len() {
                         if arr[i].is_none() {
                             return true;
                         }
                     }
                 }
-
-                f*/
+                false
             },
         }
     }
@@ -139,10 +136,9 @@ impl Structure {
 
 
 
-            StructureData::Belt { .. } => {
-                /*
-                for arr in 0..slots.len() {
-                    let arr = &mut slots[arr];
+            StructureData::Belt { inventory } => {
+                for arr in 0..inventory.len() {
+                    let arr = &mut inventory[arr];
                     for i in 0..arr.len() {
                         if arr[i].is_none() {
                             arr[i] = Some(item);
@@ -150,7 +146,6 @@ impl Structure {
                         }
                     }
                 }
-                */
             },
 
             _ => unreachable!(),
@@ -163,7 +158,7 @@ impl Structure {
             StructureData::Quarry { output, .. } => output.is_some() as usize,
             StructureData::Inserter { .. } => 0,
             StructureData::Chest { inventory } => inventory.len(),
-            StructureData::Belt { .. } => todo!(),
+            StructureData::Belt { .. } => 4,
         }
     }
 
@@ -174,7 +169,7 @@ impl Structure {
             StructureData::Quarry { output, .. } => *output,
             StructureData::Inserter { .. } => None,
             StructureData::Chest { inventory } => inventory[index].item,
-            StructureData::Belt { .. } => todo!(),
+            StructureData::Belt { inventory } => inventory[index/2][index%2],
         }
     }
 
@@ -206,9 +201,9 @@ impl Structure {
                 None
             },
 
-            StructureData::Belt { network } => {
-                //let slot = &mut slots[index / 2][index % 2];
-                todo!()
+            StructureData::Belt { inventory } => {
+                let slot = &mut inventory[index / 2][index % 2];
+                slot.take()
             },
         }
     }
@@ -299,7 +294,7 @@ impl StructureKind {
             StructureKind::Quarry => Mesh::from_obj("quarry.obj"),
             StructureKind::Inserter => Mesh::from_obj("inserter.obj"),
             StructureKind::Chest => Mesh::from_obj("block_outline.obj"),
-            StructureKind::Belt => Mesh::from_obj("block_outline.obj"),
+            StructureKind::Belt => Mesh::from_obj("belt.obj"),
         }
     }
 }
