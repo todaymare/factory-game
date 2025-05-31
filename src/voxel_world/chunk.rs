@@ -13,8 +13,18 @@ pub const CHUNK_SIZE : usize = 32;
 
 #[derive(Debug)]
 pub struct Chunk {
-    data: [Voxel; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
-    pub mesh: Option<Mesh>,
+    pub data: [Voxel; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
+    pub is_dirty: bool,
+    pub mesh: Mesh,
+    pub mesh_state: MeshState,
+}
+
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum MeshState {
+    ShouldUpdate,
+    Updating,
+    Okay,
 }
 
 
@@ -23,7 +33,9 @@ impl Chunk {
     pub fn empty_chunk() -> Chunk {
         Chunk {
             data: [Voxel { kind: VoxelKind::Air }; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
-            mesh: None,
+            is_dirty: false,
+            mesh: Mesh::new(vec![], vec![]),
+            mesh_state: MeshState::ShouldUpdate,
         }
     }
 
@@ -67,65 +79,9 @@ impl Chunk {
                 }
             }
         }
+
+        chunk.is_dirty = true;
         chunk
-    }
-
-
-    pub fn mesh(&mut self) -> &Mesh {
-        const FACE_DIRECTIONS: [(Direction, (i32, i32, i32)); 6] = [
-            (Direction::Up,      ( 0,  1,  0)),
-            (Direction::Down,    ( 0, -1,  0)),
-            (Direction::Right,    (-1,  0,  0)),
-            (Direction::Left,   ( 1,  0,  0)),
-            (Direction::Forward, ( 0,  0,  1)),
-            (Direction::Back,    ( 0,  0, -1)),
-        ];
-
-        if self.mesh.is_none() {
-            let time = Instant::now();
-            let mut verticies = vec![];
-            let mut indicies = vec![];
-
-            for z in 0..CHUNK_SIZE {
-                for y in 0..CHUNK_SIZE {
-                    for x in 0..CHUNK_SIZE {
-                        let voxel = *self.get_usize(x, y, z);
-
-                        if voxel.kind.is_transparent() { continue }
-
-                        let pos = Vec3::new(x as f32, y as f32, z as f32);
-
-                        for (dir, (dx, dy, dz)) in FACE_DIRECTIONS.iter() {
-                            let nx = x as i32 + dx;
-                            let ny = y as i32 + dy;
-                            let nz = z as i32 + dz;
-
-                            let is_out_of_bounds = nx < 0 || nx >= CHUNK_SIZE as i32
-                                                || ny < 0 || ny >= CHUNK_SIZE as i32
-                                                || nz < 0 || nz >= CHUNK_SIZE as i32;
-
-                            let should_draw = if is_out_of_bounds {
-                                true
-                            } else {
-                                self.get_usize(nx as usize, ny as usize, nz as usize).kind.is_transparent()
-                            };
-
-                            if should_draw {
-                                draw_quad(&mut verticies, &mut indicies,
-                                          Quad::from_direction(*dir, pos, voxel.kind.colour()));
-                            }
-                        }
-                    }
-                }
-            }
-
-            let mesh = Mesh::new(verticies, indicies);
-            self.mesh = Some(mesh);
-            println!("remeshed chunk in {}ms", time.elapsed().as_millis_f64());
-        }
-
-        self.mesh.as_ref().unwrap()
-
     }
 
 
@@ -135,7 +91,6 @@ impl Chunk {
 
 
     pub fn get_mut_usize(&mut self, x: usize, y: usize, z: usize) -> &mut Voxel {
-        self.mesh = None;
         &mut self.data[z * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + x]
     }
 

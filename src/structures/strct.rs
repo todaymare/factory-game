@@ -17,12 +17,13 @@ pub struct Structure {
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum StructureData {
     Quarry {
-        current_progress: usize,
+        current_progress: u32,
         output: Option<Item>,
     },
 
     Inserter {
         state: InserterState,
+        filter: Option<ItemKind>,
     },
 
     Chest {
@@ -57,7 +58,7 @@ impl StructureData {
     pub fn from_kind(kind: StructureKind) -> Self {
         match kind {
             StructureKind::Quarry => Self::Quarry { current_progress: 0, output: None },
-            StructureKind::Inserter => Self::Inserter { state: InserterState::Searching },
+            StructureKind::Inserter => Self::Inserter { state: InserterState::Searching, filter: None },
             StructureKind::Chest => Self::Chest { inventory: vec![Slot { item: None, expected: None, max: 16 }; 32] },
             StructureKind::Belt => Self::Belt { inventory: [[None; 2]; 2] },
         }
@@ -214,7 +215,6 @@ impl StructureKind {
     pub fn item_kind(self) -> ItemKind {
         ItemKind::Structure(self)
     }
-
 
 
     pub fn blocks(self, dir: CardinalDirection) -> &'static [IVec3] {

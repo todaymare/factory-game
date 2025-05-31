@@ -54,6 +54,24 @@ impl ItemKind {
     ];
 
 
+    pub fn to_string(self) -> &'static str {
+        match self {
+            ItemKind::Coal => "coal",
+            ItemKind::CopperOre => "copper_ore",
+            ItemKind::IronOre => "iron_ore",
+            ItemKind::Structure(StructureKind::Belt) => "belt",
+            ItemKind::Structure(StructureKind::Inserter) => "inserter",
+            ItemKind::Structure(StructureKind::Chest) => "chest",
+            ItemKind::Structure(StructureKind::Quarry) => "quarry",
+            ItemKind::Voxel(VoxelKind::Dirt) => "dirt_block",
+            ItemKind::Voxel(VoxelKind::Stone) => "stone_block",
+            ItemKind::IronPlate => "iron_plate",
+
+            _ => "invalid",
+        }
+    }
+
+
     pub fn max_stack_size(self) -> u32 {
         u32::MAX
     }

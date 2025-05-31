@@ -9,6 +9,7 @@ pub struct Voxel {
 
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+#[repr(u8)]
 pub enum VoxelKind {
     Dirt,
     Stone,
@@ -49,6 +50,37 @@ impl VoxelKind {
 
             VoxelKind::StructureBlock => Vec4::ZERO.with_w(1.0),
             VoxelKind::Air => unreachable!(),
+        }
+    }
+
+
+    pub fn to_u8(self) -> u8 {
+        match self {
+            VoxelKind::Dirt => 1,
+            VoxelKind::Stone => 2,
+            VoxelKind::Copper => 3,
+            VoxelKind::Iron => 4,
+            VoxelKind::Coal => 5,
+            VoxelKind::StructureBlock => 0,
+            VoxelKind::Air => 0,
+        }
+    }
+
+
+
+    pub fn from_u8(u8: u8) -> VoxelKind {
+        match u8 {
+            0 => Self::Air,
+            1 => Self::Dirt,
+            2 => Self::Stone,
+            3 => Self::Copper,
+            4 => Self::Iron,
+            5 => Self::Coal,
+
+            _ => {
+                println!("invalid block id '{u8}'");
+                Self::Air
+            }
         }
     }
 

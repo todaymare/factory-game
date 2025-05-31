@@ -3,7 +3,6 @@ use std::{collections::HashMap, ffi::CString, fs, ptr::null_mut};
 use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
 use glam::{IVec2, Mat4, Quat, Vec2, Vec3};
 use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
-use sti::println;
 
 use crate::{items::{ItemKind, ItemMeshes}, shader::{Shader, ShaderProgram, ShaderType}, Tick, TICKS_PER_SECOND};
 
@@ -70,6 +69,7 @@ impl Renderer {
                 result
             });
         }
+
         let fragment = Shader::new(&fs::read("text.fs").unwrap(), ShaderType::Fragment).unwrap();
         let vertex = Shader::new(&fs::read("text.vs").unwrap(), ShaderType::Vertex).unwrap();
         let text_shader = ShaderProgram::new(fragment, vertex).unwrap();

@@ -6,11 +6,11 @@ use std::{collections::BTreeMap, hash::{DefaultHasher, Hash, Hasher}, ops::Bound
 
 use glam::{IVec3, Mat4, Vec3, Vec4};
 use glfw::ffi::OPENGL_DEBUG_CONTEXT;
-use sti::{define_key, println, vec::KVec};
+use sti::{define_key, vec::KVec};
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use work_queue::WorkQueue;
 
-use crate::{directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind, ItemMeshes}, mesh::Mesh, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Game, Tick, DROPPED_ITEM_SCALE};
+use crate::{directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, input, items::{Item, ItemKind, ItemMeshes}, mesh::Mesh, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Game, Tick, DROPPED_ITEM_SCALE};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
@@ -24,9 +24,8 @@ pub struct StructureId(pub KeyGen<StructureGen, StructureKey>);
 pub struct Structures {
     pub structs: KGenMap<StructureGen, StructureKey, Structure>,
     pub work_queue: WorkQueue,
-    to_be_awoken: Vec<StructureId>,
-    current_tick: Tick,
-    belt_pulse_lifetime: f32,
+    pub to_be_awoken: Vec<StructureId>,
+    pub current_tick: Tick,
 }
 
 
@@ -37,7 +36,6 @@ impl Structures {
             work_queue: WorkQueue::new(),
             current_tick: Tick::initial(),
             to_be_awoken: vec![],
-            belt_pulse_lifetime: 0.0,
         }
     }
 
@@ -89,7 +87,7 @@ impl Structures {
 
     pub fn process(&mut self, world: &mut VoxelWorld) {
         self.current_tick = self.current_tick.inc();
-        if self.current_tick.0 % 15 == 0 {
+        if self.current_tick.0 % 5 == 0 {
             println!("update beltz");
             let belts = self.belts(world);
 
@@ -262,11 +260,12 @@ impl Structure {
             },
 
 
-            StructureData::Inserter { state } => {
+            StructureData::Inserter { state, filter } => {
                 let mut final_state = InserterState::Searching;
 
                 let output_structure_position = zz + rotate_block_vector(structure.direction, IVec3::new(-1, 0, 0));
                 let input_structure_position = zz + rotate_block_vector(structure.direction, IVec3::new(3, 0, 0));
+                let filter = *filter;
 
 
                 'body: { match state {
@@ -277,6 +276,8 @@ impl Structure {
                         else { break 'body };
 
                         let input_structure = structures.get(*input_structure_id);
+
+
                         let available_items_len = input_structure.available_items_len();
                         for index in 0..available_items_len {
                             let input_structure = structures.get(*input_structure_id);
@@ -285,6 +286,12 @@ impl Structure {
                                 // no item in this index
                                 continue;
                             };
+
+                            if let Some(filter) = filter {
+                                if filter != item.kind {
+                                    continue;
+                                }
+                            }
 
                             item.amount = 1;
 
@@ -335,15 +342,22 @@ impl Structure {
                         }
 
                         output_structure.give_item(item);
-                        final_state = InserterState::Searching;
-                        structures.schedule_in(id, 1);
+
+                        let structure = structures.get_mut_without_wake_up(id);
+
+                        let StructureData::Inserter { state, .. } = &mut structure.data
+                        else { unreachable!() };
+
+                        *state = InserterState::Searching;
+                        Structure::update(id, structures, world);
+                        return;
                     },
 
                 } }
 
                 let structure = structures.get_mut_without_wake_up(id);
 
-                let StructureData::Inserter { state } = &mut structure.data
+                let StructureData::Inserter { state, .. } = &mut structure.data
                 else { unreachable!() };
 
                 *state = final_state;

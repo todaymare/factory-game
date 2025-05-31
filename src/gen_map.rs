@@ -75,9 +75,10 @@ impl<G: Key, K: Key, V, A: Alloc> KGenMap<G, K, V, A> {
 
 
     pub fn with_cap_in(alloc: A, cap: usize) -> Self {
-        let mut this = Self::new_in(alloc);
-        unsafe { this.vec.set_cap(cap) };
-        this
+        Self {
+            next: None,
+            vec: KVec::with_cap_in(alloc, cap),
+        }
     }
 
 

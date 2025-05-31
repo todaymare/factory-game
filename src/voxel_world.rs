@@ -1,17 +1,21 @@
 pub mod chunk;
 pub mod voxel;
 
-use std::{collections::{HashMap, VecDeque}, ops::Bound};
+use std::{collections::{HashMap, VecDeque}, fs, ops::Bound, time::Instant};
 
+use chunk::MeshState;
 use glam::{IVec3, Vec3};
+use rand::seq::IndexedRandom;
+use save_format::byte::{ByteReader, ByteWriter};
 use voxel::VoxelKind;
 
-use crate::{items::{DroppedItem, Item}, structures::{strct::{InserterState, Structure, StructureData}, StructureId, Structures}, voxel_world::{chunk::{Chunk, CHUNK_SIZE}, voxel::Voxel}, PhysicsBody};
+use crate::{directions::Direction, items::{DroppedItem, Item}, mesh::{draw_quad, Mesh}, quad::Quad, structures::{strct::{InserterState, Structure, StructureData}, StructureId, Structures}, voxel_world::{chunk::{Chunk, CHUNK_SIZE}, voxel::Voxel}, PhysicsBody};
 
 pub struct VoxelWorld {
     pub chunks: HashMap<IVec3, Chunk>,
     pub structure_blocks: HashMap<IVec3, StructureId>,
     pub dropped_items: Vec<DroppedItem>,
+    remesh_queue: Vec<IVec3>,
 }
 
 
@@ -21,16 +25,135 @@ impl VoxelWorld {
             chunks: HashMap::new(),
             structure_blocks: HashMap::new(),
             dropped_items: vec![],
+            remesh_queue: vec![],
         }
     }
 
 
-    pub fn get_chunk(&mut self, pos: IVec3) -> &mut Chunk {
-        if !self.chunks.contains_key(&pos) {
-            self.chunks.insert(pos, Chunk::generate(pos));
+    pub fn process(&mut self) {
+        let mut n = 0;
+        let time = Instant::now();
+        while time.elapsed().as_millis() < 3 {
+            let Some(chunk_pos) = self.remesh_queue.pop()
+            else { break };
+
+            let chunk = self.get_chunk_mut(chunk_pos);
+
+            if chunk.mesh_state == MeshState::Okay {
+                continue;
+            }
+
+            n += 1;
+
+            const FACE_DIRECTIONS: [(Direction, (i32, i32, i32)); 6] = [
+                (Direction::Up,      ( 0,  1,  0)),
+                (Direction::Down,    ( 0, -1,  0)),
+                (Direction::Right,   (-1,  0,  0)),
+                (Direction::Left,    ( 1,  0,  0)),
+                (Direction::Forward, ( 0,  0,  1)),
+                (Direction::Back,    ( 0,  0, -1)),
+            ];
+
+            let mut verticies = vec![];
+            let mut indicies = vec![];
+
+
+            for z in 0..CHUNK_SIZE {
+                for y in 0..CHUNK_SIZE {
+                    for x in 0..CHUNK_SIZE {
+                        let voxel = *chunk.get_usize(x, y, z);
+
+                        if voxel.kind.is_transparent() { continue }
+
+                        let pos = Vec3::new(x as f32, y as f32, z as f32);
+
+                        for (dir, (dx, dy, dz)) in FACE_DIRECTIONS.iter() {
+                            let nx = x as i32 + dx;
+                            let ny = y as i32 + dy;
+                            let nz = z as i32 + dz;
+
+                            let is_out_of_bounds = nx < 0 || nx >= CHUNK_SIZE as i32
+                                                || ny < 0 || ny >= CHUNK_SIZE as i32
+                                                || nz < 0 || nz >= CHUNK_SIZE as i32;
+
+                            let should_draw = if is_out_of_bounds {
+                                true
+                            } else {
+                                chunk.get_usize(nx as usize, ny as usize, nz as usize).kind.is_transparent()
+                            };
+
+                            if should_draw {
+                                draw_quad(&mut verticies, &mut indicies,
+                                          Quad::from_direction(*dir, pos, voxel.kind.colour()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mesh = Mesh::new(verticies, indicies);
+            chunk.mesh_state = MeshState::Okay;
+            chunk.mesh = mesh;
         }
 
-        self.chunks.get_mut(&pos).unwrap()
+        if n > 0 {
+            println!("remeshed {n} chunk in {}ms, {} chunks left", time.elapsed().as_millis_f64(), self.remesh_queue.len());
+        }
+    }
+
+
+    pub fn get_chunk(&mut self, pos: IVec3) -> &Chunk {
+        self.ensure_chunk_exists(pos);
+        self.chunks.get(&pos).unwrap()
+    }
+
+
+    pub fn get_chunk_mut(&mut self, pos: IVec3) -> &mut Chunk {
+        self.ensure_chunk_exists(pos);
+        let chunk = self.chunks.get_mut(&pos).unwrap();
+        chunk.mesh_state = MeshState::ShouldUpdate;
+        chunk.is_dirty = true;
+
+        chunk
+    }
+
+
+    pub fn ensure_chunk_exists(&mut self, pos: IVec3) {
+        if !self.chunks.contains_key(&pos) {
+            let path = format!("saves/chunks/{pos}.chunk");
+            println!("hit io");
+            match fs::read(&path) {
+                Ok(v) => {
+                    let mut byte_reader = ByteReader::new(&v).unwrap();
+                    let mut chunk = Chunk::empty_chunk();
+                    for voxel in &mut chunk.data {
+                        let kind = VoxelKind::from_u8(byte_reader.read_u8().unwrap());
+                        voxel.kind = kind;
+                    }
+
+                    self.chunks.insert(pos, chunk);
+                },
+
+
+                Err(v) => {
+                    println!("error while loading chunk file on '{path}': {v}");
+                    self.chunks.insert(pos, Chunk::generate(pos));
+                }
+            };
+        }
+    }
+
+
+    pub fn get_mesh(&mut self, pos: IVec3) -> &Mesh {
+        let chunk = self.get_chunk(pos);
+        if chunk.mesh_state == MeshState::ShouldUpdate {
+            let chunk = self.chunks.get_mut(&pos).unwrap();
+            chunk.mesh_state = MeshState::Updating;
+            self.remesh_queue.push(pos);
+        }
+
+        let chunk = self.get_chunk(pos);
+        &chunk.mesh
     }
 
 
@@ -43,7 +166,7 @@ impl VoxelWorld {
 
     pub fn get_voxel_mut(&mut self, pos: IVec3) -> &mut Voxel {
         let (chunk_pos, chunk_local_pos) = split_world_pos(pos);
-        self.get_chunk(chunk_pos).get_mut(chunk_local_pos)
+        self.get_chunk_mut(chunk_pos).get_mut(chunk_local_pos)
     }
 
 
@@ -100,7 +223,7 @@ impl VoxelWorld {
 
 
             match structure.data {
-                StructureData::Inserter { state: InserterState::Placing(item) } => {
+                StructureData::Inserter { state: InserterState::Placing(item), .. } => {
                     self.dropped_items.push(DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5)));
                 }
                 _ => (),
@@ -221,6 +344,22 @@ impl VoxelWorld {
         physics_body.position = position;
     }
 
+
+
+    pub fn save(&mut self) {
+        for (&pos, chunk) in &mut self.chunks {
+            if !chunk.is_dirty { continue }
+            chunk.is_dirty = false;
+            let mut byte_writer = ByteWriter::new();
+
+            for voxel in &chunk.data {
+                byte_writer.write_u8(voxel.kind.to_u8());
+            }
+
+            let path = format!("saves/chunks/{pos}.chunk");
+            fs::write(path, byte_writer.finish()).unwrap();
+        }
+    }
 }
 
 
