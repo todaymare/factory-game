@@ -146,7 +146,9 @@ impl Mesh {
 
 
     pub fn from_obj(path: &str) -> Mesh {
-        let model : Obj<Vertex, u32> = obj::load_obj(BufReader::new(std::fs::File::open(path).unwrap())).unwrap();
+        let Ok(file) = std::fs::File::open(path)
+        else { panic!("no such file as {path}") };
+        let model : Obj<Vertex, u32> = obj::load_obj(BufReader::new(file)).unwrap();
         Mesh::new(model.vertices, model.indices)
     }
 

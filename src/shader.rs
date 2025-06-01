@@ -22,6 +22,7 @@ pub enum ShaderType {
 }
 
 
+#[derive(Clone)]
 pub struct ShaderProgram {
     pub id: u32,
 }

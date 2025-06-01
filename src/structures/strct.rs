@@ -291,10 +291,10 @@ impl StructureKind {
 
     pub fn mesh(self) -> Mesh {
         match self {
-            StructureKind::Quarry => Mesh::from_obj("quarry.obj"),
-            StructureKind::Inserter => Mesh::from_obj("inserter.obj"),
-            StructureKind::Chest => Mesh::from_obj("block_outline.obj"),
-            StructureKind::Belt => Mesh::from_obj("belt.obj"),
+            StructureKind::Quarry => Mesh::from_obj("assets/models/quarry.obj"),
+            StructureKind::Inserter => Mesh::from_obj("assets/models/inserter.obj"),
+            StructureKind::Chest => Mesh::from_obj("assets/models/block_outline.obj"),
+            StructureKind::Belt => Mesh::from_obj("assets/models/belt.obj"),
         }
     }
 }

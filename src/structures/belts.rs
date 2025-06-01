@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Write};
 
 use glam::IVec3;
-use sti::{define_key, vec::KVec};
+use sti::{define_key, key::Key, vec::KVec};
 
-use crate::{structures::strct::{rotate_block_vector, StructureKind}, voxel_world::VoxelWorld};
+use crate::{hsl_to_hex, structures::strct::{rotate_block_vector, StructureKind}, voxel_world::VoxelWorld};
 
 use super::{StructureId, Structures};
 
@@ -245,5 +245,50 @@ pub struct Belts {
 impl Belts {
     pub fn node(&self, node: NodeId) -> &Node {
         self.nodes[node].as_ref().unwrap()
+    }
+
+
+    pub fn scc_graph(&self) -> String {
+        let mut output = String::new();
+        let _ = write!(output, "digraph {{");
+        let _ = write!(output, "node [shape=box];");
+        let _ = write!(output, "edge [color=gray];");
+
+
+        let step = 360.0 / self.scc_ends.len() as f64;
+        for i in self.scc_ends.krange() {
+            let hue = step * i.usize() as f64;
+
+            let hex = hsl_to_hex(hue, 0.6, 0.8);
+
+
+            let _ = write!(output, "subgraph cluster_{} {{", i.usize());
+            let _ = write!(output, "label = \"SCC #{} is_edge: {}\";", i.usize(), self.edges.contains(&i));
+            let _ = write!(output, "style = filled;");
+            let _ = write!(output, "fillcolor = \"{hex}\";");
+
+            let scc_begin = if i == SccId::ZERO { SccId::ZERO }
+                            else { self.scc_ends[unsafe { SccId::from_usize_unck(i.usize() - 1) }] };
+            let scc_end = self.scc_ends[i];
+            let scc_node_ids = &self.scc_data[scc_begin..scc_end];
+
+            for &scc_node_id in scc_node_ids {
+                let node = self.nodes[scc_node_id].as_ref().unwrap();
+                let scc_node = &self.scc_nodes[scc_node_id];
+
+                let _ = write!(output, "{} [label=\"node_id={} index={} lowest_link={}\"];", scc_node_id.usize(), scc_node_id.usize(), scc_node.index, scc_node.low_link);
+                for link in &node.outputs {
+                    if let Some(link) = link {
+                        let _ = write!(output, "{} -> {};", scc_node_id.usize(), link.usize());
+                    }
+                }
+            }
+
+            let _ = write!(output, "}}");
+
+        }
+        let _ = write!(output, "}}");
+        output
+
     }
 }

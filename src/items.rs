@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fs::{self, File}, io::BufReader, path::Path};
 
-use glam::{IVec3, Vec3, Vec4};
-use rand::random;
+use glam::{IVec2, IVec3, Vec3, Vec4};
+use image::{codecs::png::PngDecoder, ImageDecoder};
+use rand::{random, seq::IndexedRandom};
 
-use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, structures::strct::{Structure, StructureKind}, voxel_world::{chunk::Chunk, voxel::VoxelKind}, Game, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
+use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::{Structure, StructureKind}, voxel_world::{chunk::Chunk, voxel::VoxelKind}, Game, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
 
 
 #[derive(Clone)]
@@ -34,8 +35,9 @@ pub enum ItemKind {
 }
 
 
-pub struct ItemMeshes {
-    meshes: HashMap<ItemKind, Mesh>,
+pub struct Assets {
+    textures: HashMap<ItemKind, TextureId>,
+    models: HashMap<ItemKind, Mesh>,
 }
 
 
@@ -143,18 +145,49 @@ impl DroppedItem {
 }
 
 
-impl ItemMeshes {
-    pub fn new() -> Self {
-        let vec = ItemKind::ALL.iter().map(|x| (*x, x.create_mesh())).collect();
+impl Assets {
+    pub fn new(texture_atlas: &mut TextureAtlasBuilder) -> Self {
+        let textures_dir = Path::new("assets/textures");
+
+        let mut textures = HashMap::with_capacity(ItemKind::ALL.len());
+        let mut models = HashMap::with_capacity(ItemKind::ALL.len());
+
+        for &item in ItemKind::ALL {
+            models.insert(item, item.create_mesh());
+
+            let path = textures_dir.join(item.to_string()).with_added_extension("png");
+            let Ok(buf) = File::open(&path)
+            else {
+                println!("[error] unable to read texture path '{path:?}'");
+                panic!();
+            };
+
+            let buf = BufReader::new(buf);
+            let asset = PngDecoder::new(buf).unwrap();
+            let dims = asset.dimensions();
+            let dims = IVec2::new(dims.0 as _, dims.1 as _);
+
+            let mut data = vec![0; asset.total_bytes() as _];
+            asset.read_image(&mut data).unwrap();
+
+            let id = texture_atlas.register(dims, &data);
+            textures.insert(item, id);
+        }
+
 
         Self {
-            meshes: vec,
+            models,
+            textures,
         }
     }
 
 
     pub fn get(&self, kind: ItemKind) -> &Mesh {
-        self.meshes.get(&kind).unwrap()
+        self.models.get(&kind).unwrap()
+    }
+
+    pub fn get_ico(&self, kind: ItemKind) -> TextureId {
+        *self.textures.get(&kind).unwrap()
     }
 }
 

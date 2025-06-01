@@ -1,6 +1,8 @@
 #![feature(duration_millis_float)]
 #![feature(portable_simd)]
 #![feature(btree_cursors)]
+#![feature(str_as_str)]
+#![feature(path_add_extension)]
 
 pub mod shader;
 pub mod mesh;
@@ -13,18 +15,21 @@ pub mod gen_map;
 pub mod voxel_world;
 pub mod directions;
 pub mod ui;
+pub mod save_system;
+pub mod commands;
 
 use core::{f32, time};
 use std::{char, collections::{HashMap, HashSet}, env, f32::consts::{PI, TAU}, fmt::{Display, Write}, fs, io::BufReader, ops::{self, Bound}, simd::f32x4, time::Instant};
 
+use commands::{Command, CommandRegistry};
 use directions::CardinalDirection;
 use save_format::Value;
 use ui::UILayer;
-use voxel_world::{chunk::{Chunk, CHUNK_SIZE}, split_world_pos, voxel::{Voxel, VoxelKind}, VoxelWorld};
+use voxel_world::{chunk::{Chunk, MeshState, CHUNK_SIZE}, split_world_pos, voxel::{Voxel, VoxelKind}, VoxelWorld};
 use glam::{IVec3, Mat4, Vec2, Vec3, Vec4};
 use glfw::{GlfwReceiver, Key, MouseButton, WindowEvent};
 use input::InputManager;
-use items::{DroppedItem, Item, ItemKind, ItemMeshes};
+use items::{DroppedItem, Item, ItemKind, Assets};
 use mesh::{Mesh, Vertex};
 use rand::{random, seq::IndexedRandom};
 use renderer::Renderer;
@@ -49,13 +54,10 @@ const DROPPED_ITEM_SCALE : f32 = 0.25;
 
 fn main() {
     let mut game = Game::new();
-    for kind in ItemKind::ALL.iter().copied() {
-        game.player.add_item(Item { amount: 99, kind });
-
-    }
 
     let mut input = InputManager::default();
     let mut renderer = Renderer::new((1920/2, 1080/2));
+    let mut ui_layer = UILayer::Gameplay;
 
     for x in -RENDER_DISTANCE..RENDER_DISTANCE {
         for y in -RENDER_DISTANCE..RENDER_DISTANCE {
@@ -65,7 +67,7 @@ fn main() {
         }
     }
 
-    let block_outline_mesh = Mesh::from_obj("block_outline.obj");
+    let block_outline_mesh = Mesh::from_obj("assets/models/block_outline.obj");
 
 
     let fragment = Shader::new(&fs::read("fragment.fs").unwrap(), shader::ShaderType::Fragment).unwrap();
@@ -99,7 +101,7 @@ fn main() {
 
 
         // handle mouse movement 
-        {
+        if matches!(ui_layer, UILayer::Gameplay) {
             let dt = input.mouse_delta();
             game.camera.yaw += dt.x * delta_time * MOUSE_SENSITIVITY;
             game.camera.pitch -= dt.y * delta_time * MOUSE_SENSITIVITY;
@@ -115,11 +117,23 @@ fn main() {
             let z = yaw.sin() * pitch.cos();
 
             game.camera.direction = Vec3::new(x, y, z).normalize();
+
+
+            let dt = input.scroll_delta();
+            if dt.y > 0.0 { game.player.hand += 1 }
+            if dt.y < 0.0 && game.player.hand == 0 { game.player.hand = game.player.inventory.len() - 1 }
+            else if dt.y < 0.0 { game.player.hand -= 1 }
+
+            game.player.hand %= game.player.inventory.len();
         }
 
 
         // handle keyboard input
-        {
+        'input: {
+            if !matches!(ui_layer, UILayer::Gameplay) {
+                break 'input;
+            }
+
             let mut dir = Vec3::ZERO;
             if input.is_key_pressed(Key::W) {
                 dir += game.camera.direction;
@@ -135,7 +149,7 @@ fn main() {
 
             dir.y = 0.0;
             let dir = dir.normalize_or_zero();
-            let mov = dir * PLAYER_SPEED;
+            let mov = dir * game.player.speed;
             game.player.body.velocity.x = mov.x;
             game.player.body.velocity.z = mov.z;
 
@@ -206,70 +220,19 @@ fn main() {
                 }
             }
 
+
+            if input.is_key_just_pressed(Key::E) {
+                if matches!(ui_layer, UILayer::Inventory { .. }) {
+                    ui_layer = UILayer::Gameplay
+                } else {
+                    ui_layer = UILayer::Inventory { just_opened: true }
+                }
+            }
+
+
             if input.is_key_just_pressed(Key::G) {
                 let belts = game.structures.belts(&game.world);
-
-                // export nodes graph
-                let mut output = String::new();
-                let _ = write!(output, "digraph {{");
-                let _ = write!(output, "node [shape=box];");
-                let _ = write!(output, "edge [color=gray];");
-
-
-                let step = 360.0 / belts.scc_ends.len() as f64;
-                for i in belts.scc_ends.krange() {
-                    let hue = step * i.usize() as f64;
-
-                    let hex = hsl_to_hex(hue, 0.6, 0.8);
-
-
-                    let _ = write!(output, "subgraph cluster_{} {{", i.usize());
-                    let _ = write!(output, "label = \"SCC #{} is_edge: {}\";", i.usize(), belts.edges.contains(&i));
-                    let _ = write!(output, "style = filled;");
-                    let _ = write!(output, "fillcolor = \"{hex}\";");
-
-                    let scc_begin = if i == SccId::ZERO { SccId::ZERO }
-                                    else { belts.scc_ends[unsafe { SccId::from_usize_unck(i.usize() - 1) }] };
-                    let scc_end = belts.scc_ends[i];
-                    let scc_node_ids = &belts.scc_data[scc_begin..scc_end];
-
-                    for &scc_node_id in scc_node_ids {
-                        let node = belts.nodes[scc_node_id].as_ref().unwrap();
-                        let scc_node = &belts.scc_nodes[scc_node_id];
-
-                        let _ = write!(output, "{} [label=\"node_id={} index={} lowest_link={}\"];", scc_node_id.usize(), scc_node_id.usize(), scc_node.index, scc_node.low_link);
-                        for link in &node.outputs {
-                            if let Some(link) = link {
-                                let _ = write!(output, "{} -> {};", scc_node_id.usize(), link.usize());
-                            }
-                        }
-                    }
-
-                    let _ = write!(output, "}}");
-
-                }
-                let _ = write!(output, "}}");
-                fs::write("sscs.dot", output.as_bytes()).unwrap();
-
-
-                let mut output = String::new();
-
-                let _ = write!(output, "digraph {{");
-                let _ = write!(output, "node [shape=box];");
-                let _ = write!(output, "edge [color=gray];");
-                for (structure, id) in belts.structure_to_node {
-                    let structure = game.structures.structs.get(structure.0).unwrap();
-                    let _ = write!(output, "{} [label=\"position: {}, direction: {:?}\"];", id.usize(), structure.position, structure.direction);
-
-                    let node = belts.nodes[id].as_ref().unwrap();
-                    if let Some(out) = node.outputs[0] {
-                        let _ = write!(output, "{} -> {};", id.usize(), out.usize());
-                    }
-                }
-
-                let _ = write!(output, "}}");
-
-                fs::write("nodes.dot", output.as_bytes()).unwrap();
+                fs::write("sscs.dot", belts.scc_graph().as_bytes()).unwrap();
             }
 
 
@@ -278,9 +241,12 @@ fn main() {
             }
 
 
-            if input.is_key_just_pressed(Key::X) {
-                game.player.hand += 1;
-                game.player.hand %= game.player.inventory.len();
+            if input.is_key_just_pressed(Key::Enter) {
+                if matches!(ui_layer, UILayer::Console { .. }) {
+                    ui_layer = UILayer::Gameplay
+                } else {
+                    ui_layer = UILayer::Console { text: String::new(), backspace_cooldown: 1.0, timer: 0.0, cursor: 0, just_opened: true, offset: 1 }
+                }
             }
 
 
@@ -289,6 +255,11 @@ fn main() {
                 let time = Instant::now();
                 game.save();
                 println!("saved in {}ms", time.elapsed().as_millis());
+            }
+
+
+            if input.is_key_pressed(Key::F3) && input.is_key_just_pressed(Key::T) {
+                game.world.chunks.iter_mut().for_each(|x| x.1.mesh_state = MeshState::ShouldUpdate);
             }
 
 
@@ -302,12 +273,24 @@ fn main() {
 
 
 
+            if input.is_key_just_pressed(Key::Num1) { game.player.hand = 0 }
+            if input.is_key_just_pressed(Key::Num2) { game.player.hand = 1 }
+            if input.is_key_just_pressed(Key::Num3) { game.player.hand = 2 }
+            if input.is_key_just_pressed(Key::Num4) { game.player.hand = 3 }
+            if input.is_key_just_pressed(Key::Num5) { game.player.hand = 4 }
+            if input.is_key_just_pressed(Key::Num6) { game.player.hand = 5 }
         }
 
 
         // handle block interactions
-        {
+        'outer: {
             game.player.interact_delay -= delta_time;
+
+
+            if !matches!(ui_layer, UILayer::Gameplay) {
+                break 'outer;
+            }
+
 
             'input_block: {
                 if !input.is_button_pressed(MouseButton::Button1) {
@@ -373,7 +356,7 @@ fn main() {
                 let voxel = game.world.get_voxel(place_position);
                 if !voxel.kind.is_air() { break 'input_block }
 
-                let Some(item_in_hand) = game.player.inventory.get(game.player.hand)
+                let Some(Some(item_in_hand)) = game.player.inventory.get(game.player.hand)
                 else { break 'input_block };
 
                 if let Some(voxel) = item_in_hand.kind.as_voxel() {
@@ -498,31 +481,41 @@ fn main() {
 
 
             // render ui
-            UILayer::Gameplay.render(&mut game, &renderer, delta_time);
+            ui_layer.render(&mut game, &input, &mut renderer, delta_time);
+
+            let current_cm = renderer.window.get_cursor_mode();
+            let cm = ui_layer.capture_mode();
+            if current_cm != cm {
+                renderer.window.set_cursor_mode(cm);
+
+                let window = renderer.window.get_size();
+                renderer.window.set_cursor_pos(window.0 as f64 / 2.0,
+                                               window.1 as f64 / 2.0);
+            }
 
 
-            // render inventory
+            // render hotbar
             {
-                let mut text = String::new();
+                let window = renderer.window_size();
+                let bottom_centre = Vec2::new(window.x * 0.5, window.y);
 
-                let _ = writeln!(text, "INVENTORY");
-                let _ = writeln!(text, "HAND: {}", game.player.hand);
-                for item in game.player.inventory.iter() {
-                    let _ = writeln!(text, "{:?}", item);
+                let slot_size = 64.0;
+                let slot_amount = game.player.inventory.len();
+                let padding = 16.0;
+
+                let mut base = bottom_centre - Vec2::new((padding + slot_size) * slot_amount as f32 * 0.5, slot_size + padding);
+
+                for (i, slot) in game.player.inventory.iter().enumerate() {
+                    let colour = if i == game.player.hand { Vec4::new(1.0, 0.0, 0.0, 1.0) }
+                                 else { (Vec4::ONE * 0.2).with_w(1.0) };
+                    renderer.draw_rect(base, Vec2::splat(slot_size), colour);
+                    if let Some(item) = slot {
+                        renderer.draw_item_icon(item.kind, base+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
+                        renderer.draw_text(format!("{}", item.amount).as_str(), base+slot_size*0.05, 0.5, Vec4::ONE);
+                    }
+                    base += Vec2::new(slot_size+padding, 0.0);
                 }
 
-                // align it to the right of the screen
-                let text = right_pad(&text);
-                let text_size = renderer.text_size(&text, 0.4);
-
-                let window_size = renderer.window.get_size();
-                let window_size = Vec2::new(window_size.0 as f32, window_size.1 as f32);
-
-                let pos = Vec2::new(window_size.x - text_size.x, 0.0);
-
-                renderer.draw_text(&right_pad(&text), pos, 0.4, Vec3::ONE);
-
-                renderer.draw_rect(window_size/2.0, Vec2::new(5.0, 5.0), Vec3::ONE);
             }
 
             renderer.end();
@@ -540,6 +533,7 @@ pub struct Game {
     player: Player,
     current_tick: Tick,
     structures: Structures,
+    command_registry: CommandRegistry,
 }
 
 
@@ -549,7 +543,7 @@ const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32;
 
 impl Game {
     pub fn new() -> Game {
-        Game {
+        let mut this = Game {
             world: VoxelWorld::new(),
             structures: Structures::new(),
 
@@ -571,421 +565,71 @@ impl Game {
                     aabb_dims: Vec3::new(0.8, 1.8, 0.8),
                 },
 
-                inventory: Vec::new(),
+                inventory: [None; 6],
                 hand: 0,
                 mining_progress: None,
                 interact_delay: 0.0,
                 pulling: Vec::new(),
+                speed: PLAYER_SPEED,
             },
 
             current_tick: Tick::initial(),
-        }
-    }
-
-
-    #[allow(unused_must_use)]
-    fn load(&mut self) {
-        let mut game = Game::new();
-
-        let Ok(file) = std::fs::read_to_string("saves/world.sft")
-        else { return };
-        let arena = save_format::Arena::new();
-
-        let hm = save_format::parse_str(&arena, &file).unwrap();
-
-        game.current_tick = Tick(hm["current_tick"].as_u32());
-        game.structures.current_tick = game.current_tick;
-
-        game.camera.yaw = hm["camera.yaw"].as_f32();
-        game.camera.pitch = hm["camera.pitch"].as_f32();
-
-        let mut i = 0;
-        let mut buf = sti::string::String::with_cap_in(&arena, 128);
-        loop {
-            buf.clear();
-            write!(buf, "world.dropped_items[{i}]");
-            println!("{i}");
-
-            let Some(dropped_item) = Game::parse_dropped_item(&hm, &mut buf)
-            else { break; };
-
-            game.world.dropped_items.push(dropped_item);
-
-            i += 1;
-        }
-
-
-        // player
-        game.player.body.position = hm["player.body.position"].as_vec3();
-        game.player.body.velocity = hm["player.body.velocity"].as_vec3();
-        game.player.hand = hm["player.hand"].as_u32() as usize;
-
-        let mut i = 0;
-        loop {
-            buf.clear();
-            write!(buf, "player.inventory[{i}]");
-
-            let Some(&value) = hm.get(buf.as_str())
-            else { break };
-
-            let item = Game::parse_item(value.as_str());
-            game.player.inventory.push(item);
-
-            i += 1;
-        }
-
-
-        let mut i = 0;
-        let mut buf = sti::string::String::with_cap_in(&arena, 128);
-        loop {
-            buf.clear();
-            write!(buf, "player.pulling[{i}]");
-
-            let Some(dropped_item) = Game::parse_dropped_item(&hm, &mut buf)
-            else { break; };
-
-            game.player.pulling.push(dropped_item);
-
-            i += 1;
-        }
-
-
-        // structures!
-        // yippie, my favourite
-
-        let mut i = 0;
-        let mut buf = sti::string::String::with_cap_in(&arena, 128);
-        loop {
-            buf.clear();
-            write!(buf, "structure[{i}].kind");
-            let Some(kind) = hm.get(buf.as_str())
-            else { break };
-
-            let item_kind = *ItemKind::ALL.iter().find(|f| f.to_string() == kind.as_str()).unwrap();
-            let ItemKind::Structure(kind) = item_kind
-            else { unreachable!() };
-
-            buf.clear();
-            write!(buf, "structure[{i}].origin");
-            let origin = hm[buf.as_str()].as_vec3().as_ivec3();
-            buf.clear();
-            write!(buf, "structure[{i}].direction");
-            let direction = match hm[buf.as_str()].as_str() {
-                "north" => CardinalDirection::North,
-                "south" => CardinalDirection::South,
-                "east" => CardinalDirection::East,
-                "west" => CardinalDirection::West,
-                _ => unreachable!(),
-            };
-
-            let data = match kind {
-                StructureKind::Quarry => {
-                    buf.clear();
-                    write!(buf, "structure[{i}].current_progress");
-                    let current_progress = hm[buf.as_str()].as_u32();
-
-                    buf.clear();
-                    write!(buf, "structure[{i}].output");
-                    let output = hm.get(buf.as_str()).map(|str| Game::parse_item(str.as_str()));
-
-                    StructureData::Quarry { current_progress, output }
-                },
-
-
-                StructureKind::Inserter => {
-                    buf.clear();
-                    write!(buf, "structure[{i}].filter");
-                    let filter = hm.get(buf.as_str()).map(|str| ItemKind::ALL.iter().find(|f| f.to_string() == str.as_str()).unwrap()).copied();
-
-                    buf.clear();
-                    write!(buf, "structure[{i}].state");
-                    let state = match hm[buf.as_str()].as_str() {
-                        "searching" => InserterState::Searching,
-                        "placing" => {
-                            buf.clear();
-                            write!(buf, "structure[{i}].item");
-                            let item = Game::parse_item(hm[buf.as_str()].as_str());
-
-                            InserterState::Placing(item)
-                        }
-
-                        _ => unreachable!(),
-                    };
-
-                    StructureData::Inserter { state, filter }
-                },
-
-
-                StructureKind::Chest => {
-                    let mut inv_i = 0;
-                    let mut inventory = vec![Slot { item: None, expected: None, max: 16 }; 32];
-                    while inv_i < 32 {
-                        buf.clear();
-                        write!(buf, "structure[{i}].inventory[{inv_i}]");
-                        let Some(str) = hm.get(buf.as_str())
-                        else { inv_i += 1; continue; };
-
-                        let item = Game::parse_item(str.as_str());
-                        inventory[inv_i].item = Some(item);
-                        inv_i += 1;
-                    }
-
-                    StructureData::Chest { inventory }
-                },
-
-
-                StructureKind::Belt => {
-                    let mut inv_i = 0;
-                    let mut inventory = [[None; 2]; 2];
-                    while inv_i < 4 {
-                        buf.clear();
-                        write!(buf, "structure[{i}].inventory[{inv_i}]");
-                        let Some(str) = hm.get(buf.as_str())
-                        else { inv_i += 1; continue; };
-
-                        let item = Game::parse_item(str.as_str());
-                        inventory[inv_i/2][inv_i%2] = Some(item);
-                        println!("lane: {}, item: {}", inv_i/2, inv_i%2);
-                        inv_i += 1;
-
-                    }
-
-
-                    StructureData::Belt { inventory }
-                },
-            };
-
-
-            let structure = Structure {
-                position: origin,
-                direction,
-                data,
-                is_asleep: true,
-            };
-
-            game.structures.add_structure(&mut game.world, structure);
-            i += 1;
-        }
-
-        *self = game;
-    }
-
-
-    fn parse_item(str: &str) -> Item {
-        let (split_pos, _) = str.bytes().enumerate().rev().find(|x| x.1 == b'x').unwrap();
-        let (ident, amount) = str.split_at(split_pos);
-        let ident = ident.trim();
-
-        let kind = *ItemKind::ALL.iter().find(|f| f.to_string() == ident).unwrap();
-        let amount : u32 = amount[1..].parse().unwrap();
-
-        let item = Item { amount, kind };
-        item
-    }
-
-
-    fn parse_dropped_item(hm: &HashMap<&str, Value>, buf: &mut sti::string::String<&Arena>) -> Option<DroppedItem> {
-        let buf_len = buf.len();
-
-        buf.push(".item");
-        let Some(&value) = hm.get(buf.as_str())
-        else { return None };
-
-        let item = Game::parse_item(value.as_str());
-
-        // parse the body
-        unsafe { buf.inner_mut().set_len(buf_len); }
-        buf.push(".body.position");
-        let position = hm[buf.as_str()].as_vec3();
-
-        unsafe { buf.inner_mut().set_len(buf_len); }
-        buf.push(".body.velocity");
-        let velocity = hm[buf.as_str()].as_vec3();
-
-
-        unsafe { buf.inner_mut().set_len(buf_len); }
-        buf.push(".creation_tick");
-        let creation_tick = hm[buf.as_str()].as_u32();
-
-        unsafe { buf.inner_mut().set_len(buf_len); }
-
-        let dropped_item = DroppedItem {
-            item,
-            body: PhysicsBody { position, velocity, aabb_dims: Vec3::splat(DROPPED_ITEM_SCALE) },
-            creation_tick: Tick(creation_tick),
+            command_registry: CommandRegistry::new(),
         };
 
-        Some(dropped_item)
+
+        this.command_registry.register("speed", |game, cmd| {
+            let speed = cmd.arg(0)?.as_f32()?;
+            game.player.speed = speed;
+            Some(())
+        });
+
+        this.command_registry.register("give", |game, cmd| {
+            let item = cmd.arg(0)?.as_str();
+            let kind = *ItemKind::ALL.iter().find(|x| x.to_string() == item)?;
+
+            let amount = cmd.arg(1)?.as_u32()?;
+
+            let item = Item { amount, kind };
+            game.world.dropped_items.push(DroppedItem::new(item, game.player.body.position));
+
+            Some(())
+        });
+
+        this.command_registry.register("tp", |game, cmd| {
+            let x = cmd.arg(0)?.as_f32()?;
+            let y = cmd.arg(1)?.as_f32()?;
+            let z = cmd.arg(2)?.as_f32()?;
+            let pos = Vec3::new(x, y, z);
+            game.player.body.position = pos;
+
+            Some(())
+        });
+
+        this.command_registry.register("clear", |game, _| {
+            game.player.inventory.iter_mut().for_each(|x| *x = None);
+
+            Some(())
+        });
+
+
+        this
     }
 
 
-    fn save(&mut self) {
-        let mut v = Vec::new();
+    fn call_command(&mut self, command: Command) {
+        let Some(func) = self.command_registry.find(command.command())
+        else {
+            self.command_registry.previous_commands.push(command);
+            return;
+        };
 
-        macro_rules! insert {
-            ($k: expr, $ty: ident) => {
-                v.push((&stringify!($k)[5..], Value::$ty($k as _)))
-                
-            };
-        }
+        func(self, &command);
 
-        self.world.save();
-
-        let arena = Arena::new();
-        v.push(("current_tick", Value::Num(self.current_tick.u32() as f64)));
-
-        insert!(self.camera.yaw, Num);
-        insert!(self.camera.pitch, Num);
-
-
-        for (i, item) in self.world.dropped_items.iter().enumerate() {
-            let path = format_in!(&arena, "world.dropped_items[{i}]").leak();
-            Game::save_dropped_item(&arena, &mut v, path, item);
-        }
-
-
-        insert!(self.player.body.position, Vec3);
-        insert!(self.player.body.velocity, Vec3);
-        insert!(self.player.hand, Num);
-
-        
-        for (i, item) in self.player.inventory.iter().enumerate() {
-            let path = format_in!(&arena, "player.inventory[{i}]").leak();
-            Game::save_item(&arena, &mut v, path, *item);
-        }
-
-
-        for (i, item) in self.player.pulling.iter().enumerate() {
-            let path = format_in!(&arena, "player.pulling[{i}]").leak();
-            Game::save_dropped_item(&arena, &mut v, path, item);
-        }
-
-
-        // structures
-        let mut buf = String::new();
-        let mut structure_to_index = HashMap::new();
-        let mut i = 0;
-        for (id, structure) in self.structures.structs.iter() {
-            buf.clear();
-            let _ = write!(buf, "structure[{i}]");
-            structure_to_index.insert(id, i);
-
-            i += 1;
-            v.push((format_in!(&arena, "{buf}.kind").leak(), Value::String(structure.data.as_kind().item_kind().to_string())));
-            v.push((format_in!(&arena, "{buf}.origin").leak(), Value::Vec3(structure.position.as_vec3())));
-
-            let direction = match structure.direction {
-                CardinalDirection::North => "north",
-                CardinalDirection::South => "south",
-                CardinalDirection::East => "east",
-                CardinalDirection::West => "west",
-            };
-
-            v.push((format_in!(&arena, "{buf}.direction").leak(), Value::String(direction)));
-
-            match &structure.data {
-                StructureData::Quarry { current_progress, output } => {
-                    v.push((format_in!(&arena, "{buf}.current_progress").leak(), Value::Num(*current_progress as f64)));
-                    if let Some(output) = *output {
-                        let path = format_in!(&arena, "{buf}.output").leak();
-                        Game::save_item(&arena, &mut v, path, output);
-                    }
-                },
-
-
-                StructureData::Inserter { state, filter } => {
-                    if let Some(filter) = filter {
-                        v.push((format_in!(&arena, "{buf}.filter").leak(), Value::String(filter.to_string())));
-                    }
-
-
-                    let state = match state {
-                        InserterState::Searching => "searching",
-                        InserterState::Placing(item) => {
-                            let path = format_in!(&arena, "{buf}.item").leak();
-                            Game::save_item(&arena, &mut v, &path, *item);
-
-                            "placing"
-                        },
-                    };
-
-                    v.push((format_in!(&arena, "{buf}.state").leak(), Value::String(state)));
-                },
-
-
-                StructureData::Chest { inventory } => {
-                    for (i, slot) in inventory.iter().enumerate() {
-
-                        let Some(item) = slot.item
-                        else { continue };
-
-                        let path = format_in!(&arena, "{buf}.inventory[{i}]").leak();
-                        Game::save_item(&arena, &mut v, path, item);
-                    }
-                },
-
-
-                StructureData::Belt { inventory } => {
-                    for (lane, items) in inventory.iter().enumerate() {
-
-                        for (i, item) in items.iter().enumerate() {
-                            let Some(item) = item
-                            else { continue };
-
-                            let path = format_in!(&arena, "{buf}.inventory[{}]", lane*2+i).leak();
-                            Game::save_item(&arena, &mut v, path, *item);
-                        }
-                    }
-                },
-            };
-        }
-
-
-        // work queeu
-        let mut cursor = self.structures.work_queue.entries.lower_bound(Bound::Unbounded);
-        let mut i = 0;
-        while let Some(((tick, id), ())) = cursor.next() {
-            i += 1;
-            let index = structure_to_index[&id.0];
-            let lifetime = tick.u32() - self.current_tick.u32();
-            v.push((format_in!(&arena, "work_queue[{i}]").leak(), Value::Vec2(Vec2::new(lifetime as f32, index as f32))));
-        }
-
-        // to be awoken
-        let mut i = 0;
-        for id in &self.structures.to_be_awoken {
-            i += 1;
-            let index = structure_to_index[&id.0];
-            v.push((format_in!(&arena, "to_be_awoken[{i}]").leak(), Value::Num(index as f64)));
-        }
-
-        fs::write("saves/world.sft", save_format::slice_to_string(&v)).unwrap();
+        self.command_registry.previous_commands.push(command);
     }
 
-
-    fn save_item<'a>(arena: &'a Arena,
-                     v: &mut Vec<(&'a str, Value<'a>)>,
-                     prefix: &'a str,
-                     item: Item) {
-
-        let output = format_in!(arena, "{} x{}", item.kind.to_string(), item.amount).leak();
-        v.push((prefix, Value::String(output)));
-    }
-
-
-    fn save_dropped_item<'a>(
-        arena: &'a Arena,
-        v: &mut Vec<(&'a str, Value<'a>)>,
-        prefix: &'a str,
-        item: &DroppedItem) {
-        let path = format_in!(arena, "{prefix}.item");
-        Game::save_item(arena, v, path.leak(), item.item);
-        v.push((format_in!(arena, "{prefix}.body.position").leak(), Value::Vec3(item.body.position)));
-        v.push((format_in!(arena, "{prefix}.body.velocity").leak(), Value::Vec3(item.body.velocity)));
-        v.push((format_in!(arena, "{prefix}.creation_tick").leak(), Value::Num(item.creation_tick.u32() as _)));
-    }
-
-
+    
     fn can_place_structure(&mut self, structure: StructureKind, pos: IVec3, direction: CardinalDirection) -> bool {
         let pos = pos - structure.origin(direction);
         let blocks = structure.blocks(direction);
@@ -1038,6 +682,8 @@ impl Game {
                         continue;
                     }
 
+                    if !self.player.can_give(item.item) { i += 1; continue };
+
                     let item = self.world.dropped_items.remove(i);
                     self.player.pulling.push(item);
 
@@ -1050,18 +696,28 @@ impl Game {
             // else, pull them towards me
             {
                 let mut i = 0;
-                while let Some(item) = self.player.pulling.get_mut(i) {
+                let mut pulling = core::mem::take(&mut self.player.pulling);
+                while let Some(item) = pulling.get_mut(i) {
                     let distance = item.body.position.distance_squared(self.player.body.position);
 
+                    let can_give = self.player.can_give(item.item);
+                    if !can_give {
+                        let item = pulling.remove(i);
+                        self.world.dropped_items.push(item);
+                        continue;
+                    }
+
                     if distance.abs() < 0.5 {
-                        let item = self.player.pulling.remove(i);
+                        let item = pulling.remove(i);
                         self.player.add_item(item.item);
                     } else {
                         item.body.position = item.body.position.move_towards(self.player.body.position, 10.0 * (1.0 + distance * 0.1) * delta_time);
                         i += 1;
                     }
-
                 }
+
+                self.player.pulling = pulling;
+
             }
 
         }
@@ -1116,7 +772,6 @@ fn process_events(renderer: &mut Renderer,
         match event.1 {
             glfw::WindowEvent::FramebufferSize(x, y) => {
                 unsafe { gl::Viewport(0, 0, x, y); }
-                renderer.resize();
             },
 
 
@@ -1124,7 +779,7 @@ fn process_events(renderer: &mut Renderer,
                 match action {
                     glfw::Action::Release => input.set_unpressed_button(button),
                     glfw::Action::Press => input.set_pressed_button(button),
-                    glfw::Action::Repeat => (),
+                    glfw::Action::Repeat => input.set_pressed_button(button),
                 }
             }
 
@@ -1138,8 +793,18 @@ fn process_events(renderer: &mut Renderer,
             }
 
 
+            glfw::WindowEvent::Scroll(x, y) => {
+                input.scroll(Vec2::new(x as f32, y as f32));
+            }
+
+
             glfw::WindowEvent::CursorPos(x, y) => {
                 input.move_cursor(Vec2::new(x as f32, y as f32));
+            }
+
+
+            glfw::WindowEvent::Char(ch) => {
+                input.new_char(ch);
             }
 
 
@@ -1201,26 +866,61 @@ impl ops::Sub for Tick {
 
 struct Player {
     body: PhysicsBody,
-    inventory: Vec<Item>,
+    inventory: [Option<Item>; 6],
     hand: usize,
     mining_progress: Option<u32>,
     interact_delay: f32,
     pulling: Vec<DroppedItem>,
+    speed: f32,
 }
 
 
 impl Player {
+    pub fn can_give(&self, item: Item) -> bool {
+        for slot in &self.inventory {
+            let Some(inv_item) = slot
+            else { continue };
+
+            if inv_item.kind != item.kind { continue }
+            return true;
+        }
+
+
+        for slot in &self.inventory {
+            if slot.is_some() { continue }
+
+            return true;
+        }
+
+        false
+    }
+
+
     pub fn add_item(&mut self, item: Item) {
-        if let Some(slot) = self.inventory.iter_mut().find(|x| x.kind == item.kind) {
-            slot.amount += item.amount;
-        } else {
-            self.inventory.push(item);
+        assert!(self.can_give(item));
+        for slot in &mut self.inventory {
+            let Some(inv_item) = slot
+            else { continue };
+
+            if inv_item.kind != item.kind { continue }
+
+            inv_item.amount += item.amount;
+            return;
+        }
+
+
+        for slot in &mut self.inventory {
+            if slot.is_some() { continue }
+
+            *slot = Some(item);
+            return;
         }
     }
 
 
     pub fn take_item(&mut self, index: usize, amount: u32) -> Option<Item> {
-        let slot = self.inventory.get_mut(index)?;
+        let slot = self.inventory.get_mut(index)?.as_mut()?;
+
 
         if slot.amount < amount {
             return None;
@@ -1230,7 +930,7 @@ impl Player {
         slot.amount -= amount;
         let slot = *slot;
         if slot.amount == 0 {
-            self.inventory.remove(index);
+            self.inventory[index] = None;
 
             if !self.inventory.is_empty() {
                 self.hand = self.hand % self.inventory.len();

@@ -1,10 +1,16 @@
-use std::{collections::HashMap, ffi::CString, fs, ptr::null_mut};
+pub mod textures;
 
-use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
-use glam::{IVec2, Mat4, Quat, Vec2, Vec3};
+use std::{collections::HashMap, ffi::CString, fs, mem::offset_of, ptr::null_mut};
+
+use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Request_Size, FT_Set_Pixel_Sizes, FT_Size_RequestRec, FT_LOAD_RENDER};
+use glam::{IVec2, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
+use textures::{TextureAtlas, TextureAtlasBuilder, TextureAtlasManager, TextureId};
 
-use crate::{items::{ItemKind, ItemMeshes}, shader::{Shader, ShaderProgram, ShaderType}, Tick, TICKS_PER_SECOND};
+use crate::{input::InputManager, items::{ItemKind, Assets}, shader::{Shader, ShaderProgram, ShaderType}, Tick, TICKS_PER_SECOND};
+
+
+const FONT_SIZE : u32 = 64;
 
 
 // the renderer is done,
@@ -17,24 +23,25 @@ pub struct Renderer {
     pub window: PWindow,
     pub window_events: GlfwReceiver<(f64, WindowEvent)>,
 
-    pub text_shader: ShaderProgram,
-
     pub quad_vao: u32,
     pub quad_vbo: u32,
-    pub quad_tex: u32,
+    pub white: TextureId,
 
     pub characters: HashMap<char, Character>,
     pub biggest_y_size: f32,
 
     pub is_wireframe: bool,
 
-    pub meshes: ItemMeshes,
+    pub atlases: TextureAtlasManager,
+
+    pub meshes: Assets,
+    pub z: f32,
 }
 
 
 #[derive(Debug)]
 pub struct Character {
-    pub texture_id: u32,
+    pub texture: TextureId,
     pub size: IVec2,
     pub bearing: IVec2,
     pub advance: u32,
@@ -74,6 +81,9 @@ impl Renderer {
         let vertex = Shader::new(&fs::read("text.vs").unwrap(), ShaderType::Vertex).unwrap();
         let text_shader = ShaderProgram::new(fragment, vertex).unwrap();
 
+        let fragment = Shader::new(&fs::read("ui.fs").unwrap(), ShaderType::Fragment).unwrap();
+        let vertex = Shader::new(&fs::read("ui.vs").unwrap(), ShaderType::Vertex).unwrap();
+        let ui_shader = ShaderProgram::new(fragment, vertex).unwrap();
 
         unsafe { gl::Enable(gl::DEPTH_TEST) };
         unsafe { gl::Enable(gl::BLEND) };
@@ -94,10 +104,11 @@ impl Renderer {
         }
 
 
-        unsafe { FT_Set_Pixel_Sizes(face, 0, 48) };
+        dbg!(unsafe { FT_Set_Pixel_Sizes(face, FONT_SIZE, FONT_SIZE) });
 
 
         let mut characters = HashMap::new();
+        let mut texture_atlas = TextureAtlasBuilder::new(GpuTextureFormat::Red);
 
         unsafe { gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1) };
 
@@ -108,29 +119,18 @@ impl Renderer {
             }
 
 
-            let mut texture = 0;
             unsafe {
-                gl::GenTextures(1, &mut texture);
-                gl::BindTexture(gl::TEXTURE_2D, texture);
-                gl::TexImage2D(
-                    gl::TEXTURE_2D,
-                    0,
-                    gl::RED as _,
+                let dims = IVec2::new(
                     (*(*face).glyph).bitmap.width as _,
                     (*(*face).glyph).bitmap.rows as _,
-                    0,
-                    gl::RED,
-                    gl::UNSIGNED_BYTE,
-                    (*(*face).glyph).bitmap.buffer as _,
                 );
 
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_BORDER as _);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_BORDER as _);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as _);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as _);
+                let slice = if dims != IVec2::ZERO { core::slice::from_raw_parts((*(*face).glyph).bitmap.buffer, (dims.x * dims.y) as usize) }
+                            else { &[] };
+                let texture = texture_atlas.register(dims, slice);
 
                 let character = Character {
-                    texture_id: texture,
+                    texture,
                     size: IVec2::new(
                         (*(*face).glyph).bitmap.width as _,
                         (*(*face).glyph).bitmap.rows as _,
@@ -149,6 +149,8 @@ impl Renderer {
             }
         }
 
+        let white = texture_atlas.register(IVec2::new(32, 32), &[255; 32*32]);
+        let font_ta = texture_atlas.build();
 
         unsafe {
             FT_Done_Face(face);
@@ -182,10 +184,23 @@ impl Renderer {
             gl::BindVertexArray(vao);
 
             gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
-            gl::BufferData(gl::ARRAY_BUFFER, size_of::<f32>() as isize * 6 * 4, null_mut(), gl::STATIC_DRAW);
 
             gl::EnableVertexAttribArray(0);
-            gl::VertexAttribPointer(0, 4, gl::FLOAT, gl::FALSE, 4 * size_of::<f32>() as i32, null_mut());
+            gl::VertexAttribPointer(0, 3,
+                                    gl::FLOAT, gl::FALSE, size_of::<UIVertex>() as i32,
+                                    offset_of!(UIVertex, position) as _);
+
+
+            gl::EnableVertexAttribArray(1);
+            gl::VertexAttribPointer(1, 2,
+                                    gl::FLOAT, gl::FALSE, size_of::<UIVertex>() as i32,
+                                    offset_of!(UIVertex, uv) as _);
+
+
+            gl::EnableVertexAttribArray(2);
+            gl::VertexAttribPointer(2, 4,
+                                    gl::FLOAT, gl::FALSE, size_of::<UIVertex>() as i32,
+                                    offset_of!(UIVertex, modulate) as _);
 
             gl::BindVertexArray(0);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
@@ -193,51 +208,34 @@ impl Renderer {
             (vao, vbo)
         };
 
+        let mut assets_ta = TextureAtlasBuilder::new(GpuTextureFormat::RGBA);
+        let assets = Assets::new(&mut assets_ta);
 
+        let mut atlases = TextureAtlasManager::new();
+        atlases.register(assets_ta.build(), ui_shader);
+        atlases.register(font_ta, text_shader);
 
-        let verticies : [[f32; 4]; 6] = [
-            [ 0.0, 1.0,   0.0, 1.0 ],
-            [ 0.0, 0.0,   0.0, 0.0 ],
-            [ 1.0, 0.0,   1.0, 0.0 ],
-
-            [ 0.0, 1.0,   0.0, 1.0 ],
-            [ 1.0, 0.0,   1.0, 0.0 ],
-            [ 1.0, 1.0,   1.0, 1.0 ],
-        ];
-
-        unsafe {
-            gl::BindBuffer(gl::ARRAY_BUFFER, quad_vbo);
-            gl::BufferData(gl::ARRAY_BUFFER, size_of_val(&verticies) as isize, verticies.as_ptr().cast(), gl::STATIC_DRAW);
-        }
-
-
-        let mut this = Self {
+        let this = Self {
             glfw,
             window,
             window_events,
-            text_shader,
             quad_vao,
             quad_vbo,
-            quad_tex: quad_texture,
+            white,
             characters,
             is_wireframe: false,
             biggest_y_size,
-            meshes: ItemMeshes::new(),
+            meshes: assets,
+            atlases,
+            z: 1.0,
         };
 
-        this.resize();
         this
     }
 
 
-    pub fn resize(&mut self) {
-        let projection = glam::Mat4::orthographic_rh(0.0, self.window.get_size().0 as f32, self.window.get_size().1 as f32, 0.0, 0.001, 100.0);
-        self.text_shader.use_program();
-        self.text_shader.set_matrix4(c"projection", projection);
-    }
-
-
-    pub fn begin(&self) {
+    pub fn begin(&mut self) {
+        self.z = 1.0;
         unsafe {
             gl::ClearColor(0.05, 0.05, 0.05, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
@@ -253,111 +251,125 @@ impl Renderer {
 
 
     pub fn end(&mut self) {
+        let projection = glam::Mat4::orthographic_rh(0.0, self.window.get_size().0 as f32, self.window.get_size().1 as f32, 0.0, 0.001, 100.0);
+        for (atlas, shader, buf) in self.atlases.atlases.values_mut() {
+            shader.use_program();
+            shader.set_matrix4(c"projection", projection);
+            unsafe {
+                // update buffer
+                gl::BindVertexArray(self.quad_vao);
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.quad_vbo);
+                gl::BufferData(gl::ARRAY_BUFFER, (size_of::<UIVertex>() * buf.len()) as _,
+                                buf.as_ptr() as _, gl::DYNAMIC_DRAW);
+
+                // render
+                gl::ActiveTexture(gl::TEXTURE0);
+                gl::BindTexture(gl::TEXTURE_2D, atlas.gpu_texture.id);
+
+                gl::DrawArrays(gl::TRIANGLES, 0, buf.len() as _);
+            }
+
+            buf.clear();
+        }
+
         self.window.swap_buffers();
         self.glfw.poll_events();
     }
 
 
-    pub fn draw_text(&self, text: &str, pos: Vec2, scale: f32, default_colour: Vec3) {
-        if self.is_wireframe {
-            //unsafe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL); }
-        }
+    pub fn draw_text(&mut self, text: &str, pos: Vec2, scale: f32, default_colour: Vec4) {
+        let mut x;
+        let mut y = pos.y;
+        let mut active_colour = default_colour;
 
-        self.text_shader.use_program();
-        unsafe {
-            gl::ActiveTexture(gl::TEXTURE0);
-            gl::BindVertexArray(self.quad_vao);
-
-            let mut x;
-            let mut y = pos.y;
-            let mut active_colour = default_colour;
-
-            self.text_shader.set_vec3(c"textColor", active_colour);
-
-            for l in text.lines() {
-                y += self.biggest_y_size * scale;
-                x = pos.x;
+        for l in text.lines() {
+            y += self.biggest_y_size * scale;
+            x = pos.x;
 
 
-                let mut iter = l.chars();
-                while let Some(c) = iter.next() {
-                    if c == '§' {
-                        let colour_code = iter.next().unwrap();
+            let mut iter = l.chars();
+            while let Some(c) = iter.next() {
+                if c == '§' {
+                    let colour_code = iter.next().unwrap();
 
-                        active_colour = match colour_code {
-                            '0' => Vec3::ZERO,
-                            '1' => Vec3::new(0.0, 0.0, 0.4),
-                            '2' => Vec3::new(0.0, 0.4, 0.0),
-                            '3' => Vec3::new(0.0, 0.4, 0.4),
-                            '4' => Vec3::new(0.4, 0.0, 0.0),
-                            '5' => Vec3::new(0.4, 0.0, 0.4),
-                            '6' => Vec3::new(1.0, 0.4, 0.0),
-                            '7' => Vec3::new(0.4, 0.4, 0.4),
-                            '8' => Vec3::new(0.1, 0.1, 0.1),
-                            '9' => Vec3::new(0.1, 0.1, 1.0),
-                            'a' => Vec3::new(0.1, 1.0, 0.1),
-                            'b' => Vec3::new(0.1, 1.0, 1.0),
-                            'c' => Vec3::new(1.0, 0.1, 0.1),
-                            'd' => Vec3::new(1.0, 0.1, 1.0),
-                            'e' => Vec3::new(1.0, 1.0, 0.7),
-                            'f' => Vec3::ONE,
-                            'r' => default_colour,
+                    active_colour = match colour_code {
+                        '0' => Vec4::ZERO,
+                        '1' => Vec4::new(0.0, 0.0, 0.4, 1.0),
+                        '2' => Vec4::new(0.0, 0.4, 0.0, 1.0),
+                        '3' => Vec4::new(0.0, 0.4, 0.4, 1.0),
+                        '4' => Vec4::new(0.4, 0.0, 0.0, 1.0),
+                        '5' => Vec4::new(0.4, 0.0, 0.4, 1.0),
+                        '6' => Vec4::new(1.0, 0.4, 0.0, 1.0),
+                        '7' => Vec4::new(0.4, 0.4, 0.4, 1.0),
+                        '8' => Vec4::new(0.1, 0.1, 0.1, 1.0),
+                        '9' => Vec4::new(0.1, 0.1, 1.0, 1.0),
+                        'a' => Vec4::new(0.1, 1.0, 0.1, 1.0),
+                        'b' => Vec4::new(0.1, 1.0, 1.0, 1.0),
+                        'c' => Vec4::new(1.0, 0.1, 0.1, 1.0),
+                        'd' => Vec4::new(1.0, 0.1, 1.0, 1.0),
+                        'e' => Vec4::new(1.0, 1.0, 0.7, 1.0),
+                        'f' => Vec4::ONE,
+                        'r' => default_colour,
 
-                            _ => {
-                                println!("[warn] invalid colour code '§{}', resetting to default colour", colour_code);
-                                default_colour
-                            },
-                        };
-
-                        self.text_shader.set_vec3(c"textColor", active_colour);
-
-                        continue
-                    }
-                    let ch = self.characters.get(&c).unwrap();
-
-                    let xpos = x + ch.bearing.x as f32 * scale;
-                    let ypos = y - (ch.size.y + ch.bearing.y) as f32 * scale * 0.5;
-
-                    let w = ch.size.x as f32 * scale;
-                    let h = ch.size.y as f32 * scale;
-
-                    let model = Mat4::from_scale_rotation_translation(Vec3::new(w, h, 1.0), Quat::IDENTITY, Vec3::new(xpos, ypos, 1.0));
-
-                    gl::BindTexture(gl::TEXTURE_2D, ch.texture_id);
-                    self.text_shader.set_matrix4(c"model", model);
-
-                    gl::BindBuffer(gl::ARRAY_BUFFER, self.quad_vbo);
-
-                    gl::DrawArrays(gl::TRIANGLES, 0, 6);
-
-                    x += (ch.advance >> 6) as f32 * scale;
+                        _ => {
+                            println!("[warn] invalid colour code '§{}', resetting to default colour", colour_code);
+                            default_colour
+                        },
+                    };
+                    continue
                 }
+                let ch = self.characters.get(&c).unwrap();
 
+                let xpos = x + ch.bearing.x as f32 * scale;
+                let ypos = y - (ch.size.y + ch.bearing.y) as f32 * scale * 0.5;
+                x += (ch.advance >> 6) as f32 * scale;
 
+                let w = ch.size.x as f32 * scale;
+                let h = ch.size.y as f32 * scale;
+
+                let dims = Vec2::new(w, h);
+                self.draw_tex_rect(Vec2::new(xpos, ypos), dims, ch.texture, active_colour);
             }
-        }
 
-        if self.is_wireframe {
-            unsafe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
+
         }
     }
 
 
-    pub fn draw_rect(&self, pos: Vec2, dims: Vec2, colour: Vec3) {
+    pub fn draw_rect(&mut self, pos: Vec2, dims: Vec2, colour: Vec4) {
+        self.draw_tex_rect(pos, dims, self.white, colour);
+    }
 
-        unsafe {
-            gl::Uniform3f(gl::GetUniformLocation(self.text_shader.id, c"textColor".as_ptr()), colour.x, colour.y, colour.z);
 
-            gl::ActiveTexture(gl::TEXTURE0);
-            gl::BindTexture(gl::TEXTURE_2D, self.quad_tex);
-            gl::BindVertexArray(self.quad_vao);
+    pub fn window_size(&self) -> Vec2 {
+        let (w, h) = self.window.get_size();
+        Vec2::new(w as _, h as _)
+    }
 
-            let model = Mat4::from_scale_rotation_translation(Vec3::new(dims.x, dims.y, 1.0), Quat::IDENTITY, Vec3::new(pos.x, pos.y, 1.0));
-            self.text_shader.set_matrix4(c"model", model);
 
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.quad_vbo);
-            gl::DrawArrays(gl::TRIANGLES, 0, 6);
-        }
+    pub fn draw_tex_rect(&mut self, pos: Vec2, dims: Vec2, tex: TextureId, modulate: Vec4) {
+        let uvs = self.atlases.get_uv(tex);
+        let buf = self.atlases.buf(tex);
+
+        let x0 = uvs.x;
+        let y0 = uvs.y;
+        let x1 = uvs.z;
+        let y1 = uvs.w;
+
+        buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, self.z));
+        buf.push(UIVertex::new(pos, Vec2::new(x0, y0), modulate, self.z));
+        buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, self.z));
+
+        buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, self.z));
+        buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, self.z));
+        buf.push(UIVertex::new(pos+dims, Vec2::new(x1, y1), modulate, self.z));
+
+        self.z += 0.001;
+    }
+
+
+    pub fn button(&mut self, input: &InputManager, pos: Vec2, dims: Vec2) {
+        self.draw_rect(pos, dims, Vec4::ONE);
     }
 
 
@@ -366,6 +378,12 @@ impl Renderer {
         shader.set_matrix4(c"model", model);
 
         self.meshes.get(item_kind).draw();
+    }
+
+
+    pub fn draw_item_icon(&mut self, item: ItemKind, pos: Vec2, dims: Vec2, modulate: Vec4) {
+        let texture = self.meshes.get_ico(item);
+        self.draw_tex_rect(pos, dims, texture, modulate);
     }
 
 
@@ -389,4 +407,93 @@ impl Renderer {
     }
 }
 
+
+#[repr(C)]
+struct UIVertex {
+    position: Vec3,
+    uv: Vec2,
+    modulate: Vec4,
+}
+
+
+impl UIVertex {
+    pub fn new(position: Vec2, uv: Vec2, modulate: Vec4, z: f32) -> Self {
+        Self {
+            position: Vec3::new(position.x, position.y, z),
+            uv,
+            modulate,
+        }
+    }
+}
+
+
+#[derive(Debug)]
+pub struct GpuTexture {
+    id: u32,
+    format: GpuTextureFormat,
+}
+
+
+impl GpuTexture {
+    pub fn new(format: GpuTextureFormat) -> Self {
+        let mut id = 0;
+        unsafe {
+            gl::GenTextures(1, &mut id);
+
+            gl::BindTexture(gl::TEXTURE_2D, id);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_BORDER as _);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_BORDER as _);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as _);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as _);
+
+
+        }
+
+        GpuTexture { id, format }
+    }
+
+
+    pub fn set_data(&self, dims: IVec2, data: &[u8]) {
+        self.set_data_raw(dims, data.as_ptr());
+    }
+
+
+    pub fn set_data_raw(&self, dims: IVec2, data: *const u8) {
+        unsafe {
+        let (format, typ) = match self.format {
+            GpuTextureFormat::Red => (gl::RED, gl::UNSIGNED_BYTE),
+            GpuTextureFormat::RGBA => (gl::RGBA, gl::UNSIGNED_BYTE),
+        };
+
+        gl::BindTexture(gl::TEXTURE_2D, self.id);
+        gl::TexImage2D(
+            gl::TEXTURE_2D,
+            0,
+            format as _,
+            dims.x,
+            dims.y,
+            0,
+            format,
+            typ,
+            data as _
+        );
+
+        }
+    }
+}
+
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GpuTextureFormat {
+    Red,
+    RGBA,
+}
+impl GpuTextureFormat {
+    fn pixel_size(&self) -> u32 {
+        match self {
+            GpuTextureFormat::Red => 1,
+            GpuTextureFormat::RGBA => 4,
+        }
+    }
+}
 
