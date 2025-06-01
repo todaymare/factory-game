@@ -1,0 +1,4 @@
+- [ ] sounds
+- [ ] custom textures
+- [ ] being able to rotate a block independent of the player's direction
+- [ ] a pop animation when placing blocks

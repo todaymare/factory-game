@@ -1,0 +1,59 @@
+- [x] chests
+- [ ] voxel world
+	- [x] mining and breaking
+		- [x] damaging blocks
+		- [x] blocks having hp
+	- [ ] world generation
+- [ ] machines:
+	- [ ] furnaces
+		- [ ] smelting logic
+		- [ ] coal fuel support
+	- [ ] quarry
+		- [x] world destruction
+		- [x] output management
+		- [ ] coal fuel support
+		- [ ] upgrade modules
+			- [ ] speed (damage per second) upgrade
+			- [ ] size (AxBxY) upgrade
+			- [ ] efficiency upgrade (decreases power usage)
+	- [ ] assemblers
+- [ ] logistics
+	- [x] inserters
+		- [x] moves item from input inventory to output inventory
+		- [x] filters
+	- [x] belts
+	- [ ] splitters
+		- [ ] split items 50/50
+		- [ ] filters
+- [ ] inventory
+	- [x] backend
+	- [ ] player inventory ui
+	- [x] hotbar
+- [ ] crafting
+	- [ ] assemblers
+	- [ ] manual crafting
+		- [ ] a shortcut to craft with missing items
+		- [ ] ui
+	- [ ] recipes
+- [x] save & load functionality
+	- [x] serialization of the voxel world
+	- [x] serialization of structures & inventory
+- [ ] qol
+	- [ ] a preview for all structures and blocks before placing them
+		- [ ] the preview
+		- [ ] turn green when placeable
+		- [ ] turn red when not placeable
+		- [ ] show the direction of the block
+- [ ] debug tools
+	- [ ] console
+		- [x] /give (item) (amount)
+		- [ ] /simulation
+			- [ ] stop - freezes the simulation
+			- [ ] start - restarts the simulation
+			- [ ] step (ticks) - runs the simulation for n ticks
+		- [ ] /world
+			- [ ] remesh (x) (y) (z) - remeshes a certain chunk
+			- [ ] place (structure) (x) (y) (z) (direction) - places a certain structure at a given coordinate
+		- [x] /speed (number) - sets the player movement speed
+        - [ ] console output
+	- [x] debug menu
