@@ -7,8 +7,11 @@ edition = "2024"
 glam = { version = "*", features = ["rand", "serde"] }
 gl = "*"
 glfw = "*"
-sti = { path = "./vendor/sti" }
+#sti = { path = "./vendor/sti" }
+sti = { git = "https://github.com/leddoo/sti" }
+save-format = { git = "https://github.com/rookieCookies/save-format" }
 freetype = "*"
 rand = "*"
 obj-rs = "*"
 
+image = "*"

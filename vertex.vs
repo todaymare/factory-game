@@ -12,6 +12,6 @@ uniform vec4 modulate;
 
 void main()
 {
-    Colour= aColour * modulate;
+    Colour = aColour * modulate;
     gl_Position = projection * view * model * vec4(aPos, 1.0);
 }

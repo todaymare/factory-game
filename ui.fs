@@ -10,10 +10,7 @@ void main()
 {
     vec2 uv = TexCoords.xy;
 
-    float alpha = texture(text, uv).r;
-    if (alpha < 0.1) { discard; }
-
     // Normal glyph render
-    vec4 sampled = vec4(1.0, 1.0, 1.0, alpha);
+    vec4 sampled = texture(text, uv);
     color = Modulate * sampled;
 }
