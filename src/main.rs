@@ -17,11 +17,13 @@ pub mod directions;
 pub mod ui;
 pub mod save_system;
 pub mod commands;
+pub mod crafting;
 
 use core::{f32, time};
 use std::{char, collections::{HashMap, HashSet}, env, f32::consts::{PI, TAU}, fmt::{Display, Write}, fs, io::BufReader, ops::{self, Bound}, simd::f32x4, time::Instant};
 
 use commands::{Command, CommandRegistry};
+use crafting::RECIPES;
 use directions::CardinalDirection;
 use save_format::Value;
 use ui::{UILayer, HOTBAR_KEYS};
@@ -518,6 +520,9 @@ fn main() {
             // render hotbar
             {
                 let window = renderer.window_size();
+                
+                renderer.draw_rect(window/2.0-Vec2::splat(4.0), Vec2::splat(8.0), Vec4::ONE);
+
                 let bottom_centre = Vec2::new(window.x * 0.5, window.y);
 
                 let slot_size = 64.0;
@@ -558,6 +563,8 @@ pub struct Game {
     command_registry: CommandRegistry,
     simulations_per_tick: usize,
     ui_scale: f32,
+    craft_queue: Vec<(Item, u32)>,
+    craft_progress: u32,
 }
 
 
@@ -602,6 +609,8 @@ impl Game {
             command_registry: CommandRegistry::new(),
             simulations_per_tick: 1,
             ui_scale: 1.0,
+            craft_queue: vec![],
+            craft_progress: 0,
         };
 
 
@@ -667,7 +676,6 @@ impl Game {
             Some(())
         });
 
-
         this
     }
 
@@ -702,6 +710,17 @@ impl Game {
         self.current_tick = self.current_tick.inc();
 
         let delta_time = DELTA_TICK;
+
+        if !self.craft_queue.is_empty() {
+            self.craft_progress += 1;
+            if self.craft_progress == self.craft_queue[0].1 {
+                let (result, _) = self.craft_queue.remove(0);
+                self.player.add_item(result);
+                self.craft_progress = 0;
+            }
+        } else {
+            self.craft_progress = 0;
+        }
 
         if let Some(progress) = &mut self.player.mining_progress {
             *progress += 1;
@@ -790,21 +809,6 @@ impl Game {
 
         self.structures.process(&mut self.world);
     }
-}
-
-
-fn right_pad(str: &str) -> String {
-    let Some(biggest_line) = str.lines().map(|x| x.len()).max()
-    else { return String::new() };
-
-    let mut string = String::with_capacity(biggest_line * str.lines().count());
-
-    for line in str.lines() {
-        if !string.is_empty() { string.push('\n'); }
-        let _ = write!(string, "{}{}", " ".repeat(biggest_line - line.len()), line);
-    }
-
-    string
 }
 
 
@@ -1009,20 +1013,14 @@ impl Player {
     pub fn take_item(&mut self, index: usize, amount: u32) -> Option<Item> {
         let slot = self.inventory.get_mut(index)?.as_mut()?;
 
-
         if slot.amount < amount {
             return None;
         }
-
 
         slot.amount -= amount;
         let slot = *slot;
         if slot.amount == 0 {
             self.inventory[index] = None;
-
-            if !self.inventory.is_empty() {
-                self.hand = self.hand % (PLAYER_HOTBAR_SIZE-1);
-            }
         }
 
 
