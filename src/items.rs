@@ -75,7 +75,7 @@ impl ItemKind {
 
 
     pub fn max_stack_size(self) -> u32 {
-        u32::MAX
+        100
     }
 
 

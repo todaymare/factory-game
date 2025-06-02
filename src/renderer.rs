@@ -36,6 +36,7 @@ pub struct Renderer {
 
     pub meshes: Assets,
     pub z: f32,
+    pub ui_scale: f32,
 }
 
 
@@ -228,6 +229,7 @@ impl Renderer {
             meshes: assets,
             atlases,
             z: 1.0,
+            ui_scale: 1.0,
         };
 
         this
@@ -237,6 +239,7 @@ impl Renderer {
     pub fn begin(&mut self) {
         self.z = 1.0;
         unsafe {
+            gl::Enable(gl::DEPTH_TEST);
             gl::ClearColor(0.05, 0.05, 0.05, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
@@ -251,7 +254,8 @@ impl Renderer {
 
 
     pub fn end(&mut self) {
-        let projection = glam::Mat4::orthographic_rh(0.0, self.window.get_size().0 as f32, self.window.get_size().1 as f32, 0.0, 0.001, 100.0);
+        unsafe { gl::Clear(gl::DEPTH_BUFFER_BIT) };
+        let projection = glam::Mat4::orthographic_rh(0.0, self.window.get_size().0 as f32 / self.ui_scale, self.window.get_size().1 as f32 / self.ui_scale, 0.0, 0.001, 100.0);
         for (atlas, shader, buf) in self.atlases.atlases.values_mut() {
             shader.use_program();
             shader.set_matrix4(c"projection", projection);
@@ -274,6 +278,11 @@ impl Renderer {
 
         self.window.swap_buffers();
         self.glfw.poll_events();
+    }
+
+
+    pub fn to_point(&self, pos: Vec2) -> Vec2 {
+        pos / self.ui_scale
     }
 
 
@@ -343,7 +352,7 @@ impl Renderer {
 
     pub fn window_size(&self) -> Vec2 {
         let (w, h) = self.window.get_size();
-        Vec2::new(w as _, h as _)
+        Vec2::new(w as _, h as _) / self.ui_scale
     }
 
 
@@ -364,7 +373,7 @@ impl Renderer {
         buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, self.z));
         buf.push(UIVertex::new(pos+dims, Vec2::new(x1, y1), modulate, self.z));
 
-        self.z += 0.001;
+        self.z += 0.0001;
     }
 
 
@@ -495,5 +504,12 @@ impl GpuTextureFormat {
             GpuTextureFormat::RGBA => 4,
         }
     }
+}
+
+pub fn point_in_rect(point: Vec2, rect_pos: Vec2, rect_size: Vec2) -> bool {
+    point.x >= rect_pos.x &&
+    point.y >= rect_pos.y &&
+    point.x <= rect_pos.x + rect_size.x &&
+    point.y <= rect_pos.y + rect_size.y
 }
 

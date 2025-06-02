@@ -12,5 +12,7 @@ void main()
 
     // Normal glyph render
     vec4 sampled = texture(text, uv);
+    if (sampled.a < 0.01)
+        discard;
     color = Modulate * sampled;
 }

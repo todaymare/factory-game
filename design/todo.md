@@ -25,9 +25,9 @@
 	- [ ] splitters
 		- [ ] split items 50/50
 		- [ ] filters
-- [ ] inventory
+- [x] inventory
 	- [x] backend
-	- [ ] player inventory ui
+	- [x] player inventory ui
 	- [x] hotbar
 - [ ] crafting
 	- [ ] assemblers

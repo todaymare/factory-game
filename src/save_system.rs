@@ -20,6 +20,8 @@ impl Game {
         game.current_tick = Tick(hm["current_tick"].as_u32());
         game.structures.current_tick = game.current_tick;
 
+        game.ui_scale = hm["ui_scale"].as_f32();
+
         game.camera.yaw = hm["camera.yaw"].as_f32();
         game.camera.pitch = hm["camera.pitch"].as_f32();
 
@@ -211,6 +213,7 @@ impl Game {
 
         let arena = Arena::new();
         v.push(("current_tick", Value::Num(self.current_tick.u32() as f64)));
+        v.push(("ui_scale", Value::Num(self.ui_scale as f64)));
 
         insert!(self.camera.yaw, Num);
         insert!(self.camera.pitch, Num);

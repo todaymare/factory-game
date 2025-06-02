@@ -3,11 +3,12 @@ use std::{fmt::Write, ops::Bound};
 use glam::{Vec2, Vec3, Vec4};
 use glfw::{get_key_name, get_key_scancode, CursorMode, Key};
 
-use crate::{commands::Command, input::InputManager, renderer::Renderer, structures::strct::{InserterState, StructureData}, voxel_world::split_world_pos, Game, PLAYER_REACH};
+use crate::{commands::Command, input::InputManager, items::{DroppedItem, Item}, renderer::{point_in_rect, Renderer}, structures::strct::{InserterState, StructureData}, voxel_world::split_world_pos, Game, PLAYER_REACH};
 
 pub enum UILayer {
     Inventory {
         just_opened: bool,
+        holding_item: Option<Item>,
     },
     Console {
         text: String,
@@ -19,6 +20,10 @@ pub enum UILayer {
     },
     Gameplay,
 }
+
+
+pub const HOTBAR_KEYS : &[Key] = &[Key::Num1, Key::Num2, Key::Num3,
+                               Key::Num4, Key::Num5, Key::Num6];
 
 
 impl UILayer {
@@ -202,13 +207,112 @@ impl UILayer {
             }
 
 
-            UILayer::Inventory { just_opened } => {
+            UILayer::Inventory { just_opened, holding_item } => {
                 let window = renderer.window_size();
-                renderer.draw_rect(Vec2::ZERO, window, Vec4::new(0.1, 0.1, 0.1, 0.5));
                 if input.is_key_just_pressed(Key::E) && !*just_opened {
+                    if let Some(holding_item) = holding_item {
+                        game.world.dropped_items.push(DroppedItem::new(*holding_item, game.player.body.position));
+                    }
+
                     *self = UILayer::Gameplay;
+                    return;
                 } else {
                     *just_opened = false;
+                }
+
+
+                renderer.draw_rect(Vec2::ZERO, window, Vec4::new(0.1, 0.1, 0.1, 0.5));
+                let window = renderer.window_size();
+
+                let rows = 6;
+                let cols = 5;
+
+                let slot_size = 64.0;
+                let padding = 16.0;
+
+                let size = Vec2::new(cols as f32, rows as f32) * (slot_size + padding) as f32;
+                let corner = window * 0.5 - size * 0.5;
+                let mut base = corner + padding * 0.5;
+
+                renderer.draw_rect(corner, size, Vec4::ONE);
+
+                let point = renderer.to_point(input.mouse_position());
+                for col in 0..cols {
+                    let mut pos = base;
+                    for row in 0..rows {
+                        let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(slot_size));
+
+                        let colour = if is_mouse_intersecting { Vec4::new(1.0, 0.0, 0.0, 1.0) }
+                                    else { (Vec4::ONE * 0.2).with_w(1.0) }; 
+                        let mut slot = &mut game.player.inventory[col*rows+row];
+
+                        if is_mouse_intersecting {
+                            if input.is_button_just_pressed(glfw::MouseButton::Button1) {
+                                if let Some(inv_item) = slot && let Some(item) = holding_item && inv_item.kind == item.kind {
+                                    let addition = item.amount.min(inv_item.kind.max_stack_size().max(inv_item.amount) - inv_item.amount);
+
+                                    inv_item.amount += addition;
+
+                                    item.amount -= addition;
+                                    if item.amount == 0 {
+                                        *holding_item = None;
+                                    }
+                                } else {
+                                    let item = *slot;
+                                    *slot = *holding_item;
+                                    *holding_item = item;
+                                }
+                            }
+                            else if input.is_button_just_pressed(glfw::MouseButton::Button2) {
+                                if let Some(item) = slot && holding_item.is_none() {
+                                    let amount = item.amount;
+                                    item.amount -= amount / 2;
+
+                                    let mut new_item = *item;
+                                    new_item.amount = amount / 2;
+                                    if new_item.amount != 0 {
+                                        *holding_item = Some(new_item);
+                                    } else {
+                                        let item = *slot;
+                                        *slot = *holding_item;
+                                        *holding_item = item;
+                                    }
+                                } else {
+                                    let item = *slot;
+                                    *slot = *holding_item;
+                                    *holding_item = item;
+                                }
+                            }
+                            else {
+                                for (i, &key) in HOTBAR_KEYS.iter().enumerate() {
+                                    if !input.is_key_just_pressed(key) { continue }
+
+                                    let slot_item = *slot;
+
+                                    let item = game.player.inventory[i];
+                                    game.player.inventory[i] = slot_item;
+                                    slot = &mut game.player.inventory[col*rows+row];
+                                    *slot = item;
+                                }
+                            }
+                        }
+
+                        renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
+                        if let Some(item) = *slot {
+                            renderer.draw_item_icon(item.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
+                            renderer.draw_text(format!("{}", item.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
+                        }
+
+                        pos += Vec2::new(0.0, slot_size+padding)
+                    }
+
+                    base += Vec2::new(slot_size+padding, 0.0)
+                }
+
+
+                if let Some(item) = *holding_item {
+                    renderer.draw_item_icon(item.kind, point, Vec2::splat(slot_size), Vec4::ONE);
+                    renderer.draw_text(format!("{}", item.amount).as_str(), point+slot_size*0.05, 0.5, Vec4::ONE);
                 }
 
             }

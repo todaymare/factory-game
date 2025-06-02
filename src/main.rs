@@ -24,7 +24,7 @@ use std::{char, collections::{HashMap, HashSet}, env, f32::consts::{PI, TAU}, fm
 use commands::{Command, CommandRegistry};
 use directions::CardinalDirection;
 use save_format::Value;
-use ui::UILayer;
+use ui::{UILayer, HOTBAR_KEYS};
 use voxel_world::{chunk::{Chunk, MeshState, CHUNK_SIZE}, split_world_pos, voxel::{Voxel, VoxelKind}, VoxelWorld};
 use glam::{IVec3, Mat4, Vec2, Vec3, Vec4};
 use glfw::{GlfwReceiver, Key, MouseButton, WindowEvent};
@@ -225,14 +225,14 @@ fn main() {
                 if matches!(ui_layer, UILayer::Inventory { .. }) {
                     ui_layer = UILayer::Gameplay
                 } else {
-                    ui_layer = UILayer::Inventory { just_opened: true }
+                    ui_layer = UILayer::Inventory { just_opened: true, holding_item: None }
                 }
             }
 
 
             if input.is_key_just_pressed(Key::G) {
                 let belts = game.structures.belts(&game.world);
-                fs::write("sscs.dot", belts.scc_graph().as_bytes()).unwrap();
+                fs::write("sccs.dot", belts.scc_graph()).unwrap();
             }
 
 
@@ -273,12 +273,9 @@ fn main() {
 
 
 
-            if input.is_key_just_pressed(Key::Num1) { game.player.hand = 0 }
-            if input.is_key_just_pressed(Key::Num2) { game.player.hand = 1 }
-            if input.is_key_just_pressed(Key::Num3) { game.player.hand = 2 }
-            if input.is_key_just_pressed(Key::Num4) { game.player.hand = 3 }
-            if input.is_key_just_pressed(Key::Num5) { game.player.hand = 4 }
-            if input.is_key_just_pressed(Key::Num6) { game.player.hand = 5 }
+            for (i, &key) in HOTBAR_KEYS.iter().enumerate() {
+                if input.is_key_just_pressed(key) { game.player.hand = i }
+            }
         }
 
 
@@ -384,7 +381,9 @@ fn main() {
         // simulate!
         {
             while time_since_last_simulation_step > DELTA_TICK {
-                game.simulation_tick();
+                for _ in 0..game.simulations_per_tick {
+                    game.simulation_tick();
+                }
                 time_since_last_simulation_step -= DELTA_TICK;
             }
 
@@ -396,6 +395,7 @@ fn main() {
 
         // render
         {
+            renderer.ui_scale = game.ui_scale;
             renderer.begin();
 
             // render the world
@@ -500,14 +500,15 @@ fn main() {
                 let bottom_centre = Vec2::new(window.x * 0.5, window.y);
 
                 let slot_size = 64.0;
-                let slot_amount = game.player.inventory.len();
+                let slot_amount = 6;
                 let padding = 16.0;
 
                 let mut base = bottom_centre - Vec2::new((padding + slot_size) * slot_amount as f32 * 0.5, slot_size + padding);
 
-                for (i, slot) in game.player.inventory.iter().enumerate() {
+                for (i, slot) in game.player.inventory.iter().enumerate().take(6) {
                     let colour = if i == game.player.hand { Vec4::new(1.0, 0.0, 0.0, 1.0) }
                                  else { (Vec4::ONE * 0.2).with_w(1.0) };
+
                     renderer.draw_rect(base, Vec2::splat(slot_size), colour);
                     if let Some(item) = slot {
                         renderer.draw_item_icon(item.kind, base+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
@@ -534,6 +535,8 @@ pub struct Game {
     current_tick: Tick,
     structures: Structures,
     command_registry: CommandRegistry,
+    simulations_per_tick: usize,
+    ui_scale: f32,
 }
 
 
@@ -565,7 +568,7 @@ impl Game {
                     aabb_dims: Vec3::new(0.8, 1.8, 0.8),
                 },
 
-                inventory: [None; 6],
+                inventory: [None; 30],
                 hand: 0,
                 mining_progress: None,
                 interact_delay: 0.0,
@@ -575,6 +578,8 @@ impl Game {
 
             current_tick: Tick::initial(),
             command_registry: CommandRegistry::new(),
+            simulations_per_tick: 1,
+            ui_scale: 1.0,
         };
 
 
@@ -584,17 +589,27 @@ impl Game {
             Some(())
         });
 
+
         this.command_registry.register("give", |game, cmd| {
             let item = cmd.arg(0)?.as_str();
             let kind = *ItemKind::ALL.iter().find(|x| x.to_string() == item)?;
 
             let amount = cmd.arg(1)?.as_u32()?;
 
-            let item = Item { amount, kind };
+            let stacks = amount / kind.max_stack_size();
+            let rem = amount % kind.max_stack_size();
+            
+            for _ in 0..stacks {
+                let item = Item { amount: kind.max_stack_size(), kind };
+                game.world.dropped_items.push(DroppedItem::new(item, game.player.body.position));
+            }
+
+            let item = Item { amount: rem, kind };
             game.world.dropped_items.push(DroppedItem::new(item, game.player.body.position));
 
             Some(())
         });
+
 
         this.command_registry.register("tp", |game, cmd| {
             let x = cmd.arg(0)?.as_f32()?;
@@ -609,6 +624,24 @@ impl Game {
         this.command_registry.register("clear", |game, _| {
             game.player.inventory.iter_mut().for_each(|x| *x = None);
 
+            Some(())
+        });
+
+        this.command_registry.register("ups", |game, cmd| {
+            game.simulations_per_tick = cmd.arg(0)?.as_u32()? as usize;
+            Some(())
+        });
+
+        this.command_registry.register("ui_scale", |game, cmd| {
+            game.ui_scale = cmd.arg(0)?.as_f32()?;
+            Some(())
+        });
+
+        this.command_registry.register("remesh", |game, _| {
+            game.world.chunks.iter_mut().for_each(|x| {
+                x.1.mesh = Mesh::new(vec![], vec![]);
+                x.1.mesh_state = MeshState::ShouldUpdate;
+            });
             Some(())
         });
 
@@ -866,7 +899,7 @@ impl ops::Sub for Tick {
 
 struct Player {
     body: PhysicsBody,
-    inventory: [Option<Item>; 6],
+    inventory: [Option<Item>; 30],
     hand: usize,
     mining_progress: Option<u32>,
     interact_delay: f32,
@@ -876,27 +909,40 @@ struct Player {
 
 
 impl Player {
-    pub fn can_give(&self, item: Item) -> bool {
+    pub fn can_give(&self, mut item: Item) -> bool {
         for slot in &self.inventory {
             let Some(inv_item) = slot
             else { continue };
 
             if inv_item.kind != item.kind { continue }
-            return true;
+
+            let addition = item.amount.min(inv_item.kind.max_stack_size().max(inv_item.amount) - inv_item.amount);
+            item.amount -= addition;
+            if item.amount == 0 {
+                return true;
+            }
         }
 
 
         for slot in &self.inventory {
             if slot.is_some() { continue }
+            if item.amount >= item.kind.max_stack_size() {
+                item.amount -= item.kind.max_stack_size();
+            } else {
+                item.amount = 0;
+            }
 
-            return true;
+            if item.amount == 0 {
+                return true;
+            }
+
         }
 
         false
     }
 
 
-    pub fn add_item(&mut self, item: Item) {
+    pub fn add_item(&mut self, mut item: Item) {
         assert!(self.can_give(item));
         for slot in &mut self.inventory {
             let Some(inv_item) = slot
@@ -904,16 +950,29 @@ impl Player {
 
             if inv_item.kind != item.kind { continue }
 
-            inv_item.amount += item.amount;
-            return;
+            let addition = item.amount.min(inv_item.kind.max_stack_size() - inv_item.amount);
+            inv_item.amount += addition;
+            item.amount -= addition;
+            if item.amount == 0 {
+                return;
+            }
         }
 
 
         for slot in &mut self.inventory {
             if slot.is_some() { continue }
 
-            *slot = Some(item);
-            return;
+            let addition = item.amount.min(item.kind.max_stack_size());
+
+            let mut slot_item = item;
+            slot_item.amount = addition;
+            *slot = Some(slot_item);
+
+            item.amount -= addition;
+
+            if item.amount == 0 {
+                return;
+            }
         }
     }
 
