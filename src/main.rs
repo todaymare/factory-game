@@ -46,6 +46,8 @@ const PLAYER_REACH : f32 = 5.0;
 const PLAYER_SPEED : f32 = 5.0;
 const PLAYER_PULL_DISTANCE : f32 = 3.5;
 const PLAYER_INTERACT_DELAY : f32 = 0.2;
+const PLAYER_HOTBAR_SIZE : usize = 6;
+const PLAYER_ROW_SIZE : usize = 5;
 
 const RENDER_DISTANCE : i32 = 4;
 
@@ -120,11 +122,17 @@ fn main() {
 
 
             let dt = input.scroll_delta();
-            if dt.y > 0.0 { game.player.hand += 1 }
-            if dt.y < 0.0 && game.player.hand == 0 { game.player.hand = game.player.inventory.len() - 1 }
-            else if dt.y < 0.0 { game.player.hand -= 1 }
-
-            game.player.hand %= game.player.inventory.len();
+            if input.is_key_pressed(Key::LeftControl) {
+                if dt.y > 0.0 && game.player.hotbar == PLAYER_ROW_SIZE-1 { game.player.hotbar = 0 }
+                else if dt.y > 0.0 { game.player.hotbar += 1 }
+                if dt.y < 0.0 && game.player.hotbar == 0 { game.player.hotbar = PLAYER_ROW_SIZE-1 }
+                else if dt.y < 0.0 { game.player.hotbar -= 1 }
+            } else {
+                if dt.y > 0.0 && game.player.hand == PLAYER_HOTBAR_SIZE-1 { game.player.hand = 0 }
+                else if dt.y > 0.0 { game.player.hand += 1 }
+                if dt.y < 0.0 && game.player.hand == 0 { game.player.hand = PLAYER_HOTBAR_SIZE-1 }
+                else if dt.y < 0.0 { game.player.hand -= 1 }
+            }
         }
 
 
@@ -198,7 +206,7 @@ fn main() {
                         let structure = game.world.structure_blocks.get(&pos).unwrap();
                         let structure = game.structures.get_mut(*structure);
 
-                        let item = game.player.take_item(game.player.hand, 1);
+                        let item = game.player.take_item(game.player.hand_index(), 1);
 
                         if let StructureData::Inserter { filter, .. } = &mut structure.data {
                             *filter = item.map(|x| x.kind);
@@ -273,8 +281,21 @@ fn main() {
 
 
 
-            for (i, &key) in HOTBAR_KEYS.iter().enumerate() {
-                if input.is_key_just_pressed(key) { game.player.hand = i }
+            if input.is_key_pressed(Key::LeftControl) {
+                let mut offset = None;
+                if input.is_key_just_pressed(Key::Num1) { offset = Some(0) }
+                if input.is_key_just_pressed(Key::Num2) { offset = Some(1) }
+                if input.is_key_just_pressed(Key::Num3) { offset = Some(2) }
+                if input.is_key_just_pressed(Key::Num4) { offset = Some(3) }
+                if input.is_key_just_pressed(Key::Num5) { offset = Some(4) }
+
+                if let Some(offset) = offset {
+                    game.player.hotbar = offset;
+                }
+            } else {
+                for (i, &key) in HOTBAR_KEYS.iter().enumerate() {
+                    if input.is_key_just_pressed(key) { game.player.hand = i }
+                }
             }
         }
 
@@ -353,11 +374,11 @@ fn main() {
                 let voxel = game.world.get_voxel(place_position);
                 if !voxel.kind.is_air() { break 'input_block }
 
-                let Some(Some(item_in_hand)) = game.player.inventory.get(game.player.hand)
+                let Some(Some(item_in_hand)) = game.player.inventory.get(game.player.hand_index())
                 else { break 'input_block };
 
                 if let Some(voxel) = item_in_hand.kind.as_voxel() {
-                    let _ = game.player.take_item(game.player.hand, 1).unwrap();
+                    let _ = game.player.take_item(game.player.hand_index(), 1).unwrap();
 
                     game.world.get_voxel_mut(place_position).kind = voxel;
 
@@ -368,7 +389,7 @@ fn main() {
                     }
 
                     let structure = Structure::from_kind(structure_kind, pos+normal, game.camera.compass_direction());
-                    let _ = game.player.take_item(game.player.hand, 1).unwrap();
+                    let _ = game.player.take_item(game.player.hand_index(), 1).unwrap();
                     game.structures.add_structure(&mut game.world, structure);
                 }
 
@@ -505,8 +526,8 @@ fn main() {
 
                 let mut base = bottom_centre - Vec2::new((padding + slot_size) * slot_amount as f32 * 0.5, slot_size + padding);
 
-                for (i, slot) in game.player.inventory.iter().enumerate().take(6) {
-                    let colour = if i == game.player.hand { Vec4::new(1.0, 0.0, 0.0, 1.0) }
+                for (i, slot) in game.player.inventory.iter().enumerate().skip(game.player.hotbar*6).take(6) {
+                    let colour = if i == game.player.hand_index() { Vec4::new(1.0, 0.0, 0.0, 1.0) }
                                  else { (Vec4::ONE * 0.2).with_w(1.0) };
 
                     renderer.draw_rect(base, Vec2::splat(slot_size), colour);
@@ -570,6 +591,7 @@ impl Game {
 
                 inventory: [None; 30],
                 hand: 0,
+                hotbar: 0,
                 mining_progress: None,
                 interact_delay: 0.0,
                 pulling: Vec::new(),
@@ -901,6 +923,7 @@ struct Player {
     body: PhysicsBody,
     inventory: [Option<Item>; 30],
     hand: usize,
+    hotbar: usize,
     mining_progress: Option<u32>,
     interact_delay: f32,
     pulling: Vec<DroppedItem>,
@@ -944,7 +967,8 @@ impl Player {
 
     pub fn add_item(&mut self, mut item: Item) {
         assert!(self.can_give(item));
-        for slot in &mut self.inventory {
+        let (before, now) = self.inventory.split_at_mut(self.hotbar * 6);
+        for slot in now.iter_mut().chain(before.iter_mut()) {
             let Some(inv_item) = slot
             else { continue };
 
@@ -959,7 +983,7 @@ impl Player {
         }
 
 
-        for slot in &mut self.inventory {
+        for slot in now.iter_mut().chain(before.iter_mut()) {
             if slot.is_some() { continue }
 
             let addition = item.amount.min(item.kind.max_stack_size());
@@ -974,6 +998,11 @@ impl Player {
                 return;
             }
         }
+    }
+
+
+    pub fn hand_index(&self) -> usize {
+        self.hotbar * 6 + self.hand
     }
 
 
@@ -992,7 +1021,7 @@ impl Player {
             self.inventory[index] = None;
 
             if !self.inventory.is_empty() {
-                self.hand = self.hand % self.inventory.len();
+                self.hand = self.hand % (PLAYER_HOTBAR_SIZE-1);
             }
         }
 
