@@ -1,4 +1,4 @@
-use glam::{IVec3, Vec3, Vec4};
+use glam::{Vec3, Vec4};
 
 use crate::directions::Direction;
 

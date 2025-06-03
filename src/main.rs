@@ -19,25 +19,21 @@ pub mod save_system;
 pub mod commands;
 pub mod crafting;
 
-use core::{f32, time};
-use std::{char, collections::{HashMap, HashSet}, env, f32::consts::{PI, TAU}, fmt::{Display, Write}, fs, io::BufReader, ops::{self, Bound}, simd::f32x4, time::Instant};
+use std::{f32::consts::{PI, TAU}, fs, ops::{self}, time::Instant};
 
 use commands::{Command, CommandRegistry};
-use crafting::RECIPES;
 use directions::CardinalDirection;
-use save_format::Value;
 use ui::{UILayer, HOTBAR_KEYS};
-use voxel_world::{chunk::{Chunk, MeshState, CHUNK_SIZE}, split_world_pos, voxel::{Voxel, VoxelKind}, VoxelWorld};
+use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, split_world_pos, VoxelWorld};
 use glam::{IVec3, Mat4, Vec2, Vec3, Vec4};
-use glfw::{GlfwReceiver, Key, MouseButton, WindowEvent};
+use glfw::{Key, MouseButton};
 use input::InputManager;
-use items::{DroppedItem, Item, ItemKind, Assets};
-use mesh::{Mesh, Vertex};
-use rand::{random, seq::IndexedRandom};
+use items::{DroppedItem, Item, ItemKind};
+use mesh::Mesh;
 use renderer::Renderer;
 use shader::{Shader, ShaderProgram};
-use sti::{arena::Arena, define_key, format_in, key::Key as _, vec::KVec};
-use structures::{belts::SccId, strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind}, Slot, StructureId, Structures};
+use sti::define_key;
+use structures::{strct::{Structure, StructureData, StructureKind}, Structures};
 
 define_key!(EntityId(u32));
 
@@ -50,6 +46,7 @@ const PLAYER_PULL_DISTANCE : f32 = 3.5;
 const PLAYER_INTERACT_DELAY : f32 = 0.2;
 const PLAYER_HOTBAR_SIZE : usize = 6;
 const PLAYER_ROW_SIZE : usize = 5;
+const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
 const RENDER_DISTANCE : i32 = 4;
 

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use glam::{IVec2, Vec2};
+use glam::Vec2;
 use glfw::{Key, MouseButton};
 
 #[derive(Debug, Default)]

@@ -1,10 +1,9 @@
-use std::{fmt::Write, ops::Bound};
+use std::{ops::Bound, fmt::Write};
 
-use glam::{Vec2, Vec3, Vec4};
-use glfw::{get_key_name, get_key_scancode, CursorMode, Key};
-use rand::seq::IndexedRandom;
+use glam::{Vec2, Vec4};
+use glfw::{CursorMode, Key};
 
-use crate::{commands::Command, crafting::{Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::strct::{InserterState, StructureData}, voxel_world::split_world_pos, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE};
+use crate::{commands::Command, crafting::{Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::strct::{InserterState, StructureData}, voxel_world::split_world_pos, Game, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE};
 
 pub enum UILayer {
     Inventory {
@@ -453,7 +452,7 @@ impl UILayer {
 
 
 
-fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, holding_item: &mut Option<Item>, corner: Vec2) {
+fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, _: &mut Option<Item>, corner: Vec2) {
     let rows = PLAYER_HOTBAR_SIZE;
     let cols = PLAYER_ROW_SIZE;
 
@@ -473,35 +472,36 @@ fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, 
             let Some(&recipe) = RECIPES.get(col*rows+row)
             else { return };
 
-            let can_craft = can_craft(recipe, &game.player);
+            let (can_craft, mut rc) = RecipeCraft::try_craft(game.player.inventory, recipe);
             let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(slot_size));
 
             if is_mouse_intersecting && can_craft && input.is_button_just_pressed(glfw::MouseButton::Button1) {
-                for required_item in recipe.requirements.iter() {
-                    let mut needed_amount = required_item.amount;
-                    for slot in &mut game.player.inventory {
-                        let Some(item) = slot
-                        else { continue };
+                game.player.inventory = rc.inv;
+                assert!(can_craft);
 
-                        if required_item.kind != item.kind { continue }
+                for step in rc.craft_queue.iter().rev() {
+                    let CraftStepResult::Craftable(recipe) = step.result
+                    else { continue };
 
-                        let take = item.amount.min(needed_amount).min(item.kind.max_stack_size());
-                        item.amount -= take;
-                        if item.amount == 0 {
-                            *slot = None;
+                    let mut item = recipe.result;
+                    let item_in_buffer = rc.buffer.iter_mut().find(|x| x.kind == step.item);
 
-                        }
-
-                        needed_amount -= take;
-                        if needed_amount == 0 { break }
+                    if let Some(item_in_buffer) = item_in_buffer && item_in_buffer.amount > 0 {
+                        let diff = item_in_buffer.amount.min(item.amount);
+                        let overflow = (item.amount - diff).min(item_in_buffer.amount);
+                        item_in_buffer.amount -= overflow;
+                        item.amount = overflow;
+                    } else if step.depth != 0 {
+                        item.amount = 0;
                     }
-                }
 
-                game.craft_queue.push((recipe.result, recipe.time));
+                    game.craft_queue.push((item, recipe.time));
+                }
             }
 
             let mut colour = if can_craft { Vec4::new(0.2, 0.6, 0.2, 1.0) }
-                         else { Vec4::new(0.6, 0.2, 0.2, 1.0) }; 
+                             else { Vec4::new(0.6, 0.2, 0.2, 1.0) }; 
+
             if is_mouse_intersecting {
                 colour += Vec4::splat(0.4);
             }
@@ -515,15 +515,22 @@ fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, 
                 let size = Vec2::new(recipe.requirements.len() as f32, 1.0) * (padding + slot_size);
                 renderer.draw_rect(point, size, Vec4::new(0.2, 0.2, 0.2, 1.0));
                 let mut base = point + padding*0.5;
-                for item in recipe.requirements {
-                    let available_items = items_in_array(&game.player.inventory, item.kind);
-                    let can_craft = available_items >= item.amount;
-                    let colour = if can_craft { Vec4::new(0.2, 0.6, 0.2, 1.0) }
-                                 else { Vec4::new(0.6, 0.2, 0.2, 1.0) }; 
+                for item in recipe.requirements.iter() {
+                    let craft_step = rc.craft_queue.iter()
+                        .find(|x| x.item == item.kind && x.depth == 1)
+                        .map(|x| x.result)
+                        .unwrap();
+
+                    let colour = match craft_step {
+                        CraftStepResult::DirectlyAvailable => Vec4::new(0.2, 0.6, 0.2, 1.0),
+                        CraftStepResult::Craftable(_) => Vec4::new(0.6, 0.6, 0.2, 1.0),
+                        CraftStepResult::NotCraftable => Vec4::new(0.6, 0.2, 0.2, 1.0),
+                        CraftStepResult::NotAvailableRawMaterial => Vec4::new(0.6, 0.2, 0.2, 1.0),
+                    };
 
                     renderer.draw_rect(base, Vec2::splat(slot_size), colour);
                     renderer.draw_item_icon(item.kind, base+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
-                    renderer.draw_text(format!("{}/{}", available_items, item.amount).as_str(), base+slot_size*0.05, 0.4, Vec4::ONE);
+                    renderer.draw_text(format!("{}", item.amount).as_str(), base+slot_size*0.05, 0.4, Vec4::ONE);
                     base += Vec2::new(slot_size+padding, 0.0);
                 }
             }
@@ -534,29 +541,177 @@ fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, 
 }
 
 
-fn can_craft(recipe: Recipe, player: &Player) -> bool {
-    for required_item in recipe.requirements.iter() {
-        let available_amount = items_in_array(&player.inventory, required_item.kind);
-        if available_amount >= required_item.amount { continue }
-        return false;
-    }
-
-    true
+#[derive(Clone, Debug)]
+struct RecipeCraft {
+    inv: [Option<Item>; PLAYER_INVENTORY_SIZE],
+    buffer: Vec<Item>,
+    craft_queue: Vec<CraftStep>
 }
 
 
-fn items_in_array(arr: &[Option<Item>], kind: ItemKind) -> u32 {
-    let mut available_amount = 0;
-    for slot in arr {
-        let Some(slot) = slot
-        else { continue };
+#[derive(Clone, Debug)]
+struct CraftStep {
+    item: ItemKind,
+    depth: u32,
+    result: CraftStepResult,
+}
 
-        if kind != slot.kind { continue }
 
-        available_amount += slot.amount;
+#[derive(Clone, Copy, Debug)]
+enum CraftStepResult {
+    DirectlyAvailable,
+    Craftable(Recipe),
+    NotCraftable,
+    NotAvailableRawMaterial,
+}
+
+
+impl RecipeCraft {
+    pub fn try_craft(inv: [Option<Item>; PLAYER_INVENTORY_SIZE], recipe: Recipe) -> (bool, RecipeCraft) {
+        println!("try craft");
+        let mut this = RecipeCraft {
+            buffer: vec![],
+            craft_queue: vec![],
+            inv,
+        };
+
+        let result = this.perform_craft(0, recipe, 1);
+        dbg!(&this);
+        (result, this)
     }
 
-    available_amount
+
+    fn perform_craft(&mut self, depth: u32, recipe: Recipe, amount: u32) -> bool {
+        let index = self.craft_queue.len();
+        let step = CraftStep { item: recipe.result.kind, depth,
+                                result: CraftStepResult::NotCraftable };
+
+        self.craft_queue.push(step);
+
+        let mut return_value = true;
+        for required_item in recipe.requirements.iter() {
+            let needed = required_item.amount * amount;
+
+            let directly_available = self.directly_available(required_item.kind);
+            if directly_available >= needed {
+                self.remove_item(required_item.kind, needed);
+
+                let step = CraftStep {
+                    item: required_item.kind, depth: depth + 1,
+                    result: CraftStepResult::DirectlyAvailable
+                };
+
+                self.craft_queue.push(step);
+                continue;
+            }
+
+            let mut this = self.clone();
+            this.remove_item(required_item.kind, directly_available);
+
+            let needed = needed - directly_available;
+            let Some(recipe) = RECIPES.iter().find(|f| f.result.kind == required_item.kind)
+            else {
+                let step = CraftStep {
+                    item: required_item.kind, depth: depth + 1,
+                    result: CraftStepResult::NotAvailableRawMaterial
+                };
+
+                self.craft_queue.push(step);
+                return_value = false;
+                continue;
+            };
+
+            let recipe_amount = needed.div_ceil(recipe.result.amount);
+            if !this.perform_craft(depth + 1, *recipe, recipe_amount) {
+                let step = CraftStep {
+                    item: required_item.kind, depth: depth + 1,
+                    result: CraftStepResult::NotCraftable
+                };
+
+                self.craft_queue.push(step);
+                return_value = false;
+                continue;
+            };
+
+            // send off the overflow
+            let mut recipe_result = recipe.result;
+            recipe_result.amount = recipe.result.amount * recipe_amount - needed;
+            *self = this;
+            self.add_item(recipe_result);
+        }
+
+        if return_value {
+            self.craft_queue[index].result = CraftStepResult::Craftable(recipe);
+        }
+
+        return_value
+    }
+
+
+    fn directly_available(&self, kind: ItemKind) -> u32 {
+        self.inv.iter().filter_map(|f| *f)
+            .chain(self.buffer.iter().copied())
+            .filter(|x| x.kind == kind)
+            .map(|x| x.amount)
+            .sum()
+    }
+
+
+    fn remove_item(&mut self, kind: ItemKind, mut amount: u32) {
+        if amount == 0 { return }
+
+        // try to remove from the buffer first
+        let mut i = 0;
+        while let Some(item) = self.buffer.get_mut(i) {
+            if item.kind != kind { i += 1; continue }
+
+            let diff = amount.min(item.amount);
+            amount -= diff;
+            item.amount -= diff;
+
+            println!("{item:?}");
+            if item.amount == 0 {
+                self.buffer.remove(i);
+            } else {
+                i += 1;
+            }
+
+            if amount == 0 {
+                return;
+            }
+        }
+
+        // else, try the inventory
+        for slot in self.inv.iter_mut() {
+            let Some(item) = slot
+            else { continue };
+
+            if item.kind != kind { continue }
+
+            let diff = amount.min(item.amount);
+            amount -= diff;
+            item.amount -= diff;
+
+            if item.amount == 0 {
+                *slot = None;
+            }
+
+            if amount == 0 {
+                return;
+            }
+        }
+
+        panic!("not enough items in neither the buffer nor inventory");
+    }
+
+    fn add_item(&mut self, item: Item) {
+        if item.amount == 0 { return }
+        if let Some(slot) = self.buffer.iter_mut().find(|x| x.kind == item.kind) {
+            slot.amount += item.amount;
+        } else {
+            self.buffer.push(item);
+        }
+    }
 }
 
 

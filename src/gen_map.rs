@@ -15,7 +15,7 @@ pub struct KeyGen<G: Key, K: Key> {
 }
 
 impl<G: Key, K: Key> KeyGen<G, K> {
-    pub const ZERO : Self = Self::new(G::ZERO, K::ZERO);
+    pub const ZERO : Self = Self::new(G::MIN, K::MIN);
 
     pub const fn new(gen_key: G, key: K) -> Self {
         Self { gen_key, key }
@@ -100,8 +100,8 @@ impl<G: Key, K: Key, V, A: Alloc> KGenMap<G, K, V, A> {
             return KeyGen::new(*generation, next)
         }
 
-        let key = self.vec.push((G::ZERO, KGenVal::Occupied(value)));
-        KeyGen::new(G::ZERO, key)
+        let key = self.vec.push((G::MIN, KGenVal::Occupied(value)));
+        KeyGen::new(G::MIN, key)
     }
 
 

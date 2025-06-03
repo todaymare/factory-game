@@ -1,10 +1,10 @@
-use std::{collections::HashMap, fs::{self, File}, io::BufReader, path::Path};
+use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
-use glam::{IVec2, IVec3, Vec3, Vec4};
+use glam::{IVec2, Vec3, Vec4};
 use image::{codecs::png::PngDecoder, ImageDecoder};
-use rand::{random, seq::IndexedRandom};
+use rand::random;
 
-use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::{Structure, StructureKind}, voxel_world::{chunk::Chunk, voxel::VoxelKind}, Game, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
+use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::StructureKind, voxel_world::voxel::VoxelKind, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
 
 
 #[derive(Clone)]

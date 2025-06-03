@@ -1,9 +1,9 @@
-use std::{hash::{DefaultHasher, Hash, Hasher}, time::Instant};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
-use glam::{IVec3, Vec3};
+use glam::IVec3;
 use rand::{Rng, SeedableRng};
 
-use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, voxel_world::voxel::VoxelKind};
+use crate::{mesh::Mesh, voxel_world::voxel::VoxelKind};
 
 use super::voxel::Voxel;
 

@@ -1,9 +1,9 @@
 use std::{collections::{hash_map::Entry, HashMap}, io::BufReader, mem::offset_of, panic, ptr::null_mut};
 
 use glam::{Vec3, Vec4};
-use obj::{raw::object::Polygon, LoadError, Obj, ObjResult};
+use obj::{raw::object::Polygon, Obj, ObjResult};
 
-use crate::{directions::Direction, quad::Quad, shader::ShaderProgram};
+use crate::{directions::Direction, quad::Quad};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]

@@ -2,15 +2,14 @@ pub mod strct;
 pub mod work_queue;
 pub mod belts;
 
-use std::{collections::BTreeMap, hash::{DefaultHasher, Hash, Hasher}, ops::Bound};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
-use glam::{IVec3, Mat4, Vec3, Vec4};
-use glfw::ffi::OPENGL_DEBUG_CONTEXT;
-use sti::{define_key, vec::KVec};
+use glam::{IVec3, Mat4, Vec3};
+use sti::define_key;
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use work_queue::WorkQueue;
 
-use crate::{directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, input, items::{Item, ItemKind, Assets}, mesh::Mesh, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Game, Tick, DROPPED_ITEM_SCALE};
+use crate::{directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Tick, DROPPED_ITEM_SCALE};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));

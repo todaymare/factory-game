@@ -1,8 +1,7 @@
-use std::{collections::HashMap, fs::{self, File}, io::Write};
+use std::collections::HashMap;
 
-use glam::{IVec2, Vec2, Vec4};
-use rand::seq::IndexedRandom;
-use sti::{arena::ArenaStats, define_key, key::Key, vec::KVec};
+use glam::{IVec2, Vec4};
+use sti::{define_key, vec::KVec};
 
 use crate::shader::ShaderProgram;
 
@@ -71,8 +70,7 @@ impl TextureAtlasBuilder {
 
     pub fn register(&mut self, dim: IVec2, data: &[u8]) -> TextureId {
         self.max_dims = self.max_dims.max(dim);
-        // @TODO: arena fails to allocate here, eventually swap out to arena
-        let mut buf = sti::vec::Vec::from_value(data.len(), 0);
+        let mut buf = sti::vec::Vec::from_value_in(&self.arena, data.len(), 0);
         buf.copy_from_slice(data);
 
         // since it's allocated by the current struct in an arena this is fine

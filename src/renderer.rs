@@ -2,12 +2,12 @@ pub mod textures;
 
 use std::{collections::HashMap, ffi::CString, fs, mem::offset_of, ptr::null_mut};
 
-use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Request_Size, FT_Set_Pixel_Sizes, FT_Size_RequestRec, FT_LOAD_RENDER};
-use glam::{IVec2, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
+use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
+use glam::{IVec2, Mat4, Quat, Vec2, Vec3, Vec4};
 use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
-use textures::{TextureAtlas, TextureAtlasBuilder, TextureAtlasManager, TextureId};
+use textures::{TextureAtlasBuilder, TextureAtlasManager, TextureId};
 
-use crate::{input::InputManager, items::{ItemKind, Assets}, shader::{Shader, ShaderProgram, ShaderType}, Tick, TICKS_PER_SECOND};
+use crate::{items::{ItemKind, Assets}, shader::{Shader, ShaderProgram, ShaderType}};
 
 
 const FONT_SIZE : u32 = 64;
@@ -377,11 +377,6 @@ impl Renderer {
     }
 
 
-    pub fn button(&mut self, input: &InputManager, pos: Vec2, dims: Vec2) {
-        self.draw_rect(pos, dims, Vec4::ONE);
-    }
-
-
     pub fn draw_item(&self, shader: &ShaderProgram, item_kind: ItemKind, pos: Vec3, scale: Vec3, rot: f32) {
         let model = Mat4::from_scale_rotation_translation(scale, Quat::from_rotation_y(rot), pos);
         shader.set_matrix4(c"model", model);
@@ -418,7 +413,7 @@ impl Renderer {
 
 
 #[repr(C)]
-struct UIVertex {
+pub struct UIVertex {
     position: Vec3,
     uv: Vec2,
     modulate: Vec4,

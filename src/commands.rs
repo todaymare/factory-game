@@ -14,9 +14,7 @@ pub struct Command {
 
 
 pub struct CommandArg<'me> {
-    command: &'me Command,
     text: &'me str,
-    arg: usize,
 }
 
 
@@ -54,9 +52,7 @@ impl Command {
     pub fn arg<'me>(&'me self, index: usize) -> Option<CommandArg<'me>> {
         let command = self.string.split_whitespace().skip(index+1).next()?;
         Some(CommandArg {
-            command: self,
             text: command,
-            arg: index,
         })
     }
 

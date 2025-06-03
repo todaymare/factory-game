@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, ops::Bound};
 
-use crate::{gen_map::KeyGen, structures::{StructureGen, StructureKey}, Tick};
+
+use crate::Tick;
 
 use super::StructureId;
 
@@ -34,6 +35,7 @@ impl WorkQueue {
 
 #[test]
 fn test_work_queue() {
+    use crate::{gen_map::KeyGen, structures::{StructureGen, StructureKey}};
     let mut wq = WorkQueue { entries: BTreeMap::new() };
 
     let k1 = StructureId(KeyGen::new(StructureGen(0), StructureKey(1)));

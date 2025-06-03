@@ -267,7 +267,7 @@ impl Belts {
             let _ = write!(output, "style = filled;");
             let _ = write!(output, "fillcolor = \"{hex}\";");
 
-            let scc_begin = if i == SccId::ZERO { SccId::ZERO }
+            let scc_begin = if i == SccId::MIN { SccId::MIN }
                             else { self.scc_ends[unsafe { SccId::from_usize_unck(i.usize() - 1) }] };
             let scc_end = self.scc_ends[i];
             let scc_node_ids = &self.scc_data[scc_begin..scc_end];

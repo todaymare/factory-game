@@ -1,7 +1,6 @@
 use glam::IVec3;
-use rand::seq::IndexedRandom;
 
-use crate::{directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh, Tick};
+use crate::{directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh};
 
 use super::Slot;
 
