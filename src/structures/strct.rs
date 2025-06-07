@@ -198,12 +198,25 @@ impl Structure {
 
 
             StructureData::Belt { inventory } => {
-                for arr in 0..inventory.len() {
-                    let arr = &mut inventory[arr];
-                    for i in 0..arr.len() {
-                        if arr[i].is_none() {
-                            arr[i] = Some(item);
+                for inv in inventory {
+                    for slot in inv {
+                        if slot.is_none() {
+                            *slot = Some(item);
                             return;
+                        }
+                    }
+                }
+            },
+
+
+            StructureData::Splitter { inventory, .. } => {
+                for inv in inventory {
+                    for inv in inv {
+                        for slot in inv {
+                            if slot.is_none() {
+                                *slot = Some(item);
+                                return;
+                            }
                         }
                     }
                 }

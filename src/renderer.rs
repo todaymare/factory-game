@@ -39,7 +39,7 @@ pub struct Renderer {
     pub ui_scale: f32,
     pub rects: Vec<DrawRect>,
 
-    pub current_rect: ScreenRect,
+    current_rect: ScreenRect,
 }
 
 

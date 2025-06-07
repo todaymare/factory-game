@@ -61,7 +61,9 @@ impl Structures {
                         };
 
                         if output[0].is_some() && supports_multioutput {
-                            output[1] = Some(node_id);
+                            if output[0] != Some(node_id) {
+                                output[1] = Some(node_id);
+                            }
                             break;
                         } else {
                             output[0] = Some(node_id);

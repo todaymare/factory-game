@@ -201,7 +201,22 @@ impl Game {
                     }
 
 
-                    StructureData::Splitter { inventory, priority: [0, 0] }
+                    let priority = [
+                        {
+                            buf.clear();
+                            write!(buf, "structure[{i}].priority[0]");
+                            hm[&*buf].as_u32() as u8
+                        },
+                        {
+                            buf.clear();
+                            write!(buf, "structure[{i}].priority[1]");
+                            hm[&*buf].as_u32() as u8
+                        }
+
+                    ];
+
+
+                    StructureData::Splitter { inventory, priority }
                 },
 
 
@@ -375,6 +390,7 @@ impl Game {
 
                             let path = format_in!(&arena, "{buf}.inventory[{}]", lane*2+i).leak();
                             save_item(&arena, &mut v, path, *item);
+
                         }
                     }
                 },
@@ -390,6 +406,9 @@ impl Game {
                         let path = format_in!(&arena, "{buf}.inventory[{}]", i).leak();
                         save_item(&arena, &mut v, path, *item);
                     }
+
+                    v.push((format_in!(&arena, "{buf}.priority[0]").leak(), Value::Num(priority[0] as _)));
+                    v.push((format_in!(&arena, "{buf}.priority[1]").leak(), Value::Num(priority[1] as _)));
                 },
 
 
