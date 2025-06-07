@@ -35,7 +35,6 @@ pub struct Renderer {
     pub atlases: TextureAtlasManager,
 
     pub meshes: Assets,
-    pub z: f32,
     pub ui_scale: f32,
     pub rects: Vec<DrawRect>,
 
@@ -48,6 +47,7 @@ pub struct DrawRect {
     pos: Vec2,
     dims: Vec2,
     tex: TextureId,
+    z: Option<f32>,
 }
 
 
@@ -239,7 +239,6 @@ impl Renderer {
             biggest_y_size,
             meshes: assets,
             atlases,
-            z: 1.0,
             ui_scale: 1.0,
             rects: vec![],
             current_rect: ScreenRect::new(),
@@ -250,7 +249,6 @@ impl Renderer {
 
 
     pub fn begin(&mut self) {
-        self.z = 1.0;
         unsafe {
             gl::Enable(gl::DEPTH_TEST);
             gl::ClearColor(0.05, 0.05, 0.05, 1.0);
@@ -269,6 +267,7 @@ impl Renderer {
     pub fn end(&mut self) {
         unsafe { gl::Clear(gl::DEPTH_BUFFER_BIT) };
 
+        let mut z = 0.0;
         for rect in self.rects.iter() {
             let tex = rect.tex;
             let pos = rect.pos;
@@ -283,15 +282,17 @@ impl Renderer {
             let x1 = uvs.z;
             let y1 = uvs.w;
 
-            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, self.z));
-            buf.push(UIVertex::new(pos, Vec2::new(x0, y0), modulate, self.z));
-            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, self.z));
+            z += 0.0001;
+            let z = if let Some(z) = rect.z { z } else { z };
 
-            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, self.z));
-            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, self.z));
-            buf.push(UIVertex::new(pos+dims, Vec2::new(x1, y1), modulate, self.z));
+            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
+            buf.push(UIVertex::new(pos, Vec2::new(x0, y0), modulate, z));
+            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
 
-            self.z += 0.0001;
+            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
+            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
+            buf.push(UIVertex::new(pos+dims, Vec2::new(x1, y1), modulate, z));
+
         }
         self.rects.clear();
 
@@ -396,6 +397,18 @@ impl Renderer {
     }
 
 
+
+    pub fn with_z<F: FnOnce(&mut Self)>(&mut self, mut z: f32, f: F) {
+        let len = self.rects.len();
+        f(self);
+
+        for item in &mut self.rects[len..] {
+            item.z = Some(z);
+            z += 0.0001;
+        }
+    }
+
+
     pub fn with_style<F: FnOnce(&mut Self)>(&mut self, style: Style, f: F) {
         let mut prev_rect = self.current_rect;
         self.current_rect = ScreenRect::new();
@@ -403,7 +416,6 @@ impl Renderer {
 
         f(self);
 
-        dbg!(self.current_rect);
         self.current_rect.pos = self.current_rect.pos.min(style.fallback_pos);
         self.current_rect.size = self.current_rect.size.max(style.min);
 
@@ -419,6 +431,7 @@ impl Renderer {
                 pos: self.current_rect.pos,
                 dims: self.current_rect.size,
                 tex: self.white,
+                z: None,
             };
             self.rects.insert(len, rect);
         }
@@ -434,6 +447,7 @@ impl Renderer {
             pos,
             dims,
             tex,
+            z: None,
         };
 
         self.rects.push(rect);

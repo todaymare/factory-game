@@ -54,7 +54,7 @@ impl VoxelWorld {
             ];
 
             let mut verticies = vec![];
-            let mut indicies = vec![];
+            let mut indices = vec![];
 
 
             for z in 0..CHUNK_SIZE {
@@ -82,7 +82,7 @@ impl VoxelWorld {
                             };
 
                             if should_draw {
-                                draw_quad(&mut verticies, &mut indicies,
+                                draw_quad(&mut verticies, &mut indices,
                                           Quad::from_direction(*dir, pos, voxel.kind.colour()));
                             }
                         }
@@ -90,7 +90,8 @@ impl VoxelWorld {
                 }
             }
 
-            let mesh = Mesh::new(verticies, indicies);
+            dbg!(verticies.len(), indices.len());
+            let mesh = Mesh::new(verticies, indices);
             chunk.mesh_state = MeshState::Okay;
             chunk.mesh = mesh;
         }
@@ -302,8 +303,8 @@ impl VoxelWorld {
         let mut position = physics_body.position;
 
 
-        physics_body.velocity.x *= 1.0 - 2.0 * delta_time;
-        physics_body.velocity.z *= 1.0 - 2.0 * delta_time;
+        physics_body.velocity.x *= 1.0 - 10.0 * delta_time;
+        physics_body.velocity.z *= 1.0 - 10.0 * delta_time;
 
         for axis in 0..3 {
             let mut new_position = position;

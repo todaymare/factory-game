@@ -1,7 +1,7 @@
 use crate::{items::{Item, ItemKind}, structures::strct::StructureKind, voxel_world::voxel::VoxelKind, TICKS_PER_SECOND};
 
 
-pub const RECIPES : &'static [Recipe] = &[
+pub const FURNACE_RECIPES : &'static [Recipe] = &[
     Recipe {
         requirements: &[Item::new(ItemKind::IronOre, 1)],
         result: Item::new(ItemKind::IronPlate, 1),
@@ -12,7 +12,10 @@ pub const RECIPES : &'static [Recipe] = &[
         result: Item::new(ItemKind::CopperPlate, 1),
         time: TICKS_PER_SECOND,
     },
+];
 
+
+pub const RECIPES : &'static [Recipe] = &[
 
     Recipe {
         requirements: &[Item::new(ItemKind::IronPlate, 2)],

@@ -11,7 +11,7 @@ use sti::define_key;
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use work_queue::WorkQueue;
 
-use crate::{crafting::Recipe, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::Item, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Tick, DROPPED_ITEM_SCALE};
+use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::Item, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Tick, DROPPED_ITEM_SCALE};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
@@ -116,7 +116,7 @@ impl Structures {
     }
 
 
-    pub fn add_structure(&mut self, world: &mut VoxelWorld, structure: Structure) {
+    pub fn add_structure(&mut self, world: &mut VoxelWorld, structure: Structure) -> StructureId {
         let id = self.insert(structure);
         let structure = &mut self.structs[id.0];
 
@@ -130,6 +130,7 @@ impl Structures {
         }
 
         self.to_be_awoken.push(id);
+        id
     }
 
 
@@ -425,6 +426,45 @@ impl Structure {
             }
 
 
+            StructureData::Furnace { input, output } => {
+                if let Some(input_item) = input {
+                    let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
+                    else { unreachable!() };
+
+                    if let Some(output) = output {
+                        assert_eq!(recipe.result.kind, output.kind);
+                        output.amount += recipe.result.amount;
+
+                    } else {
+                        *output = Some(recipe.result);
+                    }
+                }
+
+                if let Some(input_item) = input {
+                    let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
+                    else { unreachable!() };
+
+                    if let Some(output) = output {
+                        if output.kind != recipe.result.kind 
+                            || output.amount + recipe.result.amount > output.kind.max_stack_size() {
+                            structure.is_asleep = true;
+                            return;
+                        }
+                    }
+
+                    input_item.amount -= 1;
+                    if input_item.amount == 0 {
+                        *input = None;
+                    }
+
+                    structures.schedule_in(id, recipe.time);
+                    return;
+                }  
+
+                structure.is_asleep = true;
+            }
+
+
             StructureData::Chest { .. } => {},
             StructureData::Belt { .. } => {},
             StructureData::Splitter { .. } => {},
@@ -482,6 +522,33 @@ impl Structure {
                 } else {
                     structure.is_asleep = true;
                 }
+            }
+
+
+            StructureData::Furnace { input, output } => {
+                if let Some(input_item) = input {
+                    let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
+                    else { unreachable!() };
+
+                    if let Some(output) = output {
+                        if output.kind != recipe.result.kind 
+                            || output.amount + recipe.result.amount > output.kind.max_stack_size() {
+                            structure.is_asleep = true;
+                            return;
+                        }
+                    }
+
+                    input_item.amount -= 1;
+                    if input_item.amount == 0 {
+                        *input = None;
+                    }
+
+
+                    structures.schedule_in(id, recipe.time);
+                    return;
+                }
+
+                structure.is_asleep = true;
             }
 
 

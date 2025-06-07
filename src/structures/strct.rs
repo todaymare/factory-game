@@ -1,6 +1,6 @@
 use glam::IVec3;
 
-use crate::{crafting::RECIPES, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh};
+use crate::{crafting::{FURNACE_RECIPES, RECIPES}, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh};
 
 use super::Crafter;
 
@@ -44,6 +44,11 @@ pub enum StructureData {
 
     Assembler {
         crafter: Crafter,
+    },
+
+    Furnace {
+        input: Option<Item>,
+        output: Option<Item>,
     }
 
 }
@@ -64,6 +69,7 @@ pub enum StructureKind {
     Belt,
     Splitter,
     Assembler,
+    Furnace,
 }
 
 
@@ -76,6 +82,7 @@ impl StructureData {
             StructureKind::Belt => Self::Belt { inventory: [[None; 2]; 2] },
             StructureKind::Splitter => Self::Splitter { inventory: [[[None; 2]; 2]; 2], priority: [0, 0] },
             StructureKind::Assembler => Self::Assembler { crafter: Crafter::from_recipe(RECIPES[0]) },
+            StructureKind::Furnace => Self::Furnace { input: None, output: None },
         }
     }
 
@@ -88,6 +95,7 @@ impl StructureData {
             StructureData::Belt { .. } => StructureKind::Belt,
             StructureData::Splitter { .. } => StructureKind::Splitter,
             StructureData::Assembler { .. } => StructureKind::Assembler,
+            StructureData::Furnace { .. } => StructureKind::Furnace,
         }
     }
 }
@@ -174,6 +182,11 @@ impl Structure {
 
                 false
             }
+
+
+            StructureData::Furnace { .. } => {
+                FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == item.kind).is_some()
+            }
         }
     }
 
@@ -231,6 +244,14 @@ impl Structure {
                 }
             },
 
+            StructureData::Furnace { input, .. } => {
+                if let Some(input) = input {
+                    input.amount += item.amount;
+                } else {
+                    *input = Some(item);
+                }
+            },
+
 
 
             _ => unreachable!(),
@@ -246,6 +267,7 @@ impl Structure {
             StructureData::Belt { .. } => 4,
             StructureData::Splitter { .. } => 4,
             StructureData::Assembler { crafter } => (crafter.output.amount != 0) as usize,
+            StructureData::Furnace { output, .. } => output.is_some() as usize,
         }
     }
 
@@ -263,6 +285,7 @@ impl Structure {
                 if output.amount == 0 { return None };
                 Some(output)
             }
+            StructureData::Furnace { output, .. } => *output,
         }
     }
 
@@ -308,10 +331,25 @@ impl Structure {
                 slot.take()
             },
 
-            StructureData::Splitter { inventory, priority } => {
+            StructureData::Splitter { inventory, .. } => {
                 let slot = &mut inventory[index/4][(index%4)/ 2][index % 2];
                 slot.take()
             },
+
+
+            StructureData::Furnace { input, output } => {
+                if let Some(output_item) = output {
+                    output_item.amount -= 1;
+                    let mut item = *output_item;
+                    item.amount = 1;
+
+                    if output_item.amount == 0 { *output = None };
+
+                    return Some(item)
+                }
+
+                None
+            }
         }
     }
 }
@@ -391,7 +429,35 @@ impl StructureKind {
 
             StructureKind::Assembler => {
                 blocks_arr!(dir,
-                    IVec3::ZERO)
+                    IVec3::new(0, 0, 0), IVec3::new(1, 0, 0), IVec3::new(2, 0, 0),
+                    IVec3::new(0, 0, 1), IVec3::new(1, 0, 1), IVec3::new(2, 0, 1),
+                    IVec3::new(0, 0, 2), IVec3::new(1, 0, 2), IVec3::new(2, 0, 2),
+
+                    IVec3::new(0, 1, 0), IVec3::new(1, 1, 0), IVec3::new(2, 1, 0),
+                    IVec3::new(0, 1, 1), IVec3::new(1, 1, 1), IVec3::new(2, 1, 1),
+                    IVec3::new(0, 1, 2), IVec3::new(1, 1, 2), IVec3::new(2, 1, 2),
+
+                    IVec3::new(0, 2, 0), IVec3::new(1, 2, 0), IVec3::new(2, 2, 0),
+                    IVec3::new(0, 2, 1), IVec3::new(1, 2, 1), IVec3::new(2, 2, 1),
+                    IVec3::new(0, 2, 2), IVec3::new(1, 2, 2), IVec3::new(2, 2, 2)
+                )
+            }
+
+
+            StructureKind::Furnace => {
+                blocks_arr!(dir,
+                    IVec3::new(0, 0, 0), IVec3::new(1, 0, 0), IVec3::new(2, 0, 0),
+                    IVec3::new(0, 0, 1), IVec3::new(1, 0, 1), IVec3::new(2, 0, 1),
+                    IVec3::new(0, 0, 2), IVec3::new(1, 0, 2), IVec3::new(2, 0, 2),
+
+                    IVec3::new(0, 1, 0), IVec3::new(1, 1, 0), IVec3::new(2, 1, 0),
+                    IVec3::new(0, 1, 1), IVec3::new(1, 1, 1), IVec3::new(2, 1, 1),
+                    IVec3::new(0, 1, 2), IVec3::new(1, 1, 2), IVec3::new(2, 1, 2),
+
+                    IVec3::new(0, 2, 0), IVec3::new(1, 2, 0), IVec3::new(2, 2, 0),
+                    IVec3::new(0, 2, 1), IVec3::new(1, 2, 1), IVec3::new(2, 2, 1),
+                    IVec3::new(0, 2, 2), IVec3::new(1, 2, 2), IVec3::new(2, 2, 2)
+                )
             }
         }
     }
@@ -404,7 +470,8 @@ impl StructureKind {
             StructureKind::Chest => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
             StructureKind::Belt => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
             StructureKind::Splitter => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
-            StructureKind::Assembler => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
+            StructureKind::Assembler => rotate_block_vector(dir, IVec3::new(2, 0, 1)),
+            StructureKind::Furnace => rotate_block_vector(dir, IVec3::new(2, 0, 1)),
         }
     }
 
@@ -416,7 +483,8 @@ impl StructureKind {
             StructureKind::Chest => Mesh::from_obj("assets/models/block_outline.obj"),
             StructureKind::Belt => Mesh::from_obj("assets/models/belt.obj"),
             StructureKind::Splitter => Mesh::from_obj("assets/models/belt.obj"),
-            StructureKind::Assembler => Mesh::from_obj("assets/models/belt.obj"),
+            StructureKind::Assembler => Mesh::from_obj("assets/models/assembler.obj"),
+            StructureKind::Furnace => Mesh::from_obj("assets/models/assembler.obj"),
         }
     }
 }

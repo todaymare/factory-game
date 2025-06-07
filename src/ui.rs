@@ -3,7 +3,7 @@ use std::{ops::Bound, fmt::Write};
 use glam::{Vec2, Vec4};
 use glfw::{CursorMode, Key};
 
-use crate::{commands::Command, crafting::{Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer, Style}, structures::{strct::{InserterState, StructureData}, StructureId}, voxel_world::split_world_pos, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE};
+use crate::{commands::Command, crafting::{Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer, Style}, structures::{strct::{InserterState, StructureData}, Crafter, StructureId}, voxel_world::split_world_pos, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE};
 
 pub enum UILayer {
     Inventory {
@@ -19,12 +19,13 @@ pub enum UILayer {
         just_opened: bool,
         offset: u32,
     },
-    Gameplay,
+    Gameplay { smoothed_dt: f32 },
 }
 
 
 pub enum InventoryMode {
     Chest(StructureId),
+    Assembler(StructureId),
     Recipes,
 }
 
@@ -35,9 +36,14 @@ const SLOT_SIZE : f32 = 64.0;
 
 
 impl UILayer {
+    pub fn inventory_view(mode: InventoryMode) -> Self {
+        Self::Inventory { just_opened: true, holding_item: None, inventory_mode: mode }
+    }
+
+
     pub fn capture_mode(&self) -> CursorMode {
         match self {
-            UILayer::Gameplay => CursorMode::Disabled,
+            UILayer::Gameplay { .. } => CursorMode::Disabled,
             UILayer::Inventory { .. } => CursorMode::Normal,
             UILayer::Console { .. } => CursorMode::Normal,
         }
@@ -46,30 +52,30 @@ impl UILayer {
 
     pub fn is_escapable(&self) -> bool {
         match self {
-            UILayer::Gameplay => false,
+            UILayer::Gameplay { .. } => false,
             UILayer::Inventory { .. } => true,
             UILayer::Console { .. } => true,
         }
     }
 
 
-    pub fn close(&mut self, game: &mut Game) {
+    pub fn close(&mut self, game: &mut Game, dt: f32) {
         match self {
             UILayer::Inventory { holding_item, .. } => {
                 if let Some(holding_item) = holding_item {
                     game.world.dropped_items.push(DroppedItem::new(*holding_item, game.player.body.position));
                 }
 
-                *self = UILayer::Gameplay;
+                *self = UILayer::Gameplay { smoothed_dt: dt };
             },
 
 
             UILayer::Console { .. } => {
-                *self = UILayer::Gameplay;
+                *self = UILayer::Gameplay { smoothed_dt: dt };
             },
 
 
-            UILayer::Gameplay => (),
+            UILayer::Gameplay { .. } => (),
         }
     }
 
@@ -228,7 +234,7 @@ impl UILayer {
                         game.call_command(command);
                     }
 
-                    self.close(game);
+                    self.close(game, dt);
                 } else {
                     *just_opened = false;
                 }
@@ -239,7 +245,7 @@ impl UILayer {
             UILayer::Inventory { just_opened, holding_item, inventory_mode } => {
                 let window = renderer.window_size();
                 if input.is_key_just_pressed(Key::E) && !*just_opened {
-                    self.close(game);
+                    self.close(game, dt);
                     return;
                 } else {
                     *just_opened = false;
@@ -258,6 +264,7 @@ impl UILayer {
                 let player_inv_size = Vec2::new(cols as f32, rows as f32) * (slot_size + padding) as f32;
                 let mut other_inv = None;
 
+                'mode: {
                 match inventory_mode {
                     InventoryMode::Chest(structure) => {
                         let rows = 6;
@@ -283,6 +290,79 @@ impl UILayer {
 
                         other_inv = Some(inventory.as_mut_slice());
                     },
+
+
+                    InventoryMode::Assembler(structure) => {
+                        let mut corner = window * 0.5 - player_inv_size * 0.5;
+                        corner.x += player_inv_size.x * 0.5;
+                        corner.x += padding * 0.5;
+
+                        let rows = PLAYER_HOTBAR_SIZE;
+                        let cols = PLAYER_ROW_SIZE;
+
+                        let size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
+
+                        renderer.draw_rect(corner, size, Vec4::ONE);
+
+                        let mut base = corner + padding * 0.5;
+                        let point = renderer.to_point(input.mouse_position());
+                        for col in 0..cols {
+                            let mut pos = base;
+                            for row in 0..rows {
+                                let Some(&recipe) = RECIPES.get(col*rows+row)
+                                else { break 'mode };
+
+                                let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(slot_size));
+                                let mut colour = (Vec4::ONE * 0.2).with_w(1.0); 
+
+                                if is_mouse_intersecting {
+                                    colour += Vec4::splat(0.4);
+                                }
+                               
+                                renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
+                                renderer.draw_item_icon(recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
+                                renderer.draw_text(format!("{}", recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
+
+
+                                if is_mouse_intersecting && input.is_button_just_pressed(glfw::MouseButton::Button1) {
+                                    let structure = game.structures.get_mut(*structure);
+                                    let StructureData::Assembler { crafter } = &mut structure.data
+                                    else { unreachable!() };
+
+                                    for &item in &crafter.inventory {
+                                        if item.amount == 0 { continue }
+                                        if game.player.can_give(item) {
+                                            game.player.add_item(item);
+                                        } else {
+                                            game.world.dropped_items.push(DroppedItem::new(item, game.player.body.position));
+                                        }
+                                    }
+
+                                    if crafter.output.amount != 0 {
+                                        let item = crafter.output;
+                                        if game.player.can_give(item) {
+                                            game.player.add_item(item);
+                                        } else {
+                                            game.world.dropped_items.push(DroppedItem::new(item, game.player.body.position));
+                                        }
+                                    }
+
+                                    *crafter = Crafter::from_recipe(recipe);
+                                    self.close(game, dt);
+                                    return;
+                                }
+
+
+                                pos += Vec2::new(slot_size+padding, 0.0);
+                            }
+
+                            base += Vec2::new(0.0, slot_size+padding);
+
+                        }
+
+                    }
+
+
                     InventoryMode::Recipes => {
 
                         let mut corner = window * 0.5 - player_inv_size * 0.5;
@@ -292,6 +372,7 @@ impl UILayer {
                         draw_recipes(renderer, game, input, holding_item, corner);
                     },
                 }
+                }
 
                 let mut corner = window * 0.5 - player_inv_size * 0.5;
                 corner.x -= player_inv_size.x * 0.5;
@@ -300,12 +381,14 @@ impl UILayer {
                 draw_player_inventory(renderer, &mut game.player, &mut other_inv, input, holding_item, corner);
             }
 
-            UILayer::Gameplay => {
+            UILayer::Gameplay { smoothed_dt} => {
                 // render debug text
                 {
                     let mut text = String::new();
 
-                    let fps = (1.0 / dt).round();
+                    let alpha = 0.1;
+                    *smoothed_dt = (1.0 - alpha) * *smoothed_dt + alpha * dt;
+                    let fps = (1.0 / *smoothed_dt).round();
                     let colour_code = if fps > 55.0 { 'a' } else if fps > 25.0 { '6' } else { '4' };
 
                     let _ = writeln!(text, "§eFPS: §{colour_code}{fps}§r");
@@ -318,7 +401,6 @@ impl UILayer {
                     let _ = writeln!(text, "§eCHUNK LOCAL POSITION: §a{}, {}, {}§r", chunk_local_pos.x, chunk_local_pos.y, chunk_local_pos.z);
                     let _ = writeln!(text, "§eCHUNK COUNT: §a{}§r", game.world.chunks.len());
                     let _ = writeln!(text, "§eDIRECTION: §b{:?}§r", game.camera.compass_direction());
-                    let _ = writeln!(text, "§eDIRECTION VECTOR: §b{:?}§r", game.camera.compass_direction().as_ivec3());
 
 
                     let target_block = game.world.raycast_voxel(game.camera.position, game.camera.direction, PLAYER_REACH);
@@ -448,6 +530,12 @@ impl UILayer {
                                     let _ = writeln!(text, "§e  - OUTPUT:");
                                     let _ = writeln!(text, "§e      - §b{:?}", crafter.output);
                                 }
+
+                                StructureData::Furnace { input, output } => {
+                                    let _ = writeln!(text, "Furnace");
+                                    let _ = writeln!(text, "§e  - INPUT: §b{input:?}");
+                                    let _ = writeln!(text, "§e  - OUTPUT: §b{output:?}");
+                                }
                             }
                         } else {
 
@@ -552,7 +640,7 @@ fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, 
     let slot_size = 64.0;
     let padding = 16.0;
 
-    let size = Vec2::new(cols as f32, rows as f32) * (slot_size + padding) as f32;
+    let size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
 
     renderer.draw_rect(corner, size, Vec4::ONE);
 
@@ -606,6 +694,7 @@ fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, 
 
             if is_mouse_intersecting {
                 let size = Vec2::new(recipe.requirements.len() as f32, 1.0) * (padding + slot_size);
+                renderer.with_z(1.0, |renderer| {
                 renderer.draw_rect(point, size, Vec4::new(0.2, 0.2, 0.2, 1.0));
                 let mut base = point + padding*0.5;
                 for item in recipe.requirements.iter() {
@@ -626,10 +715,12 @@ fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, 
                     renderer.draw_text(format!("{}", item.amount).as_str(), base+slot_size*0.05, 0.4, Vec4::ONE);
                     base += Vec2::new(slot_size+padding, 0.0);
                 }
+
+                });
             }
-            pos += Vec2::new(0.0, slot_size+padding);
+            pos += Vec2::new(slot_size+padding, 0.0);
         }
-        base += Vec2::new(slot_size+padding, 0.0)
+        base += Vec2::new(0.0, slot_size+padding);
     }
 }
 
@@ -874,10 +965,6 @@ fn draw_inventory(renderer: &mut Renderer, inventory: &mut [Option<Item>],
                   corner: Vec2, cols: usize, rows: usize) {
     let slot_size = 64.0;
     let padding = 16.0;
-
-    let size = Vec2::new(cols as f32, rows as f32) * (slot_size + padding) as f32;
-
-    //renderer.draw_rect(corner, size, Vec4::ONE);
 
     let mut base = corner + padding * 0.5;
     let point = renderer.to_point(input.mouse_position());

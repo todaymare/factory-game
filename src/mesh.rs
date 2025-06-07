@@ -9,15 +9,16 @@ use crate::{directions::Direction, quad::Quad};
 #[repr(C)]
 pub struct Vertex {
     position: Vec3,
-    normal: Vec3,
     colour: Vec4,
 }
 
 
 #[derive(Debug)]
 pub struct Mesh {
-    indicies: Vec<u32>,
+    indicies: u32,
+    vbo: u32,
     vao: u32,
+    ebo: u32,
 }
 
 
@@ -50,7 +51,7 @@ impl obj::FromRawVertex<u32> for Vertex {
 
                         let vertex = Vertex {
                             position: Vec3::new(p.0, p.1, p.2),
-                            normal,
+                            //normal,
                             colour,
                         };
                         let index = match u32::try_from(vb.len()) {
@@ -131,17 +132,17 @@ impl Mesh {
             gl::EnableVertexAttribArray(0);
             gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, size_of::<Vertex>() as _, offset_of!(Vertex, position) as _);
 
-            gl::EnableVertexAttribArray(1);
-            gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, size_of::<Vertex>() as _, offset_of!(Vertex, normal) as _);
+            //gl::EnableVertexAttribArray(1);
+            //gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, size_of::<Vertex>() as _, offset_of!(Vertex, normal) as _);
 
-            gl::EnableVertexAttribArray(2);
-            gl::VertexAttribPointer(2, 4, gl::FLOAT, gl::FALSE, size_of::<Vertex>() as _, offset_of!(Vertex, colour) as _);
+            gl::EnableVertexAttribArray(1);
+            gl::VertexAttribPointer(1, 4, gl::FLOAT, gl::FALSE, size_of::<Vertex>() as _, offset_of!(Vertex, colour) as _);
 
             gl::BindVertexArray(0);
 
         }
 
-        Self { vao, indicies }
+        Self { vao, indicies: indicies.len() as _, vbo, ebo }
     }
 
 
@@ -156,8 +157,19 @@ impl Mesh {
     pub fn draw(&self) {
         unsafe {
             gl::BindVertexArray(self.vao);
-            gl::DrawElements(gl::TRIANGLES, self.indicies.len() as _, gl::UNSIGNED_INT, null_mut());
+            gl::DrawElements(gl::TRIANGLES, self.indicies as _, gl::UNSIGNED_INT, null_mut());
             gl::BindVertexArray(0);
+        }
+    }
+}
+
+
+impl Drop for Mesh {
+    fn drop(&mut self) {
+        unsafe {
+            gl::DeleteVertexArrays(1, &self.vao);
+            gl::DeleteBuffers(1, &self.vbo);
+            gl::DeleteBuffers(1, &self.ebo);
         }
     }
 }
@@ -165,7 +177,7 @@ impl Mesh {
 
 impl Vertex {
     pub fn new(pos: Vec3, normal: Vec3, colour: Vec4) -> Self {
-        Self { position: pos, normal, colour }
+        Self { position: pos, colour }
     }
 }
 

@@ -81,6 +81,7 @@ impl ItemKind {
         ItemKind::Structure(StructureKind::Belt),
         ItemKind::Structure(StructureKind::Splitter),
         ItemKind::Structure(StructureKind::Assembler),
+        ItemKind::Structure(StructureKind::Furnace),
     ];
 
 
@@ -95,6 +96,7 @@ impl ItemKind {
             ItemKind::Structure(StructureKind::Chest) => "chest",
             ItemKind::Structure(StructureKind::Quarry) => "quarry",
             ItemKind::Structure(StructureKind::Assembler) => "assembler",
+            ItemKind::Structure(StructureKind::Furnace) => "furnace",
             ItemKind::Voxel(VoxelKind::Dirt) => "dirt_block",
             ItemKind::Voxel(VoxelKind::Stone) => "stone_block",
 

@@ -52,13 +52,19 @@ const RENDER_DISTANCE : i32 = 4;
 
 const DROPPED_ITEM_SCALE : f32 = 0.25;
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
 
 fn main() {
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+
     let mut game = Game::new();
 
     let mut input = InputManager::default();
     let mut renderer = Renderer::new((1920/2, 1080/2));
-    let mut ui_layer = UILayer::Gameplay;
+    let mut ui_layer = UILayer::Gameplay { smoothed_dt: 0.0 };
 
     for x in -RENDER_DISTANCE..RENDER_DISTANCE {
         for y in -RENDER_DISTANCE..RENDER_DISTANCE {
@@ -102,7 +108,7 @@ fn main() {
 
 
         // handle mouse movement 
-        if matches!(ui_layer, UILayer::Gameplay) {
+        if matches!(ui_layer, UILayer::Gameplay { .. }) {
             let dt = input.mouse_delta();
             game.camera.yaw += dt.x * delta_time * MOUSE_SENSITIVITY;
             game.camera.pitch -= dt.y * delta_time * MOUSE_SENSITIVITY;
@@ -138,11 +144,11 @@ fn main() {
         // handle keyboard input
         'input: {
             if input.is_key_just_pressed(Key::Escape) {
-                ui_layer.close(&mut game);
-                ui_layer = UILayer::Gameplay;
+                ui_layer.close(&mut game, delta_time);
+                ui_layer = UILayer::Gameplay { smoothed_dt: delta_time };
             }
 
-            if !matches!(ui_layer, UILayer::Gameplay) {
+            if !matches!(ui_layer, UILayer::Gameplay { .. }) {
                 break 'input;
             }
 
@@ -235,7 +241,6 @@ fn main() {
 
             'i: { if input.is_key_just_pressed(Key::E) {
                 if matches!(ui_layer, UILayer::Inventory { .. }) {
-                    ui_layer = UILayer::Gameplay;
                     break 'i;
                 } 
 
@@ -246,6 +251,8 @@ fn main() {
                         let structure_kind = game.structures.get(*structure).data.as_kind();
                         if structure_kind == StructureKind::Chest {
                             inv_kind = InventoryMode::Chest(*structure);
+                        } else if structure_kind == StructureKind::Assembler {
+                            inv_kind = InventoryMode::Assembler(*structure);
                         }
                     }
                 }
@@ -267,9 +274,7 @@ fn main() {
 
 
             if input.is_key_just_pressed(Key::Enter) {
-                if matches!(ui_layer, UILayer::Console { .. }) {
-                    ui_layer = UILayer::Gameplay
-                } else {
+                if !matches!(ui_layer, UILayer::Console { .. }) {
                     ui_layer = UILayer::Console { text: String::new(), backspace_cooldown: 1.0, timer: 0.0, cursor: 0, just_opened: true, offset: 1 }
                 }
             }
@@ -323,7 +328,7 @@ fn main() {
             game.player.interact_delay -= delta_time;
 
 
-            if !matches!(ui_layer, UILayer::Gameplay) {
+            if !matches!(ui_layer, UILayer::Gameplay { .. }) {
                 break 'outer;
             }
 
@@ -408,7 +413,11 @@ fn main() {
 
                     let structure = Structure::from_kind(structure_kind, pos+normal, game.camera.compass_direction());
                     let _ = game.player.take_item(game.player.hand_index(), 1).unwrap();
-                    game.structures.add_structure(&mut game.world, structure);
+                    let id = game.structures.add_structure(&mut game.world, structure);
+
+                    if structure_kind == StructureKind::Assembler {
+                        ui_layer = UILayer::inventory_view(InventoryMode::Assembler(id))
+                    }
                 }
 
 
@@ -518,21 +527,6 @@ fn main() {
                 }
             }
 
-
-            // render ui
-            ui_layer.render(&mut game, &input, &mut renderer, delta_time);
-
-            let current_cm = renderer.window.get_cursor_mode();
-            let cm = ui_layer.capture_mode();
-            if current_cm != cm {
-                renderer.window.set_cursor_mode(cm);
-
-                let window = renderer.window.get_size();
-                renderer.window.set_cursor_pos(window.0 as f64 / 2.0,
-                                               window.1 as f64 / 2.0);
-            }
-
-
             // render hotbar
             {
                 let window = renderer.window_size();
@@ -561,6 +555,46 @@ fn main() {
                 }
 
             }
+
+
+            // render interact text
+            'block: {
+            if let Some((raycast, _)) = game.world.raycast_voxel(game.camera.position, game.camera.direction, PLAYER_REACH) {
+                let Some(structure) = game.world.structure_blocks.get(&raycast)
+                else { break 'block };
+
+                match &game.structures.get(*structure).data {
+                      StructureData::Chest { .. }
+                    | StructureData::Assembler { .. } => {
+                        let window = renderer.window_size();
+                        
+                        let text = "Press E to interact";
+                        let size = renderer.text_size(&text, 0.5);
+                        let size = Vec2::new(size.x*0.5, size.y*1.2);
+                        renderer.draw_text(text, (window*0.5)-size, 0.5, Vec4::ONE);
+
+                    },
+                    _ => (),
+                }
+            }
+            }
+
+
+            // render ui
+            ui_layer.render(&mut game, &input, &mut renderer, delta_time);
+
+            let current_cm = renderer.window.get_cursor_mode();
+            let cm = ui_layer.capture_mode();
+            if current_cm != cm {
+                renderer.window.set_cursor_mode(cm);
+
+                let window = renderer.window.get_size();
+                renderer.window.set_cursor_pos(window.0 as f64 / 2.0,
+                                               window.1 as f64 / 2.0);
+            }
+
+
+
 
             renderer.end();
         }

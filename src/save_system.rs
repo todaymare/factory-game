@@ -217,6 +217,7 @@ impl Game {
 
 
                     StructureData::Splitter { inventory, priority }
+
                 },
 
 
@@ -253,6 +254,12 @@ impl Game {
                     }
 
                     StructureData::Assembler { crafter }
+                }
+
+
+
+                StructureKind::Furnace => {
+                    StructureData::from_kind(StructureKind::Furnace)
                 }
             };
 
@@ -421,6 +428,18 @@ impl Game {
                     for (i, item) in crafter.inventory.iter().enumerate() {
                         let path = format_in!(&arena, "{buf}.inventory[{i}]").leak();
                         save_item(&arena, &mut v, path, *item);
+                    }
+                }
+
+
+                StructureData::Furnace { input, output } => {
+                    if let Some(input) = input {
+                        let path = format_in!(&arena, "{buf}.input").leak();
+                        save_item(&arena, &mut v, path, *input);
+                    }
+                    if let Some(output) = output {
+                        let path = format_in!(&arena, "{buf}.output").leak();
+                        save_item(&arena, &mut v, path, *output);
                     }
                 }
             };
