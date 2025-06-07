@@ -1,20 +1,24 @@
 pub mod chunk;
 pub mod voxel;
+pub mod mesh;
 
 use std::{collections::HashMap, fs, ops::Bound, time::Instant};
 
 use chunk::MeshState;
 use glam::{IVec3, Vec3};
+use libnoise::{Perlin, Simplex, Source};
+use mesh::{draw_quad, VoxelMesh};
 use save_format::byte::{ByteReader, ByteWriter};
 use voxel::VoxelKind;
 
-use crate::{directions::Direction, items::{DroppedItem, Item}, mesh::{draw_quad, Mesh}, quad::Quad, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::{chunk::{Chunk, CHUNK_SIZE}, voxel::Voxel}, PhysicsBody};
+use crate::{directions::Direction, items::{DroppedItem, Item}, perlin::PerlinNoise, quad::Quad, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::{chunk::{Chunk, CHUNK_SIZE}, voxel::Voxel}, PhysicsBody};
 
 pub struct VoxelWorld {
     pub chunks: HashMap<IVec3, Chunk>,
     pub structure_blocks: HashMap<IVec3, StructureId>,
     pub dropped_items: Vec<DroppedItem>,
     remesh_queue: Vec<IVec3>,
+    perlin_noise: Perlin<2>
 }
 
 
@@ -25,6 +29,7 @@ impl VoxelWorld {
             structure_blocks: HashMap::new(),
             dropped_items: vec![],
             remesh_queue: vec![],
+            perlin_noise: Source::perlin(6969696969),
         }
     }
 
@@ -90,8 +95,7 @@ impl VoxelWorld {
                 }
             }
 
-            dbg!(verticies.len(), indices.len());
-            let mesh = Mesh::new(verticies, indices);
+            let mesh = VoxelMesh::new(verticies, indices);
             chunk.mesh_state = MeshState::Okay;
             chunk.mesh = mesh;
         }
@@ -137,14 +141,14 @@ impl VoxelWorld {
 
                 Err(v) => {
                     println!("error while loading chunk file on '{path}': {v}");
-                    self.chunks.insert(pos, Chunk::generate(pos));
+                    self.chunks.insert(pos, Chunk::generate(pos, &self.perlin_noise));
                 }
             };
         }
     }
 
 
-    pub fn get_mesh(&mut self, pos: IVec3) -> &Mesh {
+    pub fn get_mesh(&mut self, pos: IVec3) -> &VoxelMesh {
         let chunk = self.get_chunk(pos);
         if chunk.mesh_state == MeshState::ShouldUpdate {
             let chunk = self.chunks.get_mut(&pos).unwrap();

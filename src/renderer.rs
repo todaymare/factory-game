@@ -71,6 +71,7 @@ impl Renderer {
         glfw.window_hint(glfw::WindowHint::OpenGlForwardCompat(true));
 
 
+
         let (mut window, window_events) = glfw.create_window(window_size.0 as u32, window_size.1 as u32, "factory game", glfw::WindowMode::Windowed)
             .unwrap();
 
@@ -89,12 +90,12 @@ impl Renderer {
             });
         }
 
-        let fragment = Shader::new(&fs::read("text.fs").unwrap(), ShaderType::Fragment).unwrap();
-        let vertex = Shader::new(&fs::read("text.vs").unwrap(), ShaderType::Vertex).unwrap();
+        let fragment = Shader::new(&fs::read("shaders/text.fs").unwrap(), ShaderType::Fragment).unwrap();
+        let vertex = Shader::new(&fs::read("shaders/text.vs").unwrap(), ShaderType::Vertex).unwrap();
         let text_shader = ShaderProgram::new(fragment, vertex).unwrap();
 
-        let fragment = Shader::new(&fs::read("ui.fs").unwrap(), ShaderType::Fragment).unwrap();
-        let vertex = Shader::new(&fs::read("ui.vs").unwrap(), ShaderType::Vertex).unwrap();
+        let fragment = Shader::new(&fs::read("shaders/ui.fs").unwrap(), ShaderType::Fragment).unwrap();
+        let vertex = Shader::new(&fs::read("shaders/ui.vs").unwrap(), ShaderType::Vertex).unwrap();
         let ui_shader = ShaderProgram::new(fragment, vertex).unwrap();
 
         unsafe { gl::Enable(gl::DEPTH_TEST) };
@@ -115,9 +116,7 @@ impl Renderer {
             panic!("[error] failed to load font");
         }
 
-
         dbg!(unsafe { FT_Set_Pixel_Sizes(face, FONT_SIZE, FONT_SIZE) });
-
 
         let mut characters = HashMap::new();
         let mut texture_atlas = TextureAtlasBuilder::new(GpuTextureFormat::Red);

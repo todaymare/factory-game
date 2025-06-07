@@ -132,9 +132,6 @@ impl Mesh {
             gl::EnableVertexAttribArray(0);
             gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, size_of::<Vertex>() as _, offset_of!(Vertex, position) as _);
 
-            //gl::EnableVertexAttribArray(1);
-            //gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE, size_of::<Vertex>() as _, offset_of!(Vertex, normal) as _);
-
             gl::EnableVertexAttribArray(1);
             gl::VertexAttribPointer(1, 4, gl::FLOAT, gl::FALSE, size_of::<Vertex>() as _, offset_of!(Vertex, colour) as _);
 
@@ -176,7 +173,7 @@ impl Drop for Mesh {
 
 
 impl Vertex {
-    pub fn new(pos: Vec3, normal: Vec3, colour: Vec4) -> Self {
+    pub fn new(pos: Vec3, _: Vec3, colour: Vec4) -> Self {
         Self { position: pos, colour }
     }
 }

@@ -1,11 +1,12 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use glam::IVec3;
+use libnoise::{Generator, Perlin, Simplex};
 use rand::{Rng, SeedableRng};
 
-use crate::{mesh::Mesh, voxel_world::voxel::VoxelKind};
+use crate::{perlin::PerlinNoise, voxel_world::voxel::VoxelKind};
 
-use super::voxel::Voxel;
+use super::{mesh::VoxelMesh, voxel::Voxel};
 
 
 pub const CHUNK_SIZE : usize = 32;
@@ -15,7 +16,7 @@ pub const CHUNK_SIZE : usize = 32;
 pub struct Chunk {
     pub data: [Voxel; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
     pub is_dirty: bool,
-    pub mesh: Mesh,
+    pub mesh: VoxelMesh,
     pub mesh_state: MeshState,
 }
 
@@ -34,30 +35,36 @@ impl Chunk {
         Chunk {
             data: [Voxel { kind: VoxelKind::Air }; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
             is_dirty: false,
-            mesh: Mesh::new(vec![], vec![]),
+            mesh: VoxelMesh::new(vec![], vec![]),
             mesh_state: MeshState::ShouldUpdate,
         }
     }
 
 
-    pub fn generate(position: IVec3) -> Chunk {
+    pub fn generate(pos: IVec3, perlin: &Perlin<2>) -> Chunk {
         let mut hasher = DefaultHasher::new();
-        position.hash(&mut hasher);
+        pos.hash(&mut hasher);
         let hash = hasher.finish();
         let mut rng = rand::rngs::SmallRng::seed_from_u64(hash);
-
         let mut chunk = Chunk::empty_chunk();
     
         for z in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
                 for x in 0..CHUNK_SIZE {
                     let chunk_local_position = IVec3::new(x as i32, y as i32, z as i32);
-                    let global_position = position * CHUNK_SIZE as i32 + chunk_local_position;
+                    let global_position = pos * CHUNK_SIZE as i32 + chunk_local_position;
+
+                    let sample_point = [
+                        global_position.x as f64 * 0.001 + 100_000.0,
+                        global_position.z as f64 * 0.001 + 100_000.0,
+                    ];
+                    let height = perlin.sample(sample_point);
+                    let height = (height*128.0).floor() as i32;
 
                     let mut kind = VoxelKind::Air;
-                    if global_position.y == 0 {
+                    if global_position.y == height {
                         kind = VoxelKind::Dirt;
-                    } else if global_position.y > 0 {
+                    } else if global_position.y > height {
                         kind = VoxelKind::Air;
                     } else {
                         let rand : f32 = rng.random_range(0.0..1.0);

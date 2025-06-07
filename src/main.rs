@@ -18,6 +18,7 @@ pub mod ui;
 pub mod save_system;
 pub mod commands;
 pub mod crafting;
+pub mod perlin;
 
 use std::{f32::consts::{PI, TAU}, fs, ops::{self}, time::Instant};
 
@@ -48,18 +49,15 @@ const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-const RENDER_DISTANCE : i32 = 4;
+const RENDER_DISTANCE : i32 = 5;
 
 const DROPPED_ITEM_SCALE : f32 = 0.25;
 
-#[cfg(feature = "dhat-heap")]
-#[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
+const TICKS_PER_SECOND : u32 = 60;
+const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32; 
+
 
 fn main() {
-    #[cfg(feature = "dhat-heap")]
-    let _profiler = dhat::Profiler::new_heap();
-
     let mut game = Game::new();
 
     let mut input = InputManager::default();
@@ -77,9 +75,14 @@ fn main() {
     let block_outline_mesh = Mesh::from_obj("assets/models/block_outline.obj");
 
 
-    let fragment = Shader::new(&fs::read("fragment.fs").unwrap(), shader::ShaderType::Fragment).unwrap();
-    let vertex = Shader::new(&fs::read("vertex.vs").unwrap(), shader::ShaderType::Vertex).unwrap();
-    let world_shader = ShaderProgram::new(fragment, vertex).unwrap();
+    let fragment = Shader::new(&fs::read("shaders/mesh.fs").unwrap(), shader::ShaderType::Fragment).unwrap();
+    let vertex = Shader::new(&fs::read("shaders/mesh.vs").unwrap(), shader::ShaderType::Vertex).unwrap();
+    let mesh_shader = ShaderProgram::new(fragment, vertex).unwrap();
+
+
+    let fragment = Shader::new(&fs::read("shaders/voxel.fs").unwrap(), shader::ShaderType::Fragment).unwrap();
+    let vertex = Shader::new(&fs::read("shaders/voxel.vs").unwrap(), shader::ShaderType::Vertex).unwrap();
+    let voxel_shader = ShaderProgram::new(fragment, vertex).unwrap();
 
 
     renderer.window.set_cursor_mode(glfw::CursorMode::Disabled);
@@ -90,6 +93,7 @@ fn main() {
         let _ = fs::create_dir("saves/chunks/");
         game.save();
     }
+
 
     game.load();
 
@@ -446,36 +450,45 @@ fn main() {
             renderer.ui_scale = game.ui_scale;
             renderer.begin();
 
+            let projection = glam::Mat4::perspective_rh_gl(80.0f32.to_radians(), 1920.0/1080.0, 0.01, 100_000.0);
+            let view = game.camera.view_matrix();
+
+
+            let mut triangles = 0;
             // render the world
             {
-                world_shader.use_program();
-                
-                let projection = glam::Mat4::perspective_rh_gl(80.0f32.to_radians(), 1920.0/1080.0, 0.01, 100_000.0);
-                let view = game.camera.view_matrix();
-
-                world_shader.set_matrix4(c"projection", projection);
-                world_shader.set_matrix4(c"view", view);
-                world_shader.set_vec4(c"modulate", Vec4::ONE);
+                voxel_shader.use_program();
+                voxel_shader.set_matrix4(c"projection", projection);
+                voxel_shader.set_matrix4(c"view", view);
+                voxel_shader.set_vec4(c"modulate", Vec4::ONE);
 
                 let (player_chunk, _) = split_world_pos(game.player.body.position.as_ivec3());
 
-                for x in -RENDER_DISTANCE..RENDER_DISTANCE {
-                    for y in -RENDER_DISTANCE..RENDER_DISTANCE {
-                        for z in -RENDER_DISTANCE..RENDER_DISTANCE {
+                let rd = game.player.render_distance;
+                for x in -rd..rd {
+                    for y in -rd..rd {
+                        for z in -rd..rd {
                             let pos = player_chunk + IVec3::new(x, y, z);
-
                             let mesh = game.world.get_mesh(pos);
 
                             let offset = pos * IVec3::splat(CHUNK_SIZE as i32);
                             let model = Mat4::from_translation(offset.as_vec3());
-                            world_shader.set_matrix4(c"model", model);
+                            voxel_shader.set_matrix4(c"model", model);
 
                             mesh.draw();
+                            triangles += mesh.indices;
                         }
                     }
                 }
             }
+            println!("{triangles}");
 
+
+            mesh_shader.use_program();
+
+            mesh_shader.set_matrix4(c"projection", projection);
+            mesh_shader.set_matrix4(c"view", view);
+            mesh_shader.set_vec4(c"modulate", Vec4::ONE);
 
 
             // render items
@@ -486,7 +499,7 @@ fn main() {
                     let scale = Vec3::splat(DROPPED_ITEM_SCALE);
                     let rot = (game.current_tick - item.creation_tick).u32() as f32 / TICKS_PER_SECOND as f32;
 
-                    renderer.draw_item(&world_shader, item.item.kind, position, scale, rot);
+                    renderer.draw_item(&mesh_shader, item.item.kind, position, scale, rot);
                 }
 
             }
@@ -495,7 +508,7 @@ fn main() {
             // render structures
             {
                 game.structures.for_each(|structure| {
-                    structure.render(&game.structures, &renderer, &world_shader);
+                    structure.render(&game.structures, &renderer, &mesh_shader);
                 });
             }
 
@@ -511,7 +524,7 @@ fn main() {
 
                     let model = Mat4::from_translation(pos.as_vec3() + Vec3::new(0.5, -0.005, 0.5));
                     let model = model * Mat4::from_scale(Vec3::new(1.01, 1.01, 1.01));
-                    world_shader.set_matrix4(c"model", model);
+                    mesh_shader.set_matrix4(c"model", model);
 
                     let modulate = if let Some(mining_progress) = game.player.mining_progress {
                         let progress = mining_progress as f32 / target_hardness as f32;
@@ -521,7 +534,7 @@ fn main() {
                         Vec4::ONE
                     };
 
-                    world_shader.set_vec4(c"modulate", modulate);
+                    mesh_shader.set_vec4(c"modulate", modulate);
                     block_outline_mesh.draw();
 
                 }
@@ -619,10 +632,6 @@ pub struct Game {
 }
 
 
-const TICKS_PER_SECOND : u32 = 60;
-const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32; 
-
-
 impl Game {
     pub fn new() -> Game {
         let mut this = Game {
@@ -654,6 +663,7 @@ impl Game {
                 interact_delay: 0.0,
                 pulling: Vec::new(),
                 speed: PLAYER_SPEED,
+                render_distance: RENDER_DISTANCE,
             },
 
             current_tick: Tick::initial(),
@@ -668,6 +678,13 @@ impl Game {
         this.command_registry.register("speed", |game, cmd| {
             let speed = cmd.arg(0)?.as_f32()?;
             game.player.speed = speed;
+            Some(())
+        });
+
+
+        this.command_registry.register("rd", |game, cmd| {
+            let speed = cmd.arg(0)?.as_i32()?;
+            game.player.render_distance = speed;
             Some(())
         });
 
@@ -730,7 +747,7 @@ impl Game {
 
         this.command_registry.register("remesh", |game, _| {
             game.world.chunks.iter_mut().for_each(|x| {
-                x.1.mesh = Mesh::new(vec![], vec![]);
+                x.1.mesh = voxel_world::mesh::VoxelMesh::new(vec![], vec![]);
                 x.1.mesh_state = MeshState::ShouldUpdate;
             });
             Some(())
@@ -994,6 +1011,7 @@ struct Player {
     interact_delay: f32,
     pulling: Vec<DroppedItem>,
     speed: f32,
+    render_distance: i32,
 }
 
 

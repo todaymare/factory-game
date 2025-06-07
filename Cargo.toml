@@ -7,7 +7,6 @@ edition = "2024"
 glam = { version = "*", features = ["rand", "serde"] }
 gl = "*"
 glfw = "*"
-#sti = { path = "./vendor/sti" }
 sti = { git = "https://github.com/leddoo/sti" }
 save-format = { git = "https://github.com/rookieCookies/save-format" }
 freetype = "*"
@@ -15,3 +14,13 @@ rand = "*"
 obj-rs = "*"
 
 image = "*"
+
+dhat = "*"
+libnoise = "1.2.0"
+
+[profile.release]
+debug = 1
+
+[features]
+dhat-heap = []    # if you are doing heap profiling
+dhat-ad-hoc = []  # if you are doing ad hoc profiling
