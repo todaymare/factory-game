@@ -3,7 +3,7 @@ pub mod textures;
 use std::{collections::HashMap, ffi::CString, fs, mem::offset_of, ptr::null_mut};
 
 use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
-use glam::{IVec2, Mat4, Quat, Vec2, Vec3, Vec4};
+use glam::{IVec2, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
 use textures::{TextureAtlasBuilder, TextureAtlasManager, TextureId};
 
@@ -37,6 +37,17 @@ pub struct Renderer {
     pub meshes: Assets,
     pub z: f32,
     pub ui_scale: f32,
+    pub rects: Vec<DrawRect>,
+
+    pub current_rect: ScreenRect,
+}
+
+
+pub struct DrawRect {
+    modulate: Vec4,
+    pos: Vec2,
+    dims: Vec2,
+    tex: TextureId,
 }
 
 
@@ -230,6 +241,8 @@ impl Renderer {
             atlases,
             z: 1.0,
             ui_scale: 1.0,
+            rects: vec![],
+            current_rect: ScreenRect::new(),
         };
 
         this
@@ -255,6 +268,33 @@ impl Renderer {
 
     pub fn end(&mut self) {
         unsafe { gl::Clear(gl::DEPTH_BUFFER_BIT) };
+
+        for rect in self.rects.iter() {
+            let tex = rect.tex;
+            let pos = rect.pos;
+            let dims = rect.dims;
+            let modulate = rect.modulate;
+
+            let uvs = self.atlases.get_uv(tex);
+            let buf = self.atlases.buf(tex);
+
+            let x0 = uvs.x;
+            let y0 = uvs.y;
+            let x1 = uvs.z;
+            let y1 = uvs.w;
+
+            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, self.z));
+            buf.push(UIVertex::new(pos, Vec2::new(x0, y0), modulate, self.z));
+            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, self.z));
+
+            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, self.z));
+            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, self.z));
+            buf.push(UIVertex::new(pos+dims, Vec2::new(x1, y1), modulate, self.z));
+
+            self.z += 0.0001;
+        }
+        self.rects.clear();
+
         let projection = glam::Mat4::orthographic_rh(0.0, self.window.get_size().0 as f32 / self.ui_scale, self.window.get_size().1 as f32 / self.ui_scale, 0.0, 0.001, 100.0);
         for (atlas, shader, buf) in self.atlases.atlases.values_mut() {
             shader.use_program();
@@ -356,24 +396,48 @@ impl Renderer {
     }
 
 
+    pub fn with_style<F: FnOnce(&mut Self)>(&mut self, style: Style, f: F) {
+        let mut prev_rect = self.current_rect;
+        self.current_rect = ScreenRect::new();
+        let len = self.rects.len();
+
+        f(self);
+
+        dbg!(self.current_rect);
+        self.current_rect.pos = self.current_rect.pos.min(style.fallback_pos);
+        self.current_rect.size = self.current_rect.size.max(style.min);
+
+
+        if style.margin != Vec4::ZERO {
+            self.current_rect.pos -= style.margin.xy();
+            self.current_rect.size += style.margin.xy() + style.margin.zw();
+        }
+
+        if style.bg != Vec4::ZERO {
+            let rect = DrawRect {
+                modulate: style.bg,
+                pos: self.current_rect.pos,
+                dims: self.current_rect.size,
+                tex: self.white,
+            };
+            self.rects.insert(len, rect);
+        }
+
+        prev_rect.include(self.current_rect);
+        self.current_rect = prev_rect;
+
+    }
+
     pub fn draw_tex_rect(&mut self, pos: Vec2, dims: Vec2, tex: TextureId, modulate: Vec4) {
-        let uvs = self.atlases.get_uv(tex);
-        let buf = self.atlases.buf(tex);
+        let rect = DrawRect {
+            modulate,
+            pos,
+            dims,
+            tex,
+        };
 
-        let x0 = uvs.x;
-        let y0 = uvs.y;
-        let x1 = uvs.z;
-        let y1 = uvs.w;
-
-        buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, self.z));
-        buf.push(UIVertex::new(pos, Vec2::new(x0, y0), modulate, self.z));
-        buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, self.z));
-
-        buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, self.z));
-        buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, self.z));
-        buf.push(UIVertex::new(pos+dims, Vec2::new(x1, y1), modulate, self.z));
-
-        self.z += 0.0001;
+        self.rects.push(rect);
+        self.current_rect.include(ScreenRect { pos, size: dims });
     }
 
 
@@ -508,3 +572,73 @@ pub fn point_in_rect(point: Vec2, rect_pos: Vec2, rect_size: Vec2) -> bool {
     point.y <= rect_pos.y + rect_size.y
 }
 
+
+
+#[derive(Debug, Clone, Copy)]
+struct ScreenRect {
+    pos: Vec2,
+    size: Vec2,
+}
+
+
+impl ScreenRect {
+    pub fn new() -> Self {
+        Self {
+            pos: Vec2::MAX,
+            size: Vec2::ZERO,
+        }
+    }
+
+
+    fn include(&mut self, sr: ScreenRect) {
+        self.pos = self.pos.min(sr.pos);
+
+        let other_corner = sr.pos + sr.size;
+        let rect_size = other_corner - self.pos;
+        self.size = self.size.max(rect_size);
+    }
+}
+
+
+#[derive(Debug, Clone, Copy)]
+pub struct Style {
+    bg: Vec4,
+    margin: Vec4,
+    min: Vec2,
+    fallback_pos: Vec2,
+}
+
+
+impl Style {
+    pub fn new() -> Self {
+        Self {
+            bg: Vec4::ZERO,
+            margin: Vec4::ZERO,
+            min: Vec2::MIN,
+            fallback_pos: Vec2::MAX,
+        }
+    }
+
+
+    pub fn bg(mut self, bg: Vec4) -> Self {
+        self.bg = bg;
+        self
+    }
+
+    pub fn margin(mut self, margin: Vec4) -> Self {
+        self.margin = margin;
+        self
+    }
+
+
+    pub fn min(mut self, min_size: Vec2) -> Self {
+        self.min = min_size;
+        self
+    }
+
+
+    pub fn fallback_pos(mut self, pos: Vec2) -> Self {
+        self.fallback_pos = pos;
+        self
+    }
+}

@@ -32,12 +32,29 @@ pub enum ItemKind {
     Voxel(VoxelKind),
 
     IronPlate,
+    CopperPlate,
+
+    IronGearWheel,
+    IronRod,
+    CopperWire,
+    MechanicalComponent,
+    ElectronicsKit,
 }
 
 
 pub struct Assets {
     textures: HashMap<ItemKind, TextureId>,
     models: HashMap<ItemKind, Mesh>,
+}
+
+
+impl Item {
+    pub const fn new(kind: ItemKind, amount: u32) -> Self {
+        Self {
+            amount,
+            kind,
+        }
+    }
 }
 
 
@@ -48,11 +65,21 @@ impl ItemKind {
         ItemKind::CopperOre,
         ItemKind::IronOre,
         ItemKind::Coal,
+
         ItemKind::IronPlate,
+        ItemKind::CopperPlate,
+
+        ItemKind::IronGearWheel,
+        ItemKind::IronRod,
+        ItemKind::CopperWire,
+        ItemKind::MechanicalComponent,
+        ItemKind::ElectronicsKit,
+
         ItemKind::Structure(StructureKind::Quarry),
         ItemKind::Structure(StructureKind::Inserter),
         ItemKind::Structure(StructureKind::Chest),
         ItemKind::Structure(StructureKind::Belt),
+        ItemKind::Structure(StructureKind::Assembler),
     ];
 
 
@@ -65,11 +92,20 @@ impl ItemKind {
             ItemKind::Structure(StructureKind::Inserter) => "inserter",
             ItemKind::Structure(StructureKind::Chest) => "chest",
             ItemKind::Structure(StructureKind::Quarry) => "quarry",
+            ItemKind::Structure(StructureKind::Assembler) => "assembler",
             ItemKind::Voxel(VoxelKind::Dirt) => "dirt_block",
             ItemKind::Voxel(VoxelKind::Stone) => "stone_block",
-            ItemKind::IronPlate => "iron_plate",
 
-            _ => "invalid",
+            ItemKind::IronPlate => "iron_plate",
+            ItemKind::CopperPlate => "copper_plate",
+
+            ItemKind::IronGearWheel => "iron_gear_wheel",
+            ItemKind::IronRod => "iron_rod",
+            ItemKind::CopperWire => "copper_wire",
+            ItemKind::MechanicalComponent => "mechanical_component",
+            ItemKind::ElectronicsKit => "electronics_kit",
+
+            ItemKind::Voxel(_) => "invalid",
         }
     }
 
@@ -152,26 +188,30 @@ impl Assets {
         let mut textures = HashMap::with_capacity(ItemKind::ALL.len());
         let mut models = HashMap::with_capacity(ItemKind::ALL.len());
 
+        let white_texture = texture_atlas.register(IVec2::new(1, 1), &[255, 255, 255, 255]);
+
         for &item in ItemKind::ALL {
             models.insert(item, item.create_mesh());
 
             let path = textures_dir.join(item.to_string()).with_added_extension("png");
-            let Ok(buf) = File::open(&path)
-            else {
-                println!("[error] unable to read texture path '{path:?}'");
-                panic!();
+
+            let texture = match File::open(&path) {
+                Ok(buf) => {
+                    let buf = BufReader::new(buf);
+                    let asset = PngDecoder::new(buf).unwrap();
+                    let dims = asset.dimensions();
+                    let dims = IVec2::new(dims.0 as _, dims.1 as _);
+
+                    let mut data = vec![0; asset.total_bytes() as _];
+                    asset.read_image(&mut data).unwrap();
+
+                    texture_atlas.register(dims, &data)
+                }
+
+                Err(_) => white_texture,
             };
 
-            let buf = BufReader::new(buf);
-            let asset = PngDecoder::new(buf).unwrap();
-            let dims = asset.dimensions();
-            let dims = IVec2::new(dims.0 as _, dims.1 as _);
-
-            let mut data = vec![0; asset.total_bytes() as _];
-            asset.read_image(&mut data).unwrap();
-
-            let id = texture_atlas.register(dims, &data);
-            textures.insert(item, id);
+            textures.insert(item, texture);
         }
 
 

@@ -9,7 +9,7 @@ use sti::define_key;
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use work_queue::WorkQueue;
 
-use crate::{directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Tick, DROPPED_ITEM_SCALE};
+use crate::{crafting::Recipe, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::Item, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Tick, DROPPED_ITEM_SCALE};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
@@ -26,6 +26,15 @@ pub struct Structures {
     pub to_be_awoken: Vec<StructureId>,
     pub current_tick: Tick,
 }
+
+
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct Crafter {
+    pub recipe: Recipe,
+    pub inventory: Vec<Item>,
+    pub output: Item,
+}
+
 
 
 impl Structures {
@@ -171,45 +180,6 @@ impl Ord for StructureId {
         self.0.key.cmp(&other.0.key)
     }
 }
-
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Slot {
-    pub item: Option<Item>,
-    pub expected: Option<ItemKind>,
-    pub max: u32,
-}
-
-
-impl Slot {
-    pub fn can_give(&self, item: Item) -> bool {
-        if let Some(current_item) = self.item {
-            if current_item.kind != item.kind { return false }
-            if current_item.amount + item.amount > self.max {
-                return false
-            }
-
-            return true;
-        } else if let Some(expected) = self.expected {
-            if expected != item.kind { return false }
-            if item.amount > self.max { return false }
-            return true;
-        } else {
-            return item.amount <= self.max;
-        }
-    }
-
-
-    pub fn give(&mut self, item: Item) {
-        assert!(self.can_give(item));
-        if let Some(slot) = &mut self.item {
-            slot.amount += item.amount;
-        } else {
-            self.item = Some(item);
-        }
-    }
-}
-
 
 impl Structure {
     pub fn update(id: StructureId, structures: &mut Structures, world: &mut VoxelWorld) {
@@ -369,6 +339,17 @@ impl Structure {
             },
 
 
+            StructureData::Assembler { crafter } => {
+                crafter.output.amount += 1;
+                if crafter.try_consume() {
+                    let time = crafter.recipe.time;
+                    structures.schedule_in(id, time);
+                } else {
+                    structure.is_asleep = true;
+                }
+            }
+
+
             StructureData::Chest { .. } => {},
             StructureData::Belt { .. } => {},
         }
@@ -418,6 +399,16 @@ impl Structure {
             },
 
 
+            StructureData::Assembler { crafter } => {
+                if crafter.try_consume() {
+                    let time = crafter.recipe.time;
+                    structures.schedule_in(id, time);
+                } else {
+                    structure.is_asleep = true;
+                }
+            }
+
+
             StructureData::Chest { .. } => {}
 
 
@@ -453,7 +444,7 @@ impl Structure {
         match &self.data {
             StructureData::Chest { inventory } => {
                 for (i, slot) in inventory.iter().enumerate() {
-                    let Some(item) = slot.item
+                    let Some(item) = slot
                     else { continue };
 
                     let mut hash = DefaultHasher::new();
@@ -493,7 +484,48 @@ impl Structure {
         }
     }
 
+}
 
+
+impl Crafter {
+    pub fn from_recipe(recipe: Recipe) -> Self {
+        let mut items = Vec::with_capacity(recipe.requirements.len());
+        for item in recipe.requirements {
+            let mut item = *item;
+            item.amount = 0;
+
+            items.push(item);
+        }
+
+        let mut output = recipe.result;
+        output.amount = 0;
+
+        Self {
+            recipe,
+            inventory: items,
+            output,
+        }
+    }
+
+
+    pub fn try_consume(&mut self) -> bool {
+        if self.output.amount >= self.recipe.result.amount * 2 { return false }
+        for i in 0..self.inventory.len() {
+            let recipe_item = self.recipe.requirements[i];
+            let inv_item = self.inventory[i];
+            if inv_item.amount < recipe_item.amount {
+                return false;
+            }
+        }
+    
+
+        for i in 0..self.inventory.len() {
+            let recipe_item = self.recipe.requirements[i];
+            let inv_item = &mut self.inventory[i];
+            inv_item.amount -= recipe_item.amount;
+        }
+        true
+    }
 }
 
 

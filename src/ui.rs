@@ -3,12 +3,13 @@ use std::{ops::Bound, fmt::Write};
 use glam::{Vec2, Vec4};
 use glfw::{CursorMode, Key};
 
-use crate::{commands::Command, crafting::{Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::strct::{InserterState, StructureData}, voxel_world::split_world_pos, Game, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE};
+use crate::{commands::Command, crafting::{Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer, Style}, structures::{strct::{InserterState, StructureData}, StructureId}, voxel_world::split_world_pos, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE};
 
 pub enum UILayer {
     Inventory {
         just_opened: bool,
         holding_item: Option<Item>,
+        inventory_mode: InventoryMode,
     },
     Console {
         text: String,
@@ -22,8 +23,15 @@ pub enum UILayer {
 }
 
 
+pub enum InventoryMode {
+    Chest(StructureId),
+    Recipes,
+}
+
+
 pub const HOTBAR_KEYS : &[Key] = &[Key::Num1, Key::Num2, Key::Num3,
-                               Key::Num4, Key::Num5, Key::Num6];
+                               Key::Num4, Key::Num5];
+const SLOT_SIZE : f32 = 64.0;
 
 
 impl UILayer {
@@ -41,6 +49,27 @@ impl UILayer {
             UILayer::Gameplay => false,
             UILayer::Inventory { .. } => true,
             UILayer::Console { .. } => true,
+        }
+    }
+
+
+    pub fn close(&mut self, game: &mut Game) {
+        match self {
+            UILayer::Inventory { holding_item, .. } => {
+                if let Some(holding_item) = holding_item {
+                    game.world.dropped_items.push(DroppedItem::new(*holding_item, game.player.body.position));
+                }
+
+                *self = UILayer::Gameplay;
+            },
+
+
+            UILayer::Console { .. } => {
+                *self = UILayer::Gameplay;
+            },
+
+
+            UILayer::Gameplay => (),
         }
     }
 
@@ -199,7 +228,7 @@ impl UILayer {
                         game.call_command(command);
                     }
 
-                    *self = UILayer::Gameplay;
+                    self.close(game);
                 } else {
                     *just_opened = false;
                 }
@@ -207,14 +236,10 @@ impl UILayer {
             }
 
 
-            UILayer::Inventory { just_opened, holding_item } => {
+            UILayer::Inventory { just_opened, holding_item, inventory_mode } => {
                 let window = renderer.window_size();
                 if input.is_key_just_pressed(Key::E) && !*just_opened {
-                    if let Some(holding_item) = holding_item {
-                        game.world.dropped_items.push(DroppedItem::new(*holding_item, game.player.body.position));
-                    }
-
-                    *self = UILayer::Gameplay;
+                    self.close(game);
                     return;
                 } else {
                     *just_opened = false;
@@ -224,22 +249,55 @@ impl UILayer {
                 renderer.draw_rect(Vec2::ZERO, window, Vec4::new(0.1, 0.1, 0.1, 0.5));
                 let window = renderer.window_size();
 
-                let rows = PLAYER_HOTBAR_SIZE;
-                let cols = PLAYER_ROW_SIZE;
+                let rows = PLAYER_ROW_SIZE;
+                let cols = PLAYER_HOTBAR_SIZE;
 
                 let slot_size = 64.0;
                 let padding = 16.0;
 
-                let size = Vec2::new(cols as f32, rows as f32) * (slot_size + padding) as f32;
-                let mut corner = window * 0.5 - size * 0.5;
-                corner.x += size.x * 0.5;
-                corner.x += 8.0;
-                draw_recipes(renderer, game, input, holding_item, corner);
+                let player_inv_size = Vec2::new(cols as f32, rows as f32) * (slot_size + padding) as f32;
+                let mut other_inv = None;
 
-                corner.x -= size.x;
-                corner.x -= 16.0;
+                match inventory_mode {
+                    InventoryMode::Chest(structure) => {
+                        let rows = 6;
+                        let cols = 6;
+                        let external_view_size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
 
-                draw_inventory(renderer, game, input, holding_item, corner);
+                        let mut corner = window * 0.5 - external_view_size * 0.5;
+                        corner.x += external_view_size.x * 0.5;
+                        corner.x += padding * 0.5;
+
+
+                        let structure = game.structures.get_mut(*structure);
+                        let StructureData::Chest { inventory } = &mut structure.data
+                        else { unreachable!() };
+
+                        let style = Style::new()
+                            .margin(Vec4::splat(padding * 0.5))
+                            .bg(Vec4::ONE);
+
+                        renderer.with_style(style, |renderer| {
+                            draw_inventory(renderer, inventory, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
+                        });
+
+                        other_inv = Some(inventory.as_mut_slice());
+                    },
+                    InventoryMode::Recipes => {
+
+                        let mut corner = window * 0.5 - player_inv_size * 0.5;
+                        corner.x += player_inv_size.x * 0.5;
+                        corner.x += padding * 0.5;
+
+                        draw_recipes(renderer, game, input, holding_item, corner);
+                    },
+                }
+
+                let mut corner = window * 0.5 - player_inv_size * 0.5;
+                corner.x -= player_inv_size.x * 0.5;
+                corner.x -= padding * 0.5;
+
+                draw_player_inventory(renderer, &mut game.player, &mut other_inv, input, holding_item, corner);
             }
 
             UILayer::Gameplay => {
@@ -323,12 +381,10 @@ impl UILayer {
                                     let _ = writeln!(text, "§e    - INPUT:");
 
                                     for slot in inventory {
-                                        if let Some(item) = slot.item {
-                                            let _ = writeln!(text, "§e      - §b{:?} §e{}x/{}x", item.kind, item.amount, slot.max);
-                                        } else if let Some(exp) = slot.expected {
-                                            let _ = writeln!(text, "§e      - §b{:?} §e0/{}", exp, slot.max);
+                                        if let Some(item) = slot {
+                                            let _ = writeln!(text, "§e      - §b{:?} §e{}x/{}x", item.kind, item.amount, item.kind.max_stack_size());
                                         } else {
-                                            let _ = writeln!(text, "§e      - §bEmpty §e0/{}", slot.max);
+                                            let _ = writeln!(text, "§e      - §bEmpty");
                                         }
                                    }
                                 }
@@ -354,6 +410,17 @@ impl UILayer {
                                             let _ = writeln!(text, "§e      - §bEmpty");
                                         }
                                     }
+                                }
+
+
+                                StructureData::Assembler { crafter } => {
+                                    let _ = writeln!(text, "Assembler");
+                                    let _ = writeln!(text, "§e  - INVENTORY:");
+                                    for item in &crafter.inventory {
+                                        let _ = writeln!(text, "§e      - §b{item:?}");
+                                    }
+                                    let _ = writeln!(text, "§e  - OUTPUT:");
+                                    let _ = writeln!(text, "§e      - §b{:?}", crafter.output);
                                 }
                             }
                         } else {
@@ -393,7 +460,7 @@ impl UILayer {
                     }
 
 
-                    if !game.structures.work_queue.entries.is_empty() {
+                    if !game.craft_queue.is_empty() {
                         let _ = writeln!(text, "§eCRAFT QUEUE:");
 
                         let mut i = 0;
@@ -402,8 +469,8 @@ impl UILayer {
                             total += *ticks;
                             let _ = writeln!(text, "§e- §b{:?}§e in §a{} §eticks", item, (total - game.craft_progress));
                             i += 1;
-                            if i > 3 {
-                                let len = game.structures.work_queue.entries.len();
+                            if i > 3 && i < game.craft_queue.len() {
+                                let len = game.craft_queue.len();
                                 let rem = len - i;
 
                                 if rem == 1 {
@@ -426,7 +493,7 @@ impl UILayer {
                         for dropped_item in game.world.dropped_items.iter() {
                             let _ = writeln!(text, "§e- §b{:?}§e: §a{:.1}, {:.1}, {:.1}", dropped_item.item, dropped_item.body.position.x, dropped_item.body.position.y, dropped_item.body.position.z);
                             i += 1;
-                            if i > 3 {
+                            if i > 3 && i < game.world.dropped_items.len() {
                                 let len = game.world.dropped_items.len();
                                 let rem = len - i;
 
@@ -568,7 +635,6 @@ enum CraftStepResult {
 
 impl RecipeCraft {
     pub fn try_craft(inv: [Option<Item>; PLAYER_INVENTORY_SIZE], recipe: Recipe) -> (bool, RecipeCraft) {
-        println!("try craft");
         let mut this = RecipeCraft {
             buffer: vec![],
             craft_queue: vec![],
@@ -576,7 +642,6 @@ impl RecipeCraft {
         };
 
         let result = this.perform_craft(0, recipe, 1);
-        dbg!(&this);
         (result, this)
     }
 
@@ -715,9 +780,9 @@ impl RecipeCraft {
 }
 
 
-fn draw_inventory(renderer: &mut Renderer, game: &mut Game, input: &InputManager, holding_item: &mut Option<Item>, corner: Vec2) {
-    let rows = PLAYER_HOTBAR_SIZE;
-    let cols = PLAYER_ROW_SIZE;
+fn draw_player_inventory(renderer: &mut Renderer, player: &mut Player, other_inv: &mut Option<&mut [Option<Item>]>, input: &InputManager, holding_item: &mut Option<Item>, corner: Vec2) {
+    let rows = PLAYER_ROW_SIZE;
+    let cols = PLAYER_HOTBAR_SIZE;
 
     let slot_size = 64.0;
     let padding = 16.0;
@@ -728,81 +793,43 @@ fn draw_inventory(renderer: &mut Renderer, game: &mut Game, input: &InputManager
 
     let mut base = corner + padding * 0.5;
     let point = renderer.to_point(input.mouse_position());
-    for col in 0..cols {
+    for row in 0..rows {
         let mut pos = base;
-        for row in 0..rows {
-            // render
-            let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(slot_size));
-
-            let colour = if is_mouse_intersecting { Vec4::new(1.0, 0.0, 0.0, 1.0) }
-                         else if col == game.player.hotbar { Vec4::new(0.4, 0.6, 0.4, 1.0) }
+        for col in 0..cols {
+            let slot_index = row*cols+col;
+            let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(SLOT_SIZE));
+            let colour = if slot_index/PLAYER_HOTBAR_SIZE == player.hotbar { Vec4::new(0.4, 0.6, 0.4, 1.0) }
                          else { (Vec4::ONE * 0.2).with_w(1.0) }; 
-            let mut slot = &mut game.player.inventory[col*rows+row];
 
-            renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
-            if let Some(item) = *slot {
-                renderer.draw_item_icon(item.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
-                renderer.draw_text(format!("{}", item.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
+
+            draw_inventory_item(renderer, &mut player.inventory, other_inv, input, holding_item,
+                                pos, slot_index, point, colour);
+
+            pos += Vec2::new(slot_size+padding, 0.0);
+                    
+            
+            if !is_mouse_intersecting {
+                continue;
             }
 
-            pos += Vec2::new(0.0, slot_size+padding);
+            let mut slot = &mut player.inventory[slot_index];
+            for (i, &key) in HOTBAR_KEYS.iter().enumerate() {
+                if !input.is_key_just_pressed(key) { continue }
 
+                let slot_item = *slot;
 
-            // handle interaction
-            if !is_mouse_intersecting {
+                let offset = player.hotbar * PLAYER_HOTBAR_SIZE;
+                let item = player.inventory[offset+i];
+                player.inventory[offset+i] = slot_item;
+                slot = &mut player.inventory[slot_index];
+                *slot = item;
                 continue
             }
 
-            if input.is_button_just_pressed(glfw::MouseButton::Button1) {
-                if let Some(inv_item) = slot && let Some(item) = holding_item && inv_item.kind == item.kind {
-                    let addition = item.amount.min(inv_item.kind.max_stack_size().max(inv_item.amount) - inv_item.amount);
 
-                    inv_item.amount += addition;
-
-                    item.amount -= addition;
-                    if item.amount == 0 {
-                        *holding_item = None;
-                    }
-                    continue
-                }
-
-                let item = *slot;
-                *slot = *holding_item;
-                *holding_item = item;
-            }
-            else if input.is_button_just_pressed(glfw::MouseButton::Button2) {
-                if let Some(item) = slot && holding_item.is_none() {
-                    let amount = item.amount;
-                    item.amount -= amount / 2;
-
-                    let mut new_item = *item;
-                    new_item.amount = amount / 2;
-                    if new_item.amount != 0 {
-                        *holding_item = Some(new_item);
-                        continue;
-                    }
-                }
-
-                let item = *slot;
-                *slot = *holding_item;
-                *holding_item = item;
-            }
-            else {
-                for (i, &key) in HOTBAR_KEYS.iter().enumerate() {
-                    if !input.is_key_just_pressed(key) { continue }
-
-                    let slot_item = *slot;
-
-                    let offset = game.player.hotbar * PLAYER_HOTBAR_SIZE;
-                    let item = game.player.inventory[offset+i];
-                    game.player.inventory[offset+i] = slot_item;
-                    slot = &mut game.player.inventory[col*rows+row];
-                    *slot = item;
-                }
-            }
         }
 
-        base += Vec2::new(slot_size+padding, 0.0)
+        base += Vec2::new(0.0, slot_size+padding)
     }
 
 
@@ -811,5 +838,136 @@ fn draw_inventory(renderer: &mut Renderer, game: &mut Game, input: &InputManager
         renderer.draw_text(format!("{}", item.amount).as_str(), point+slot_size*0.05, 0.5, Vec4::ONE);
     }
 
+
+}
+
+
+fn draw_inventory(renderer: &mut Renderer, inventory: &mut [Option<Item>],
+                  mut other_inv: Option<&mut [Option<Item>]>,
+                  input: &InputManager, holding_item: &mut Option<Item>,
+                  corner: Vec2, cols: usize, rows: usize) {
+    let slot_size = 64.0;
+    let padding = 16.0;
+
+    let size = Vec2::new(cols as f32, rows as f32) * (slot_size + padding) as f32;
+
+    //renderer.draw_rect(corner, size, Vec4::ONE);
+
+    let mut base = corner + padding * 0.5;
+    let point = renderer.to_point(input.mouse_position());
+    for row in 0..rows {
+        let mut pos = base;
+        for col in 0..cols {
+            let slot_index = row*cols+col;
+            let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(SLOT_SIZE));
+            let colour = (Vec4::ONE * 0.2).with_w(1.0); 
+
+            draw_inventory_item(renderer, inventory, &mut other_inv, input, holding_item,
+                                pos, slot_index, point, colour);
+
+            pos += Vec2::new(slot_size+padding, 0.0);
+            
+            if !is_mouse_intersecting {
+                continue
+            }
+
+        }
+
+        base += Vec2::new(0.0, slot_size+padding)
+    }
+
+
+    if let Some(item) = *holding_item {
+        renderer.draw_item_icon(item.kind, point, Vec2::splat(slot_size), Vec4::ONE);
+        renderer.draw_text(format!("{}", item.amount).as_str(), point+slot_size*0.05, 0.5, Vec4::ONE);
+    }
+}
+
+
+
+fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
+                       mut other_inv: &mut Option<&mut [Option<Item>]>,
+                       input: &InputManager, holding_item: &mut Option<Item>,
+                       pos: Vec2, index: usize, mouse: Vec2, mut colour: Vec4) {
+
+    let is_mouse_intersecting = point_in_rect(mouse, pos, Vec2::splat(SLOT_SIZE));
+    if is_mouse_intersecting {
+        colour += Vec4::splat(0.4);
+    }
+
+    renderer.draw_rect(pos, Vec2::splat(SLOT_SIZE), colour);
+
+    let slot = &mut inventory[index];
+
+    if let Some(item) = *slot {
+        renderer.draw_item_icon(item.kind, pos+SLOT_SIZE*0.05, Vec2::splat(SLOT_SIZE*0.9), Vec4::ONE);
+        renderer.draw_text(format!("{}", item.amount).as_str(), pos+SLOT_SIZE*0.05, 0.5, Vec4::ONE);
+    }
+
+    if !is_mouse_intersecting { return }
+
+    if input.is_button_pressed(glfw::MouseButton::Button1) && input.is_key_pressed(Key::LeftShift) {
+        if let Some(inv_item) = slot && let Some(other_inv) = &mut other_inv {
+            for slot in other_inv.iter_mut() {
+                if let Some(item) = slot {
+                    if item.kind != inv_item.kind {
+                        continue;
+                    }
+
+                    let addition = inv_item.amount.min(item.kind.max_stack_size() - item.amount);
+                    inv_item.amount -= addition;
+                    item.amount += addition;
+                    if inv_item.amount != 0 {
+                        continue;
+                    }
+                } else if inv_item.amount != 0 {
+                    *slot = Some(*inv_item);
+                }
+
+                let slot = &mut inventory[index];
+                *slot = None;
+                break;
+            }
+
+        }
+
+    } else if input.is_button_just_pressed(glfw::MouseButton::Button1) {
+        if let Some(inv_item) = slot
+           && let Some(item) = holding_item
+           && inv_item.kind == item.kind {
+
+            let addition = item.amount.min(inv_item.kind.max_stack_size().max(inv_item.amount) - inv_item.amount);
+
+            inv_item.amount += addition;
+
+            item.amount -= addition;
+            if item.amount == 0 {
+                *holding_item = None;
+            }
+            return;
+        }
+
+        let item = *slot;
+        *slot = *holding_item;
+        *holding_item = item;
+        return;
+    } else if input.is_button_just_pressed(glfw::MouseButton::Button2) {
+        if let Some(item) = slot && holding_item.is_none() {
+            let amount = item.amount;
+            item.amount -= amount / 2;
+
+            let mut new_item = *item;
+            new_item.amount = amount / 2;
+            if new_item.amount != 0 {
+                *holding_item = Some(new_item);
+                return;
+            }
+        }
+
+        let item = *slot;
+        *slot = *holding_item;
+        *holding_item = item;
+        return;
+    }
 
 }

@@ -23,7 +23,7 @@ use std::{f32::consts::{PI, TAU}, fs, ops::{self}, time::Instant};
 
 use commands::{Command, CommandRegistry};
 use directions::CardinalDirection;
-use ui::{UILayer, HOTBAR_KEYS};
+use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
 use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, split_world_pos, VoxelWorld};
 use glam::{IVec3, Mat4, Vec2, Vec3, Vec4};
 use glfw::{Key, MouseButton};
@@ -44,8 +44,8 @@ const PLAYER_REACH : f32 = 5.0;
 const PLAYER_SPEED : f32 = 5.0;
 const PLAYER_PULL_DISTANCE : f32 = 3.5;
 const PLAYER_INTERACT_DELAY : f32 = 0.2;
-const PLAYER_HOTBAR_SIZE : usize = 6;
-const PLAYER_ROW_SIZE : usize = 5;
+const PLAYER_HOTBAR_SIZE : usize = 5;
+const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
 const RENDER_DISTANCE : i32 = 4;
@@ -109,7 +109,7 @@ fn main() {
             
             game.camera.yaw = game.camera.yaw % 360f32.to_radians();
 
-            game.camera.pitch = game.camera.pitch.clamp((-89.9f32).to_radians(), 89f32.to_radians()) % 360f32.to_radians();
+            game.camera.pitch = game.camera.pitch.clamp((-89.9f32).to_radians(), 89.99f32.to_radians()) % 360f32.to_radians();
 
             let yaw = game.camera.yaw;
             let pitch = game.camera.pitch;
@@ -137,6 +137,11 @@ fn main() {
 
         // handle keyboard input
         'input: {
+            if input.is_key_just_pressed(Key::Escape) {
+                ui_layer.close(&mut game);
+                ui_layer = UILayer::Gameplay;
+            }
+
             if !matches!(ui_layer, UILayer::Gameplay) {
                 break 'input;
             }
@@ -228,13 +233,26 @@ fn main() {
             }
 
 
-            if input.is_key_just_pressed(Key::E) {
+            'i: { if input.is_key_just_pressed(Key::E) {
                 if matches!(ui_layer, UILayer::Inventory { .. }) {
-                    ui_layer = UILayer::Gameplay
-                } else {
-                    ui_layer = UILayer::Inventory { just_opened: true, holding_item: None }
+                    ui_layer = UILayer::Gameplay;
+                    break 'i;
+                } 
+
+                let mut inv_kind = InventoryMode::Recipes;
+                if let Some((raycast, _)) = game.world.raycast_voxel(game.camera.position, game.camera.direction, PLAYER_REACH) {
+                    let structure = game.world.structure_blocks.get(&raycast);
+                    if let Some(structure) = structure {
+                        let structure_kind = game.structures.get(*structure).data.as_kind();
+                        if structure_kind == StructureKind::Chest {
+                            inv_kind = InventoryMode::Chest(*structure);
+                        }
+                    }
                 }
-            }
+
+
+                ui_layer = UILayer::Inventory { just_opened: true, holding_item: None, inventory_mode: inv_kind };
+            } }
 
 
             if input.is_key_just_pressed(Key::G) {
@@ -287,6 +305,7 @@ fn main() {
                 if input.is_key_just_pressed(Key::Num3) { offset = Some(2) }
                 if input.is_key_just_pressed(Key::Num4) { offset = Some(3) }
                 if input.is_key_just_pressed(Key::Num5) { offset = Some(4) }
+                if input.is_key_just_pressed(Key::Num6) { offset = Some(5) }
 
                 if let Some(offset) = offset {
                     game.player.hotbar = offset;
@@ -523,12 +542,12 @@ fn main() {
                 let bottom_centre = Vec2::new(window.x * 0.5, window.y);
 
                 let slot_size = 64.0;
-                let slot_amount = 6;
+                let slot_amount = PLAYER_HOTBAR_SIZE;
                 let padding = 16.0;
 
                 let mut base = bottom_centre - Vec2::new((padding + slot_size) * slot_amount as f32 * 0.5, slot_size + padding);
 
-                for (i, slot) in game.player.inventory.iter().enumerate().skip(game.player.hotbar*6).take(6) {
+                for (i, slot) in game.player.inventory.iter().enumerate().skip(game.player.hotbar*PLAYER_HOTBAR_SIZE).take(PLAYER_HOTBAR_SIZE) {
                     let colour = if i == game.player.hand_index() { Vec4::new(1.0, 0.0, 0.0, 1.0) }
                                  else { (Vec4::ONE * 0.2).with_w(1.0) };
 
@@ -537,6 +556,7 @@ fn main() {
                         renderer.draw_item_icon(item.kind, base+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
                         renderer.draw_text(format!("{}", item.amount).as_str(), base+slot_size*0.05, 0.5, Vec4::ONE);
                     }
+
                     base += Vec2::new(slot_size+padding, 0.0);
                 }
 
@@ -593,9 +613,9 @@ impl Game {
                     aabb_dims: Vec3::new(0.8, 1.8, 0.8),
                 },
 
-                inventory: [None; 30],
+                inventory: [None; PLAYER_INVENTORY_SIZE],
                 hand: 0,
-                hotbar: 0,
+                hotbar: PLAYER_ROW_SIZE-1,
                 mining_progress: None,
                 interact_delay: 0.0,
                 pulling: Vec::new(),
@@ -614,6 +634,15 @@ impl Game {
         this.command_registry.register("speed", |game, cmd| {
             let speed = cmd.arg(0)?.as_f32()?;
             game.player.speed = speed;
+            Some(())
+        });
+
+
+
+        this.command_registry.register("clear_save", |game, _| {
+            *game = Game::new();
+            let _ = fs::remove_dir_all("saves/chunks");
+            let _ = fs::create_dir("saves/chunks");
             Some(())
         });
 
@@ -708,11 +737,13 @@ impl Game {
 
         let delta_time = DELTA_TICK;
 
-        if !self.craft_queue.is_empty() {
+        if !self.craft_queue.is_empty() && self.player.can_give(self.craft_queue[0].0) {
             self.craft_progress += 1;
             if self.craft_progress == self.craft_queue[0].1 {
                 let (result, _) = self.craft_queue.remove(0);
-                self.player.add_item(result);
+                if result.amount != 0 {
+                    self.player.add_item(result);
+                }
                 self.craft_progress = 0;
             }
         } else {
@@ -968,7 +999,7 @@ impl Player {
 
     pub fn add_item(&mut self, mut item: Item) {
         assert!(self.can_give(item));
-        let (before, now) = self.inventory.split_at_mut(self.hotbar * 6);
+        let (before, now) = self.inventory.split_at_mut(self.hotbar * PLAYER_HOTBAR_SIZE);
         for slot in now.iter_mut().chain(before.iter_mut()) {
             let Some(inv_item) = slot
             else { continue };
@@ -1003,7 +1034,7 @@ impl Player {
 
 
     pub fn hand_index(&self) -> usize {
-        self.hotbar * 6 + self.hand
+        self.hotbar * PLAYER_HOTBAR_SIZE + self.hand
     }
 
 

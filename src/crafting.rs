@@ -2,12 +2,70 @@ use crate::{items::{Item, ItemKind}, structures::strct::StructureKind, voxel_wor
 
 
 pub const RECIPES : &'static [Recipe] = &[
-    Recipe { result: Item { amount: 1, kind: ItemKind::Structure(StructureKind::Quarry) }, requirements: &[Item { amount: 8, kind: ItemKind::IronOre }, Item { amount: 8, kind: ItemKind::CopperOre }, Item { amount: 8, kind: ItemKind::Voxel(VoxelKind::Dirt) }, Item { amount: 8, kind: ItemKind::Voxel(VoxelKind::Stone) }], time: TICKS_PER_SECOND * 3 },
-    Recipe { result: Item { amount: 3, kind: ItemKind::Voxel(VoxelKind::Dirt)}, requirements: &[Item { amount: 8, kind: ItemKind::IronOre }], time: TICKS_PER_SECOND * 3 },
+    Recipe {
+        requirements: &[Item::new(ItemKind::IronOre, 1)],
+        result: Item::new(ItemKind::IronPlate, 1),
+        time: TICKS_PER_SECOND,
+    },
+    Recipe {
+        requirements: &[Item::new(ItemKind::CopperOre, 1)],
+        result: Item::new(ItemKind::CopperPlate, 1),
+        time: TICKS_PER_SECOND,
+    },
+
+
+    Recipe {
+        requirements: &[Item::new(ItemKind::IronPlate, 2)],
+        result: Item::new(ItemKind::IronGearWheel, 1),
+        time: TICKS_PER_SECOND/2,
+    },
+    Recipe {
+        requirements: &[Item::new(ItemKind::IronPlate, 1)],
+        result: Item::new(ItemKind::IronRod, 2),
+        time: TICKS_PER_SECOND/2,
+    },
+    Recipe {
+        requirements: &[Item::new(ItemKind::CopperPlate, 1)],
+        result: Item::new(ItemKind::CopperWire, 3),
+        time: TICKS_PER_SECOND/2,
+    },
+
+
+    Recipe {
+        requirements: &[Item::new(ItemKind::IronRod, 2), Item::new(ItemKind::IronGearWheel, 1)],
+        result: Item::new(ItemKind::MechanicalComponent, 1),
+        time: TICKS_PER_SECOND,
+    },
+    Recipe {
+        requirements: &[Item::new(ItemKind::CopperWire, 3), Item::new(ItemKind::CopperPlate, 1)],
+        result: Item::new(ItemKind::ElectronicsKit, 1),
+        time: TICKS_PER_SECOND,
+    },
+
+    Recipe {
+        requirements: &[Item::new(ItemKind::IronGearWheel, 1), Item::new(ItemKind::Voxel(VoxelKind::Stone), 4)],
+        result: Item::new(ItemKind::Structure(StructureKind::Belt), 3),
+        time: TICKS_PER_SECOND*2,
+    },
+    Recipe {
+        requirements: &[Item::new(ItemKind::IronGearWheel, 2), Item::new(ItemKind::Voxel(VoxelKind::Stone), 16)],
+        result: Item::new(ItemKind::Structure(StructureKind::Chest), 1),
+        time: TICKS_PER_SECOND*2,
+    },
+    Recipe {
+        requirements: &[Item::new(ItemKind::MechanicalComponent, 1), Item::new(ItemKind::ElectronicsKit, 1)],
+        result: Item::new(ItemKind::Structure(StructureKind::Inserter), 1),
+        time: TICKS_PER_SECOND*2,
+    },
+    Recipe {
+        requirements: &[Item::new(ItemKind::MechanicalComponent, 4), Item::new(ItemKind::Voxel(VoxelKind::Stone), 12)],
+        result: Item::new(ItemKind::Structure(StructureKind::Quarry), 1),
+        time: TICKS_PER_SECOND*2,
+    },
 ];
 
 
-#[derive(Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub struct Recipe {
     pub requirements: &'static [Item],
     pub result: Item,

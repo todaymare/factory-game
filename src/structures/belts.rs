@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Write};
 
-use glam::IVec3;
+use glam::{IVec3, Vec3};
 use sti::{define_key, key::Key, vec::KVec};
 
 use crate::{hsl_to_hex, structures::strct::{rotate_block_vector, StructureKind}, voxel_world::VoxelWorld};
@@ -30,22 +30,30 @@ impl Structures {
             }
 
 
-            let output_structure_offset = rotate_block_vector(structure.direction, IVec3::new(-1, 0, 0));
-            let output_structure_position = structure.zero_zero() + output_structure_offset;
-
             let mut output = None;
-            if let Some(&output_structure) = world.structure_blocks.get(&output_structure_position) {
-                let structure = self.get(output_structure);
-                if structure.data.as_kind() == StructureKind::Belt {
-                    let node_id = if let Some(&node_id) = struct_to_node.get(&output_structure) {
-                        node_id
-                    } else {
-                        let node_id = nodes.push(None);
-                        struct_to_node.insert(output_structure, node_id);
-                        node_id
-                    };
+            let positions = [
+                IVec3::new(-1,  0,  0),
+                IVec3::new(-1,  1,  0),
+                IVec3::new(-1, -1,  0),
+            ];
 
-                    output = Some(node_id)
+            for position in positions {
+                let position = rotate_block_vector(structure.direction, position);
+                let position = structure.position + position;
+                if let Some(&output_structure) = world.structure_blocks.get(&position) {
+                    let structure = self.get(output_structure);
+                    if structure.data.as_kind() == StructureKind::Belt {
+                        let node_id = if let Some(&node_id) = struct_to_node.get(&output_structure) {
+                            node_id
+                        } else {
+                            let node_id = nodes.push(None);
+                            struct_to_node.insert(output_structure, node_id);
+                            node_id
+                        };
+
+                        output = Some(node_id);
+                        break;
+                    }
                 }
             }
 

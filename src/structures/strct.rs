@@ -1,8 +1,8 @@
 use glam::IVec3;
 
-use crate::{directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh};
+use crate::{crafting::RECIPES, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh};
 
-use super::Slot;
+use super::Crafter;
 
 pub struct Structure {
     pub position: IVec3,
@@ -26,13 +26,18 @@ pub enum StructureData {
     },
 
     Chest {
-        inventory: Vec<Slot>,
+        inventory: Vec<Option<Item>>,
     },
 
 
     Belt {
         inventory: [[Option<Item>; 2]; 2],
     },
+
+
+    Assembler {
+        crafter: Crafter,
+    }
 
 }
 
@@ -50,6 +55,7 @@ pub enum StructureKind {
     Inserter,
     Chest,
     Belt,
+    Assembler,
 }
 
 
@@ -58,8 +64,9 @@ impl StructureData {
         match kind {
             StructureKind::Quarry => Self::Quarry { current_progress: 0, output: None },
             StructureKind::Inserter => Self::Inserter { state: InserterState::Searching, filter: None },
-            StructureKind::Chest => Self::Chest { inventory: vec![Slot { item: None, expected: None, max: 16 }; 32] },
+            StructureKind::Chest => Self::Chest { inventory: vec![None; 6*6] },
             StructureKind::Belt => Self::Belt { inventory: [[None; 2]; 2] },
+            StructureKind::Assembler => Self::Assembler { crafter: Crafter::from_recipe(RECIPES[0]) },
         }
     }
 
@@ -70,6 +77,7 @@ impl StructureData {
             StructureData::Inserter { .. } => StructureKind::Inserter,
             StructureData::Chest { .. } => StructureKind::Chest,
             StructureData::Belt { .. } => StructureKind::Belt,
+            StructureData::Assembler { .. } => StructureKind::Assembler,
         }
     }
 }
@@ -100,7 +108,14 @@ impl Structure {
 
             StructureData::Chest { inventory } => {
                 for slot in inventory {
-                    if slot.can_give(item) { return true }
+                    let Some(slot) = slot
+                    else { return true; };
+
+                    if slot.kind != item.kind { continue }
+
+                    if slot.amount + item.amount <= slot.kind.max_stack_size() {
+                        return true;
+                    }
                 }
 
                 false
@@ -118,6 +133,22 @@ impl Structure {
                 }
                 false
             },
+
+
+            StructureData::Assembler { crafter } => {
+                for i in 0..crafter.inventory.len() {
+                    let inventory_item = crafter.inventory[i];
+                    if inventory_item.kind != item.kind { continue }
+
+                    let recipe_amount = crafter.recipe.requirements[i].amount;
+                    if inventory_item.amount < recipe_amount * 2 {
+                        return true
+                    }
+                    return false
+                }
+
+                false
+            }
         }
     }
 
@@ -127,9 +158,14 @@ impl Structure {
         match &mut self.data {
             StructureData::Chest { inventory } => {
                 for slot in inventory {
-                    if slot.can_give(item) {
-                        slot.give(item);
-                        break;
+                    let Some(slot) = slot
+                    else { *slot = Some(item); return; };
+
+                    if slot.kind != item.kind { continue }
+
+                    if slot.amount + item.amount <= slot.kind.max_stack_size() {
+                        slot.amount += item.amount;
+                        return;
                     }
                 }
             },
@@ -148,6 +184,17 @@ impl Structure {
                 }
             },
 
+
+            StructureData::Assembler { crafter } => {
+                for slot in &mut crafter.inventory {
+                    if slot.kind == item.kind {
+                        slot.amount += item.amount;
+                    }
+                }
+            },
+
+
+
             _ => unreachable!(),
         }
     }
@@ -159,6 +206,7 @@ impl Structure {
             StructureData::Inserter { .. } => 0,
             StructureData::Chest { inventory } => inventory.len(),
             StructureData::Belt { .. } => 4,
+            StructureData::Assembler { crafter } => (crafter.output.amount != 0) as usize,
         }
     }
 
@@ -168,8 +216,13 @@ impl Structure {
         match &self.data {
             StructureData::Quarry { output, .. } => *output,
             StructureData::Inserter { .. } => None,
-            StructureData::Chest { inventory } => inventory[index].item,
+            StructureData::Chest { inventory } => inventory[index],
             StructureData::Belt { inventory } => inventory[index/2][index%2],
+            StructureData::Assembler { crafter } => {
+                let output = crafter.output;
+                if output.amount == 0 { return None };
+                Some(output)
+            }
         }
     }
 
@@ -183,7 +236,7 @@ impl Structure {
             StructureData::Inserter { .. } => None,
             StructureData::Chest { inventory } => {
                 let item = &mut inventory[index];
-                let item = &mut item.item;
+                let item = item;
 
                 if let Some(slot) = item {
                     slot.amount -= 1;
@@ -200,6 +253,15 @@ impl Structure {
 
                 None
             },
+
+
+            StructureData::Assembler { crafter } => {
+                let mut output = crafter.output;
+                if output.amount == 0 { return None };
+                crafter.output.amount -= 1;
+                output.amount = 1;
+                Some(output)
+            }
 
             StructureData::Belt { inventory } => {
                 let slot = &mut inventory[index / 2][index % 2];
@@ -274,6 +336,11 @@ impl StructureKind {
                 blocks_arr!(dir,
                     IVec3::ZERO)
             }
+
+            StructureKind::Assembler => {
+                blocks_arr!(dir,
+                    IVec3::ZERO)
+            }
         }
     }
 
@@ -284,6 +351,7 @@ impl StructureKind {
             StructureKind::Inserter => rotate_block_vector(dir, IVec3::new(2, 0, 0)),
             StructureKind::Chest => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
             StructureKind::Belt => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
+            StructureKind::Assembler => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
         }
     }
 
@@ -294,6 +362,7 @@ impl StructureKind {
             StructureKind::Inserter => Mesh::from_obj("assets/models/inserter.obj"),
             StructureKind::Chest => Mesh::from_obj("assets/models/block_outline.obj"),
             StructureKind::Belt => Mesh::from_obj("assets/models/belt.obj"),
+            StructureKind::Assembler => Mesh::from_obj("assets/models/belt.obj"),
         }
     }
 }

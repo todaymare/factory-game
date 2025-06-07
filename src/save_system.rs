@@ -4,7 +4,7 @@ use glam::{Vec2, Vec3};
 use save_format::{Arena, Value};
 use sti::format_in;
 
-use crate::{directions::CardinalDirection, items::{DroppedItem, Item, ItemKind}, structures::{strct::{InserterState, Structure, StructureData, StructureKind}, Slot}, Game, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
+use crate::{crafting::RECIPES, directions::CardinalDirection, items::{DroppedItem, Item, ItemKind}, structures::{strct::{InserterState, Structure, StructureData, StructureKind}, Crafter}, Game, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
 
 impl Game {
     #[allow(unused_must_use)]
@@ -146,15 +146,15 @@ impl Game {
 
                 StructureKind::Chest => {
                     let mut inv_i = 0;
-                    let mut inventory = vec![Slot { item: None, expected: None, max: 16 }; 32];
-                    while inv_i < 32 {
+                    let mut inventory = vec![None; 36];
+                    while inv_i < 36 {
                         buf.clear();
                         write!(buf, "structure[{i}].inventory[{inv_i}]");
                         let Some(str) = hm.get(buf.as_str())
                         else { inv_i += 1; continue; };
 
                         let item = parse_item(str.as_str());
-                        inventory[inv_i].item = Some(item);
+                        inventory[inv_i] = Some(item);
                         inv_i += 1;
                     }
 
@@ -181,6 +181,42 @@ impl Game {
 
                     StructureData::Belt { inventory }
                 },
+
+
+                StructureKind::Assembler => {
+                    buf.clear();
+                    write!(buf, "structure[{i}].recipe");
+                    let recipe = hm[&*buf].as_u32();
+                    let recipe = RECIPES[recipe as usize];
+                    let mut crafter = Crafter::from_recipe(recipe);
+
+                    for (index, item) in crafter.inventory.iter_mut().enumerate() {
+                        buf.clear();
+                        write!(buf, "structure[{i}].inventory[{index}]");
+                        dbg!(&buf);
+                        let str = hm[&*buf].as_str();
+                        let parsed_item = parse_item(&str);
+
+                        if parsed_item.kind == item.kind {
+                            item.amount += parsed_item.amount;
+                        } else {
+                            game.world.dropped_items.push(DroppedItem::new(*item, origin.as_vec3()));
+                        }
+                    }
+
+
+                    buf.clear();
+                    write!(buf, "structure[{i}].output");
+                    let str = hm[&*buf].as_str();
+                    let output = parse_item(&str);
+                    if output.kind == crafter.output.kind {
+                        crafter.output.amount += output.amount;
+                    } else {
+                        game.world.dropped_items.push(DroppedItem::new(output, origin.as_vec3()));
+                    }
+
+                    StructureData::Assembler { crafter }
+                }
             };
 
 
@@ -299,11 +335,11 @@ impl Game {
                 StructureData::Chest { inventory } => {
                     for (i, slot) in inventory.iter().enumerate() {
 
-                        let Some(item) = slot.item
+                        let Some(item) = slot
                         else { continue };
 
                         let path = format_in!(&arena, "{buf}.inventory[{i}]").leak();
-                        save_item(&arena, &mut v, path, item);
+                        save_item(&arena, &mut v, path, *item);
                     }
                 },
 
@@ -320,6 +356,19 @@ impl Game {
                         }
                     }
                 },
+
+
+                StructureData::Assembler { crafter } => {
+                    let (recipe_index, _) = RECIPES.iter().enumerate().find(|x| x.1 == &crafter.recipe).unwrap();
+
+                    v.push((format_in!(&arena, "{buf}.recipe").leak(), Value::Num(recipe_index as _)));
+                    let path = format_in!(&arena, "{buf}.output").leak();
+                    save_item(&arena, &mut v, path, crafter.output);
+                    for (i, item) in crafter.inventory.iter().enumerate() {
+                        let path = format_in!(&arena, "{buf}.inventory[{i}]").leak();
+                        save_item(&arena, &mut v, path, *item);
+                    }
+                }
             };
         }
 
@@ -340,6 +389,12 @@ impl Game {
             i += 1;
             let index = structure_to_index[&id.0];
             v.push((format_in!(&arena, "to_be_awoken[{i}]").leak(), Value::Num(index as f64)));
+        }
+
+
+        // craft queue
+        if !self.craft_queue.is_empty() {
+            println!("[warn] craft queue isn't saved currently");
         }
 
         std::fs::write("saves/world.sft", save_format::slice_to_string(&v)).unwrap();

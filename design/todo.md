@@ -16,7 +16,7 @@
 			- [ ] speed (damage per second) upgrade
 			- [ ] size (AxBxY) upgrade
 			- [ ] efficiency upgrade (decreases power usage)
-	- [ ] assemblers
+	- [x] assemblers
 - [ ] logistics
 	- [x] inserters
 		- [x] moves item from input inventory to output inventory
@@ -33,7 +33,7 @@
 	- [ ] assemblers
 	- [ ] manual crafting
 		- [ ] a shortcut to craft with missing items
-		- [ ] ui
+		- [x] ui
 	- [ ] recipes
 - [x] save & load functionality
 	- [x] serialization of the voxel world
