@@ -19,10 +19,6 @@ impl Structures {
         // create graph
         for (k, structure) in self.structs.iter() {
             let id = StructureId(k);
-            if structure.data.as_kind() != StructureKind::Belt {
-                continue;
-            }
-
             if let Some(&node) = struct_to_node.get(&id) {
                 if nodes[node].is_some() {
                     continue;
@@ -30,19 +26,32 @@ impl Structures {
             }
 
 
-            let mut output = None;
-            let positions = [
-                IVec3::new(-1,  0,  0),
-                IVec3::new(-1,  1,  0),
-                IVec3::new(-1, -1,  0),
-            ];
+            let mut output = [None, None];
+            let mut supports_multioutput = false;
+            let positions : &[_] = match structure.data.as_kind() {
+                StructureKind::Belt => &[
+                    IVec3::new(-1,  0,  0),
+                    IVec3::new(-1,  1,  0),
+                    IVec3::new(-1, -1,  0),
+                ],
+
+
+                StructureKind::Splitter => {
+                    supports_multioutput = true;
+                    &[
+                        IVec3::new(-1,  0,  0),
+                        IVec3::new(-1,  0,  1),
+                    ]
+                }
+                _ => continue,
+            };
 
             for position in positions {
-                let position = rotate_block_vector(structure.direction, position);
+                let position = rotate_block_vector(structure.direction, *position);
                 let position = structure.position + position;
                 if let Some(&output_structure) = world.structure_blocks.get(&position) {
                     let structure = self.get(output_structure);
-                    if structure.data.as_kind() == StructureKind::Belt {
+                    if matches!(structure.data.as_kind(), StructureKind::Belt | StructureKind::Splitter) {
                         let node_id = if let Some(&node_id) = struct_to_node.get(&output_structure) {
                             node_id
                         } else {
@@ -51,14 +60,21 @@ impl Structures {
                             node_id
                         };
 
-                        output = Some(node_id);
-                        break;
+                        if output[0].is_some() && supports_multioutput {
+                            output[1] = Some(node_id);
+                            break;
+                        } else {
+                            output[0] = Some(node_id);
+                            if !supports_multioutput {
+                                break;
+                            }
+                        }
                     }
                 }
             }
 
             let node = Node {
-                outputs: [output],
+                outputs: output,
                 structure_id: id,
             };
 
@@ -226,7 +242,7 @@ impl Structures {
 
 
 pub struct Node {
-    pub outputs: [Option<NodeId>; 1],
+    pub outputs: [Option<NodeId>; 2],
     pub structure_id: StructureId,
 }
 

@@ -413,6 +413,32 @@ impl UILayer {
                                 }
 
 
+                                StructureData::Splitter { inventory, priority } => {
+                                    let _ = writeln!(text, "Splitter");
+                                    let _ = writeln!(text, "§e  - PRIORITY: §a{priority:?}");
+                                    let _ = writeln!(text, "§e  - INVENTORY:");
+                                    for inventory in inventory {
+                                        let _ = writeln!(text, "§e    - LEFT LANE:");
+                                        for item in inventory[0] {
+                                            if let Some(item) = item {
+                                                let _ = writeln!(text, "§e      - §b{item:?}");
+                                            } else {
+                                                let _ = writeln!(text, "§e      - §bEmpty");
+                                            }
+                                        }
+
+                                        let _ = writeln!(text, "§e    - RIGHT LANE:");
+                                        for item in inventory[1] {
+                                            if let Some(item) = item {
+                                                let _ = writeln!(text, "§e      - §b{item:?}");
+                                            } else {
+                                                let _ = writeln!(text, "§e      - §bEmpty");
+                                            }
+                                        }
+                                    }
+                                }
+
+
                                 StructureData::Assembler { crafter } => {
                                     let _ = writeln!(text, "Assembler");
                                     let _ = writeln!(text, "§e  - INVENTORY:");

@@ -183,6 +183,28 @@ impl Game {
                 },
 
 
+                StructureKind::Splitter => {
+                    let mut inv_i = 0;
+                    let mut inventory = [[[None; 2]; 2]; 2];
+                    while inv_i < 8 {
+                        buf.clear();
+                        write!(buf, "structure[{i}].inventory[{inv_i}]");
+                        let Some(str) = hm.get(buf.as_str())
+                        else { inv_i += 1; continue; };
+
+                        let item = parse_item(str.as_str());
+                        let x = inv_i/4;
+                        let y = (inv_i%4)/2;
+                        let z = inv_i%2;
+                        inventory[x][y][z] = Some(item);
+                        inv_i += 1;
+                    }
+
+
+                    StructureData::Splitter { inventory, priority: [0, 0] }
+                },
+
+
                 StructureKind::Assembler => {
                     buf.clear();
                     write!(buf, "structure[{i}].recipe");
@@ -354,6 +376,19 @@ impl Game {
                             let path = format_in!(&arena, "{buf}.inventory[{}]", lane*2+i).leak();
                             save_item(&arena, &mut v, path, *item);
                         }
+                    }
+                },
+
+
+                StructureData::Splitter { inventory, priority } => {
+                    let inventory : [Option<Item>; 8] = unsafe { core::mem::transmute(*inventory) };
+
+                    for (i, item) in inventory.iter().enumerate() {
+                        let Some(item) = item
+                        else { continue };
+
+                        let path = format_in!(&arena, "{buf}.inventory[{}]", i).leak();
+                        save_item(&arena, &mut v, path, *item);
                     }
                 },
 

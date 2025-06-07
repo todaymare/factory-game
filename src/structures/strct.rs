@@ -4,6 +4,7 @@ use crate::{crafting::RECIPES, directions::CardinalDirection, items::{Item, Item
 
 use super::Crafter;
 
+#[derive(Debug)]
 pub struct Structure {
     pub position: IVec3,
     pub direction: CardinalDirection,
@@ -35,6 +36,12 @@ pub enum StructureData {
     },
 
 
+    Splitter {
+        inventory: [[[Option<Item>; 2]; 2]; 2],
+        priority: [u8; 2],
+    },
+
+
     Assembler {
         crafter: Crafter,
     }
@@ -55,6 +62,7 @@ pub enum StructureKind {
     Inserter,
     Chest,
     Belt,
+    Splitter,
     Assembler,
 }
 
@@ -66,6 +74,7 @@ impl StructureData {
             StructureKind::Inserter => Self::Inserter { state: InserterState::Searching, filter: None },
             StructureKind::Chest => Self::Chest { inventory: vec![None; 6*6] },
             StructureKind::Belt => Self::Belt { inventory: [[None; 2]; 2] },
+            StructureKind::Splitter => Self::Splitter { inventory: [[[None; 2]; 2]; 2], priority: [0, 0] },
             StructureKind::Assembler => Self::Assembler { crafter: Crafter::from_recipe(RECIPES[0]) },
         }
     }
@@ -77,6 +86,7 @@ impl StructureData {
             StructureData::Inserter { .. } => StructureKind::Inserter,
             StructureData::Chest { .. } => StructureKind::Chest,
             StructureData::Belt { .. } => StructureKind::Belt,
+            StructureData::Splitter { .. } => StructureKind::Splitter,
             StructureData::Assembler { .. } => StructureKind::Assembler,
         }
     }
@@ -128,6 +138,21 @@ impl Structure {
                     for i in 0..arr.len() {
                         if arr[i].is_none() {
                             return true;
+                        }
+                    }
+                }
+                false
+            },
+
+
+            StructureData::Splitter { inventory, priority } => {
+                for inventory in inventory {
+                    for arr in 0..inventory.len() {
+                        let arr = &inventory[arr];
+                        for i in 0..arr.len() {
+                            if arr[i].is_none() {
+                                return true;
+                            }
                         }
                     }
                 }
@@ -206,6 +231,7 @@ impl Structure {
             StructureData::Inserter { .. } => 0,
             StructureData::Chest { inventory } => inventory.len(),
             StructureData::Belt { .. } => 4,
+            StructureData::Splitter { .. } => 4,
             StructureData::Assembler { crafter } => (crafter.output.amount != 0) as usize,
         }
     }
@@ -218,6 +244,7 @@ impl Structure {
             StructureData::Inserter { .. } => None,
             StructureData::Chest { inventory } => inventory[index],
             StructureData::Belt { inventory } => inventory[index/2][index%2],
+            StructureData::Splitter { inventory, priority } => inventory[index/4][(index%4)/2][index%2],
             StructureData::Assembler { crafter } => {
                 let output = crafter.output;
                 if output.amount == 0 { return None };
@@ -265,6 +292,11 @@ impl Structure {
 
             StructureData::Belt { inventory } => {
                 let slot = &mut inventory[index / 2][index % 2];
+                slot.take()
+            },
+
+            StructureData::Splitter { inventory, priority } => {
+                let slot = &mut inventory[index/4][(index%4)/ 2][index % 2];
                 slot.take()
             },
         }
@@ -337,6 +369,13 @@ impl StructureKind {
                     IVec3::ZERO)
             }
 
+            StructureKind::Splitter => {
+                blocks_arr!(dir,
+                    IVec3::new(0, 0, 0),
+                    IVec3::new(0, 0, 1)
+                )
+            }
+
             StructureKind::Assembler => {
                 blocks_arr!(dir,
                     IVec3::ZERO)
@@ -351,6 +390,7 @@ impl StructureKind {
             StructureKind::Inserter => rotate_block_vector(dir, IVec3::new(2, 0, 0)),
             StructureKind::Chest => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
             StructureKind::Belt => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
+            StructureKind::Splitter => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
             StructureKind::Assembler => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
         }
     }
@@ -362,6 +402,7 @@ impl StructureKind {
             StructureKind::Inserter => Mesh::from_obj("assets/models/inserter.obj"),
             StructureKind::Chest => Mesh::from_obj("assets/models/block_outline.obj"),
             StructureKind::Belt => Mesh::from_obj("assets/models/belt.obj"),
+            StructureKind::Splitter => Mesh::from_obj("assets/models/belt.obj"),
             StructureKind::Assembler => Mesh::from_obj("assets/models/belt.obj"),
         }
     }

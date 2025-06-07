@@ -2,6 +2,7 @@ use core::ops::{Index, IndexMut};
 
 use sti::{alloc::{Alloc, GlobalAlloc}, key::Key, vec::KVec};
 
+#[derive(Debug)]
 pub struct KGenMap<G: Key, K: Key, V, A: Alloc = GlobalAlloc> {
     next: Option<K>,
     vec: KVec<K, (G, KGenVal<K, V>), A>,
@@ -23,6 +24,7 @@ impl<G: Key, K: Key> KeyGen<G, K> {
 }
 
 
+#[derive(Debug)]
 enum KGenVal<K, V> {
     Occupied(V),
     Free { next: Option<K> },
@@ -151,34 +153,25 @@ impl<G: Key, K: Key, V, A: Alloc> KGenMap<G, K, V, A> {
 
 
 
-    pub fn get_many_mut<'a>(&'a mut self, kg: KeyGen<G, K>, kg2: KeyGen<G, K>) -> [Option<&'a mut V>; 2] {
-        assert!(kg != kg2);
+    pub fn get_many_mut<'a, const N: usize>(&'a mut self, kg: [KeyGen<G, K>; N]) -> [Option<&'a mut V>; N] {
+        let arr : [usize; N] = core::array::from_fn(|i| kg[i].key.usize());
+        let arr : [&'a mut (G, KGenVal<K, V>); N] = self.vec.get_disjoint_mut(arr).unwrap();
+        
+        let mut ret = [const { None }; N];
 
-        let [kg1v, kg2v] = self.vec.get_disjoint_mut([kg.key.usize(), kg2.key.usize()]).unwrap();
-        
-        [
-        {
-                let (generation, slot) = kg1v;
-                if *generation != kg.gen_key { None }
-                else {
-                    match slot {
-                        KGenVal::Occupied(v) => Some(v),
-                        KGenVal::Free { .. } => None,
-                    }
-                }
-        },
-        {
-                let (generation, slot) = kg2v;
-                if *generation != kg2.gen_key { None }
-                    else {
-                    match slot {
-                        KGenVal::Occupied(v) => Some(v),
-                        KGenVal::Free { .. } => None,
-                    }
-                }
-        },
-        ]
-        
+        for (i, k) in arr.into_iter().enumerate() {
+            let (generation, slot) = k;
+            let slot : &'a mut KGenVal<_, V> = slot;
+
+            if *generation != kg[i].gen_key { continue }
+
+            match slot {
+                KGenVal::Occupied(v) => ret[i] = Some(v),
+                KGenVal::Free { .. } => (),
+            };
+        }
+
+        ret
     }
 
 }

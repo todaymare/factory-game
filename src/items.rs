@@ -79,6 +79,7 @@ impl ItemKind {
         ItemKind::Structure(StructureKind::Inserter),
         ItemKind::Structure(StructureKind::Chest),
         ItemKind::Structure(StructureKind::Belt),
+        ItemKind::Structure(StructureKind::Splitter),
         ItemKind::Structure(StructureKind::Assembler),
     ];
 
@@ -89,6 +90,7 @@ impl ItemKind {
             ItemKind::CopperOre => "copper_ore",
             ItemKind::IronOre => "iron_ore",
             ItemKind::Structure(StructureKind::Belt) => "belt",
+            ItemKind::Structure(StructureKind::Splitter) => "splitter",
             ItemKind::Structure(StructureKind::Inserter) => "inserter",
             ItemKind::Structure(StructureKind::Chest) => "chest",
             ItemKind::Structure(StructureKind::Quarry) => "quarry",

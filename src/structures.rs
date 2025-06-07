@@ -4,7 +4,9 @@ pub mod belts;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+use belts::{Belts, Node};
 use glam::{IVec3, Mat4, Vec3};
+use rand::seq::IndexedRandom;
 use sti::define_key;
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use work_queue::WorkQueue;
@@ -96,44 +98,9 @@ impl Structures {
     pub fn process(&mut self, world: &mut VoxelWorld) {
         self.current_tick = self.current_tick.inc();
         if self.current_tick.0 % 5 == 0 {
-            println!("update beltz");
-            let belts = self.belts(world);
-
-            for &node in belts.worklist.iter().rev() {
-
-                let node = belts.node(node);
-                
-                let (Some(structure), mut output_structure) = (if let Some(out) = node.outputs[0] {
-                    let out = belts.node(out);
-                    self.structs.get_many_mut(node.structure_id.0, out.structure_id.0).into()
-                } else {
-                    (self.structs.get_mut(node.structure_id.0), None)
-                })
-                else { unreachable!() };
-
-                let StructureData::Belt { inventory } = &mut structure.data 
-                else { unreachable!() };
-
-                for lane in [0, 1] {
-                    let mut index = 0;
-                    while let Some(item) = inventory[lane].get_mut(index) {
-                        if index == 0 && let Some(output_structure) = &mut output_structure {
-                            let StructureData::Belt { inventory, .. } = &mut output_structure.data
-                            else { unreachable!() };
-
-                            if inventory[lane][1].is_none() {
-                                inventory[lane][1] = item.take();
-                            }
-                        } else if index > 0 && inventory[lane][index-1].is_none() {
-                            let item = inventory[lane].get_mut(index).unwrap();
-                            inventory[lane][index-1] = item.take();
-                        }
-
-                        index += 1;
-                    }
-                }
-            }
+            self.update_belts(world);
         }
+
         let to_be_updated = self.work_queue.process(self.current_tick);
 
         let mut to_be_awoken = core::mem::take(&mut self.to_be_awoken);
@@ -163,6 +130,114 @@ impl Structures {
         }
 
         self.to_be_awoken.push(id);
+    }
+
+
+    fn update_belts(&mut self, world: &mut VoxelWorld) {
+        println!("[info] updating belts");
+        let belts = self.belts(world);
+
+
+        // we iterate in reverse because belts
+        // update from the last node to the first
+        for &node in belts.worklist.iter().rev() {
+            let node = belts.node(node);
+
+            // extract out the references
+            let [structure, output1, output2] = match node.outputs {
+                [None, None] => {
+                    let structure = self.structs.get_mut(node.structure_id.0);
+                    [structure, None, None]
+                },
+
+                [Some(o1), None] => {
+                    let o1 = belts.node(o1);
+                    let [s, o1] = self.structs.get_many_mut(
+                        [node.structure_id.0, o1.structure_id.0]);
+
+                    [s, o1, None]
+                },
+
+                [Some(o1), Some(o2)] => {
+                    let o1 = belts.node(o1);
+                    let o2 = belts.node(o2);
+                    self.structs.get_many_mut([
+                        node.structure_id.0,
+                        o1.structure_id.0,
+                        o2.structure_id.0
+                    ])
+                }
+
+                _ => unreachable!(),
+            };
+
+
+            let Some(structure) = structure
+            else { unreachable!() };
+
+            
+            match &mut structure.data {
+                StructureData::Belt { inventory } => {
+                    assert!(output2.is_none());
+                    let output = output1;
+                    Self::process_lanes(inventory, output);
+                },
+
+
+                StructureData::Splitter { inventory, .. } => {
+                    for (i, output) in [output1, output2].into_iter().enumerate() {
+                        let inventory = &mut inventory[i];
+                        Self::process_lanes(inventory, output);
+                    }
+                },
+
+                _ => unreachable!(),
+            }
+
+        }
+    }
+
+
+    fn process_lanes(inventory: &mut [[Option<Item>; 2]; 2], mut output: Option<&mut Structure>) {
+        for (lane, inventory) in inventory.iter_mut().enumerate() {
+            for i in 0..inventory.len() {
+                if i > 0 && inventory[i-1].is_none() {
+                    let item = &mut inventory[i];
+                    inventory[i-1] = item.take();
+                    continue;
+                }
+
+                let item = &mut inventory[i];
+                let Some(output_structure) = &mut output
+                else { continue };
+
+                match &mut output_structure.data {
+                    StructureData::Belt { inventory } => {
+                        if inventory[lane][1].is_none() {
+                            inventory[lane][1] = item.take();
+                        }
+                    },
+
+
+                    StructureData::Splitter { inventory, priority } => {
+                        for side in [0, 1] {
+                            let inventory = &mut inventory[(priority[lane] as usize + side) % 2];
+                            let inventory = &mut inventory[lane];
+
+                            let slot = &mut inventory[1];
+                            if slot.is_none() {
+                                *slot = item.take();
+                                priority[lane] += 1;
+                                priority[lane] %= 2;
+                            }
+
+                        }
+                    },
+
+                    _ => unreachable!(),
+                }
+            }
+        }
     }
 
 }
@@ -352,6 +427,7 @@ impl Structure {
 
             StructureData::Chest { .. } => {},
             StructureData::Belt { .. } => {},
+            StructureData::Splitter { .. } => {},
         }
     }
 
@@ -413,6 +489,7 @@ impl Structure {
 
 
             StructureData::Belt { .. } => {}
+            StructureData::Splitter { .. } => {}
         }
     }
 
@@ -483,7 +560,6 @@ impl Structure {
             _ => (),
         }
     }
-
 }
 
 
