@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
-use glam::{IVec2, Vec3, Vec4};
+use glam::{DVec3, IVec2, Vec3, Vec4};
 use image::{codecs::png::PngDecoder, ImageDecoder};
 use rand::random;
 
@@ -78,6 +78,7 @@ impl ItemKind {
         ItemKind::Structure(StructureKind::Quarry),
         ItemKind::Structure(StructureKind::Inserter),
         ItemKind::Structure(StructureKind::Chest),
+        ItemKind::Structure(StructureKind::Silo),
         ItemKind::Structure(StructureKind::Belt),
         ItemKind::Structure(StructureKind::Splitter),
         ItemKind::Structure(StructureKind::Assembler),
@@ -94,6 +95,7 @@ impl ItemKind {
             ItemKind::Structure(StructureKind::Splitter) => "splitter",
             ItemKind::Structure(StructureKind::Inserter) => "inserter",
             ItemKind::Structure(StructureKind::Chest) => "chest",
+            ItemKind::Structure(StructureKind::Silo) => "silo",
             ItemKind::Structure(StructureKind::Quarry) => "quarry",
             ItemKind::Structure(StructureKind::Assembler) => "assembler",
             ItemKind::Structure(StructureKind::Furnace) => "furnace",
@@ -170,7 +172,7 @@ impl ItemKind {
 
 
 impl DroppedItem {
-    pub fn new(item: Item, pos: Vec3) -> Self {
+    pub fn new(item: Item, pos: DVec3) -> Self {
         DroppedItem {
             item,
             body: PhysicsBody {

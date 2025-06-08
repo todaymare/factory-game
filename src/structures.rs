@@ -5,13 +5,13 @@ pub mod belts;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use belts::{Belts, Node};
-use glam::{IVec3, Mat4, Vec3};
+use glam::{DVec3, IVec3, Mat4, Vec3};
 use rand::seq::IndexedRandom;
 use sti::define_key;
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use work_queue::WorkQueue;
 
-use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::Item, renderer::Renderer, shader::ShaderProgram, voxel_world::{voxel::VoxelKind, VoxelWorld}, Tick, DROPPED_ITEM_SCALE};
+use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::Item, renderer::Renderer, shader::ShaderProgram, voxel_world::{split_world_pos, voxel::VoxelKind, VoxelWorld}, Camera, Tick, DROPPED_ITEM_SCALE};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
@@ -125,7 +125,10 @@ impl Structures {
         let blocks = structure.data.as_kind().blocks(structure.direction);
         for offset in blocks {
             let pos = placement_origin + offset;
-            world.get_voxel_mut(pos).kind = VoxelKind::StructureBlock;
+            let (chunk_pos, voxel_pos) = split_world_pos(pos);
+            let chunk = world.get_chunk_mut(chunk_pos);
+            chunk.get_mut(voxel_pos).kind = VoxelKind::StructureBlock;
+            chunk.persistent = true;
             world.structure_blocks.insert(pos, id);
         }
 
@@ -135,7 +138,6 @@ impl Structures {
 
 
     fn update_belts(&mut self, world: &mut VoxelWorld) {
-        println!("[info] updating belts");
         let belts = self.belts(world);
 
 
@@ -292,8 +294,6 @@ impl Structure {
                     let item = world.block_item(structures, zz + pos);
 
                     world.break_block(structures, zz + pos);
-
-
 
                     let structure = structures.get_mut_without_wake_up(id);
                     let StructureData::Quarry { output, .. } = &mut structure.data
@@ -466,6 +466,7 @@ impl Structure {
 
 
             StructureData::Chest { .. } => {},
+            StructureData::Silo { .. } => {},
             StructureData::Belt { .. } => {},
             StructureData::Splitter { .. } => {},
         }
@@ -553,8 +554,7 @@ impl Structure {
 
 
             StructureData::Chest { .. } => {}
-
-
+            StructureData::Silo { .. } => {}
             StructureData::Belt { .. } => {}
             StructureData::Splitter { .. } => {}
         }
@@ -562,7 +562,7 @@ impl Structure {
 
 
 
-    pub fn render(&self, _: &Structures, renderer: &Renderer, shader: &ShaderProgram) {
+    pub fn render(&self, _: &Structures, camera: &Camera, renderer: &Renderer, shader: &ShaderProgram) {
         let kind = self.data.as_kind();
 
         let position = self.position - self.data.as_kind().origin(self.direction);
@@ -576,7 +576,8 @@ impl Structure {
             max = max.max(position + offset);
         }
 
-        let mesh_position = (min + max).as_vec3() / 2.0 + Vec3::new(0.5, 0.0, 0.5);
+        let mesh_position = (min + max).as_dvec3() / 2.0 + DVec3::new(0.5, 0.0, 0.5);
+        let mesh_position = (mesh_position - camera.position).as_vec3();
 
         let rot = self.direction.as_ivec3().as_vec3();
         let rot = rot.x.atan2(rot.z);

@@ -3,6 +3,7 @@
 #![feature(btree_cursors)]
 #![feature(str_as_str)]
 #![feature(path_add_extension)]
+#![feature(if_let_guard)]
 
 pub mod shader;
 pub mod mesh;
@@ -19,14 +20,16 @@ pub mod save_system;
 pub mod commands;
 pub mod crafting;
 pub mod perlin;
+pub mod frustum;
 
-use std::{f32::consts::{PI, TAU}, fs, ops::{self}, time::Instant};
+use std::{collections::HashSet, f32::consts::{PI, TAU}, fs, ops::{self}, sync::Arc, time::Instant};
 
 use commands::{Command, CommandRegistry};
 use directions::CardinalDirection;
+use frustum::{Frustum};
 use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
 use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, split_world_pos, VoxelWorld};
-use glam::{IVec3, Mat4, Vec2, Vec3, Vec4};
+use glam::{DVec3, IVec3, Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{Key, MouseButton};
 use input::InputManager;
 use items::{DroppedItem, Item, ItemKind};
@@ -39,7 +42,7 @@ use structures::{strct::{Structure, StructureData, StructureKind}, Structures};
 define_key!(EntityId(u32));
 
 
-const MOUSE_SENSITIVITY : f32 = 0.1;
+const MOUSE_SENSITIVITY : f32 = 0.0016;
 
 const PLAYER_REACH : f32 = 5.0;
 const PLAYER_SPEED : f32 = 5.0;
@@ -49,7 +52,7 @@ const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-const RENDER_DISTANCE : i32 = 5;
+const RENDER_DISTANCE : i32 = 4;
 
 const DROPPED_ITEM_SCALE : f32 = 0.25;
 
@@ -60,9 +63,8 @@ const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32;
 fn main() {
     let mut game = Game::new();
 
-    let mut input = InputManager::default();
-    let mut renderer = Renderer::new((1920/2, 1080/2));
     let mut ui_layer = UILayer::Gameplay { smoothed_dt: 0.0 };
+    let mut renderer = Renderer::new((1920/2, 1080/2));
 
     for x in -RENDER_DISTANCE..RENDER_DISTANCE {
         for y in -RENDER_DISTANCE..RENDER_DISTANCE {
@@ -72,6 +74,7 @@ fn main() {
         }
     }
 
+    let mut input = InputManager::default();
     let block_outline_mesh = Mesh::from_obj("assets/models/block_outline.obj");
 
 
@@ -114,8 +117,8 @@ fn main() {
         // handle mouse movement 
         if matches!(ui_layer, UILayer::Gameplay { .. }) {
             let dt = input.mouse_delta();
-            game.camera.yaw += dt.x * delta_time * MOUSE_SENSITIVITY;
-            game.camera.pitch -= dt.y * delta_time * MOUSE_SENSITIVITY;
+            game.camera.yaw += dt.x * MOUSE_SENSITIVITY;
+            game.camera.pitch -= dt.y * MOUSE_SENSITIVITY;
             
             game.camera.yaw = game.camera.yaw % 360f32.to_radians();
 
@@ -127,7 +130,7 @@ fn main() {
             let y = pitch.sin();
             let z = yaw.sin() * pitch.cos();
 
-            game.camera.direction = Vec3::new(x, y, z).normalize();
+            game.camera.front = Vec3::new(x, y, z).normalize();
 
 
             let dt = input.scroll_delta();
@@ -158,15 +161,15 @@ fn main() {
 
             let mut dir = Vec3::ZERO;
             if input.is_key_pressed(Key::W) {
-                dir += game.camera.direction;
+                dir += game.camera.front;
             } else if input.is_key_pressed(Key::S) {
-                dir -= game.camera.direction;
+                dir -= game.camera.front;
             }
 
             if input.is_key_pressed(Key::D) {
-                dir += game.camera.direction.cross(game.camera.up);
+                dir += game.camera.front.cross(game.camera.up);
             } else if input.is_key_pressed(Key::A) {
-                dir -= game.camera.direction.cross(game.camera.up);
+                dir -= game.camera.front.cross(game.camera.up);
             }
 
             dir.y = 0.0;
@@ -183,7 +186,7 @@ fn main() {
 
             if input.is_key_pressed(Key::Q) {
                 let raycast = game.world.raycast_voxel(game.camera.position,
-                                                  game.camera.direction,
+                                                  game.camera.front,
                                                   PLAYER_REACH);
                 if let Some((pos, _)) = raycast {
                     let voxel = game.world.get_voxel(pos);
@@ -198,7 +201,7 @@ fn main() {
                             for index in 0..structure.available_items_len() {
                                 let item = structure.try_take(index);
                                 if let Some(item) = item {
-                                    let dropped_item = DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5));
+                                    let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5));
                                     game.world.dropped_items.push(dropped_item);
                                     break;
                                 }
@@ -212,7 +215,7 @@ fn main() {
 
             if input.is_key_pressed(Key::R) {
                 let raycast = game.world.raycast_voxel(game.camera.position,
-                                                  game.camera.direction,
+                                                  game.camera.front,
                                                   PLAYER_REACH);
                 if let Some((pos, _)) = raycast {
                     let voxel = game.world.get_voxel(pos);
@@ -233,7 +236,7 @@ fn main() {
                             if structure.can_accept(item) {
                                 structure.give_item(item);
                             } else {
-                                let dropped_item = DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5));
+                                let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5));
                                 game.world.dropped_items.push(dropped_item);
                             }
                         }
@@ -249,12 +252,14 @@ fn main() {
                 } 
 
                 let mut inv_kind = InventoryMode::Recipes;
-                if let Some((raycast, _)) = game.world.raycast_voxel(game.camera.position, game.camera.direction, PLAYER_REACH) {
+                if let Some((raycast, _)) = game.world.raycast_voxel(game.camera.position, game.camera.front, PLAYER_REACH) {
                     let structure = game.world.structure_blocks.get(&raycast);
                     if let Some(structure) = structure {
                         let structure_kind = game.structures.get(*structure).data.as_kind();
                         if structure_kind == StructureKind::Chest {
                             inv_kind = InventoryMode::Chest(*structure);
+                        } else if structure_kind == StructureKind::Silo {
+                            inv_kind = InventoryMode::Silo(*structure);
                         } else if structure_kind == StructureKind::Assembler {
                             inv_kind = InventoryMode::Assembler(*structure);
                         }
@@ -293,7 +298,7 @@ fn main() {
 
 
             if input.is_key_pressed(Key::F3) && input.is_key_just_pressed(Key::T) {
-                game.world.chunks.iter_mut().for_each(|x| x.1.mesh_state = MeshState::ShouldUpdate);
+                game.world.chunks.iter_mut().filter_map(|x| x.1.as_mut()).for_each(|x| x.mesh_state = MeshState::ShouldUpdate);
             }
 
 
@@ -345,7 +350,7 @@ fn main() {
 
 
                 let Some((pos, _))= game.world.raycast_voxel(game.camera.position,
-                                                             game.camera.direction,
+                                                             game.camera.front,
                                                              PLAYER_REACH)
                 else {
                     game.player.mining_progress = None;
@@ -361,7 +366,7 @@ fn main() {
 
 
                 let voxel = game.world.get_voxel(pos);
-                if mining_progress < voxel.kind.base_hardness() {
+                if mining_progress < voxel.kind.base_hardness()/2 {
                     break 'input_block;
                 }
 
@@ -369,7 +374,7 @@ fn main() {
                 let item = game.world.break_block(&mut game.structures, pos);
 
 
-                let dropped_item = DroppedItem::new(item, pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5));
+                let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5));
 
                 game.world.dropped_items.push(dropped_item);
                 game.player.mining_progress = None;
@@ -392,7 +397,7 @@ fn main() {
 
 
                 let Some((pos, normal)) = game.world.raycast_voxel(game.camera.position,
-                                                                   game.camera.direction,
+                                                                   game.camera.front,
                                                                    PLAYER_REACH)
                 else { break 'input_block };
 
@@ -430,6 +435,7 @@ fn main() {
             }
         }
 
+
         // simulate!
         {
             while time_since_last_simulation_step > DELTA_TICK {
@@ -448,30 +454,52 @@ fn main() {
         // render
         {
             renderer.ui_scale = game.ui_scale;
-            renderer.begin();
+            renderer.begin(game.sky_colour);
 
-            let projection = glam::Mat4::perspective_rh_gl(80.0f32.to_radians(), 1920.0/1080.0, 0.01, 100_000.0);
+            let projection = game.camera.perspective_matrix();
             let view = game.camera.view_matrix();
 
 
             let mut triangles = 0;
+            let mut total_rendered = 0;
+            let time = Instant::now();
             // render the world
             {
+                let frustum = if let Some(frustum) = game.lock_frustum.clone() { frustum }
+                              else { Frustum::compute(game.camera.perspective_matrix(), game.camera.view_matrix()) };
+
                 voxel_shader.use_program();
                 voxel_shader.set_matrix4(c"projection", projection);
                 voxel_shader.set_matrix4(c"view", view);
                 voxel_shader.set_vec4(c"modulate", Vec4::ONE);
+                voxel_shader.set_vec3(c"cameraPos", game.camera.position.as_vec3());
+                voxel_shader.set_vec3(c"fog_color", game.sky_colour.xyz());
+                voxel_shader.set_f32(c"fog_density", 1.0);
+                let fog_distance = game.player.render_distance - 1;
+                voxel_shader.set_f32(c"fog_start", (fog_distance * CHUNK_SIZE as i32) as f32 * 0.9);
+                voxel_shader.set_f32(c"fog_end", (fog_distance * CHUNK_SIZE as i32) as f32);
 
                 let (player_chunk, _) = split_world_pos(game.player.body.position.as_ivec3());
-
                 let rd = game.player.render_distance;
+
                 for x in -rd..rd {
                     for y in -rd..rd {
                         for z in -rd..rd {
                             let pos = player_chunk + IVec3::new(x, y, z);
-                            let mesh = game.world.get_mesh(pos);
+                            let min = (pos * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
+                            let max = ((pos + IVec3::ONE) * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
+
+                            if !frustum.is_box_visible(min.as_vec3(), max.as_vec3()) {
+                                continue;
+                            }
+
+                            total_rendered += 1;
+                            let Some(mesh) = game.world.try_get_mesh(pos)
+                            else { continue };
+                            if mesh.indices == 0 { continue }
 
                             let offset = pos * IVec3::splat(CHUNK_SIZE as i32);
+                            let offset = offset.as_dvec3() - game.camera.position;
                             let model = Mat4::from_translation(offset.as_vec3());
                             voxel_shader.set_matrix4(c"model", model);
 
@@ -481,7 +509,10 @@ fn main() {
                     }
                 }
             }
-            println!("{triangles}");
+
+            game.triangle_count = triangles;
+            game.render_world_time = time.elapsed().as_millis() as _;
+            game.total_rendered_chunks = total_rendered;
 
 
             mesh_shader.use_program();
@@ -494,12 +525,12 @@ fn main() {
             // render items
             {
                 for item in game.world.dropped_items.iter().chain(game.player.pulling.iter()) {
-                    let position = item.body.position;
+                    let position = item.body.position - game.camera.position;
 
                     let scale = Vec3::splat(DROPPED_ITEM_SCALE);
                     let rot = (game.current_tick - item.creation_tick).u32() as f32 / TICKS_PER_SECOND as f32;
 
-                    renderer.draw_item(&mesh_shader, item.item.kind, position, scale, rot);
+                    renderer.draw_item(&mesh_shader, item.item.kind, position.as_vec3(), scale, rot);
                 }
 
             }
@@ -508,7 +539,7 @@ fn main() {
             // render structures
             {
                 game.structures.for_each(|structure| {
-                    structure.render(&game.structures, &renderer, &mesh_shader);
+                    structure.render(&game.structures, &game.camera, &renderer, &mesh_shader);
                 });
             }
 
@@ -516,11 +547,12 @@ fn main() {
             // render block outline
             {
                 let raycast = game.world.raycast_voxel(game.camera.position,
-                                                  game.camera.direction,
+                                                  game.camera.front,
                                                   PLAYER_REACH);
                 if let Some((pos, _)) = raycast {
                     let voxel = game.world.get_voxel(pos);
                     let target_hardness = voxel.kind.base_hardness();
+                    let pos = pos.as_dvec3() - game.camera.position;
 
                     let model = Mat4::from_translation(pos.as_vec3() + Vec3::new(0.5, -0.005, 0.5));
                     let model = model * Mat4::from_scale(Vec3::new(1.01, 1.01, 1.01));
@@ -572,7 +604,7 @@ fn main() {
 
             // render interact text
             'block: {
-            if let Some((raycast, _)) = game.world.raycast_voxel(game.camera.position, game.camera.direction, PLAYER_REACH) {
+            if let Some((raycast, _)) = game.world.raycast_voxel(game.camera.position, game.camera.front, PLAYER_REACH) {
                 let Some(structure) = game.world.structure_blocks.get(&raycast)
                 else { break 'block };
 
@@ -629,21 +661,36 @@ pub struct Game {
     ui_scale: f32,
     craft_queue: Vec<(Item, u32)>,
     craft_progress: u32,
+    triangle_count: u32,
+    render_world_time: u32,
+    total_rendered_chunks: u32,
+    lock_frustum: Option<Frustum>,
+    sky_colour: Vec4,
 }
 
 
 impl Game {
     pub fn new() -> Game {
         let mut this = Game {
+            triangle_count: 0,
+            total_rendered_chunks: 0,
+            render_world_time: 0,
+            lock_frustum: None,
+            sky_colour: Vec4::new(116.0, 217.0, 249.0, 255.0) / Vec4::splat(255.0),
+
             world: VoxelWorld::new(),
             structures: Structures::new(),
 
             camera: Camera {
-                position: Vec3::ZERO,
-                direction: Vec3::Z,
+                position: DVec3::ZERO,
+                front: Vec3::Z,
                 up: Vec3::new(0.0, 1.0, 0.0),
                 pitch: 0.0,
                 yaw: 90.0f32.to_radians(),
+                fov: 80.0f32.to_radians(),
+                aspect_ratio: 16.0/9.0,
+                near: 0.001,
+                far: 10000.0,
 
             },
 
@@ -651,7 +698,7 @@ impl Game {
 
             player: Player {
                 body: PhysicsBody {
-                    position: Vec3::new(0.0, 10.0, 0.0),
+                    position: DVec3::new(0.0, 10.0, 0.0),
                     velocity: Vec3::ZERO,
                     aabb_dims: Vec3::new(0.8, 1.8, 0.8),
                 },
@@ -720,10 +767,10 @@ impl Game {
 
 
         this.command_registry.register("tp", |game, cmd| {
-            let x = cmd.arg(0)?.as_f32()?;
-            let y = cmd.arg(1)?.as_f32()?;
-            let z = cmd.arg(2)?.as_f32()?;
-            let pos = Vec3::new(x, y, z);
+            let x = cmd.arg(0)?.as_f64()?;
+            let y = cmd.arg(1)?.as_f64()?;
+            let z = cmd.arg(2)?.as_f64()?;
+            let pos = DVec3::new(x, y, z);
             game.player.body.position = pos;
 
             Some(())
@@ -746,10 +793,20 @@ impl Game {
         });
 
         this.command_registry.register("remesh", |game, _| {
-            game.world.chunks.iter_mut().for_each(|x| {
-                x.1.mesh = voxel_world::mesh::VoxelMesh::new(vec![], vec![]);
-                x.1.mesh_state = MeshState::ShouldUpdate;
+
+            game.world.chunks.iter_mut().filter_map(|x| x.1.as_mut()).for_each(|x| {
+                x.mesh = None;
+                x.mesh_state = MeshState::ShouldUpdate;
             });
+            Some(())
+        });
+
+        this.command_registry.register("toggle_frustum", |game, _| {
+            if game.lock_frustum.is_some() {
+                game.lock_frustum = None;
+            } else {
+                game.lock_frustum = Some(Frustum::compute(game.camera.perspective_matrix(), game.camera.view_matrix()));
+            }
             Some(())
         });
 
@@ -830,7 +887,7 @@ impl Game {
                     if lifetime.u32() < (0.2 * TICKS_PER_SECOND as f32) as u32 { i += 1; continue }
 
                     let distance = item.body.position.distance_squared(self.player.body.position);
-                    if distance.abs() > PLAYER_PULL_DISTANCE*PLAYER_PULL_DISTANCE {
+                    if distance.abs() as f32 > PLAYER_PULL_DISTANCE*PLAYER_PULL_DISTANCE {
                         i += 1;
                         continue;
                     }
@@ -864,7 +921,7 @@ impl Game {
                         let item = pulling.remove(i);
                         self.player.add_item(item.item);
                     } else {
-                        item.body.position = item.body.position.move_towards(self.player.body.position, 10.0 * (1.0 + distance * 0.1) * delta_time);
+                        item.body.position = item.body.position.move_towards(self.player.body.position, 10.0 * (1.0 + distance * 0.1) * delta_time as f64);
                         i += 1;
                     }
                 }
@@ -893,7 +950,7 @@ impl Game {
 
 #[derive(Clone, Copy)]
 pub struct PhysicsBody {
-    position: Vec3,
+    position: DVec3,
     velocity: Vec3,
 
     aabb_dims: Vec3,
@@ -1109,21 +1166,29 @@ impl Player {
 }
 
 
-struct Camera {
-    position: Vec3,
-    direction: Vec3,
+pub struct Camera {
+    position: DVec3,
+    front: Vec3,
     up: Vec3,
-
 
     pitch: f32,
     yaw: f32,
+
+    fov: f32,
+    aspect_ratio: f32,
+    near: f32,
+    far: f32,
 
 }
 
 
 impl Camera {
+    pub fn perspective_matrix(&self) -> Mat4 {
+        glam::Mat4::perspective_rh_gl(self.fov, self.aspect_ratio, self.near, self.far)
+    }
+
     pub fn view_matrix(&self) -> Mat4 {
-        Mat4::look_to_rh(self.position, self.direction, self.up)
+        Mat4::look_to_rh(Vec3::ZERO, self.front, self.up)
     }
 
 
@@ -1142,6 +1207,11 @@ impl Camera {
             3 => CardinalDirection::East,
             _ => unreachable!(),
         }
+    }
+
+
+    pub fn right(&self) -> Vec3 {
+        self.up.cross(self.front)
     }
 }
 

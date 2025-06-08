@@ -5,11 +5,13 @@ layout (location = 1) in uint colour;
 //layout (location = 1) in vec4 aColour;
 
 out vec4 Colour;
+out float v_distance;
 
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 uniform vec4 modulate;
+uniform vec3 cameraPos;
 
 
 vec3 unpack_voxel_pos() {
@@ -33,5 +35,7 @@ void main()
     vec4 colour = unpack_voxel_color();
     Colour = colour * modulate;
     gl_Position = projection * view * model * vec4(pos, 1.0);
+    vec3 world_pos = (model * vec4(pos, 1.0)).xyz;
+    v_distance = length(world_pos);
 }
 

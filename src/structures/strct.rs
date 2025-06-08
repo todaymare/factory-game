@@ -27,7 +27,11 @@ pub enum StructureData {
     },
 
     Chest {
-        inventory: Vec<Option<Item>>,
+        inventory: [Option<Item>; 3*3],
+    },
+
+    Silo {
+        inventory: [Option<Item>; 6*6],
     },
 
 
@@ -66,6 +70,7 @@ pub enum StructureKind {
     Quarry,
     Inserter,
     Chest,
+    Silo,
     Belt,
     Splitter,
     Assembler,
@@ -78,7 +83,8 @@ impl StructureData {
         match kind {
             StructureKind::Quarry => Self::Quarry { current_progress: 0, output: None },
             StructureKind::Inserter => Self::Inserter { state: InserterState::Searching, filter: None },
-            StructureKind::Chest => Self::Chest { inventory: vec![None; 6*6] },
+            StructureKind::Chest => Self::Chest { inventory: [None; 3*3] },
+            StructureKind::Silo => Self::Silo { inventory: [None; 6*6] },
             StructureKind::Belt => Self::Belt { inventory: [[None; 2]; 2] },
             StructureKind::Splitter => Self::Splitter { inventory: [[[None; 2]; 2]; 2], priority: [0, 0] },
             StructureKind::Assembler => Self::Assembler { crafter: Crafter::from_recipe(RECIPES[0]) },
@@ -92,6 +98,7 @@ impl StructureData {
             StructureData::Quarry { .. } => StructureKind::Quarry,
             StructureData::Inserter { .. } => StructureKind::Inserter,
             StructureData::Chest { .. } => StructureKind::Chest,
+            StructureData::Silo { .. } => StructureKind::Silo ,
             StructureData::Belt { .. } => StructureKind::Belt,
             StructureData::Splitter { .. } => StructureKind::Splitter,
             StructureData::Assembler { .. } => StructureKind::Assembler,
@@ -140,6 +147,22 @@ impl Structure {
             },
 
 
+            StructureData::Silo { inventory } => {
+                for slot in inventory {
+                    let Some(slot) = slot
+                    else { return true; };
+
+                    if slot.kind != item.kind { continue }
+
+                    if slot.amount + item.amount <= slot.kind.max_stack_size() {
+                        return true;
+                    }
+                }
+
+                false
+            },
+
+
             StructureData::Belt { inventory } => {
                 for arr in 0..inventory.len() {
                     let arr = &inventory[arr];
@@ -153,7 +176,7 @@ impl Structure {
             },
 
 
-            StructureData::Splitter { inventory, priority } => {
+            StructureData::Splitter { inventory, .. } => {
                 for inventory in inventory {
                     for arr in 0..inventory.len() {
                         let arr = &inventory[arr];
@@ -184,8 +207,12 @@ impl Structure {
             }
 
 
-            StructureData::Furnace { .. } => {
-                FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == item.kind).is_some()
+            StructureData::Furnace { input, .. } => {
+                if let Some(input) = input {
+                    input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
+                } else {
+                    FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == item.kind).is_some()
+                }
             }
         }
     }
@@ -195,6 +222,21 @@ impl Structure {
         assert!(self.can_accept(item));
         match &mut self.data {
             StructureData::Chest { inventory } => {
+                for slot in inventory {
+                    let Some(slot) = slot
+                    else { *slot = Some(item); return; };
+
+                    if slot.kind != item.kind { continue }
+
+                    if slot.amount + item.amount <= slot.kind.max_stack_size() {
+                        slot.amount += item.amount;
+                        return;
+                    }
+                }
+           },
+
+
+           StructureData::Silo { inventory } => {
                 for slot in inventory {
                     let Some(slot) = slot
                     else { *slot = Some(item); return; };
@@ -264,6 +306,7 @@ impl Structure {
             StructureData::Quarry { output, .. } => output.is_some() as usize,
             StructureData::Inserter { .. } => 0,
             StructureData::Chest { inventory } => inventory.len(),
+            StructureData::Silo { inventory } => inventory.len(),
             StructureData::Belt { .. } => 4,
             StructureData::Splitter { .. } => 4,
             StructureData::Assembler { crafter } => (crafter.output.amount != 0) as usize,
@@ -278,8 +321,9 @@ impl Structure {
             StructureData::Quarry { output, .. } => *output,
             StructureData::Inserter { .. } => None,
             StructureData::Chest { inventory } => inventory[index],
+            StructureData::Silo { inventory } => inventory[index],
             StructureData::Belt { inventory } => inventory[index/2][index%2],
-            StructureData::Splitter { inventory, priority } => inventory[index/4][(index%4)/2][index%2],
+            StructureData::Splitter { inventory, .. } => inventory[index/4][(index%4)/2][index%2],
             StructureData::Assembler { crafter } => {
                 let output = crafter.output;
                 if output.amount == 0 { return None };
@@ -298,6 +342,26 @@ impl Structure {
 
             StructureData::Inserter { .. } => None,
             StructureData::Chest { inventory } => {
+                let item = &mut inventory[index];
+                let item = item;
+
+                if let Some(slot) = item {
+                    slot.amount -= 1;
+                    let mut result = *slot;
+                    result.amount = 1;
+
+                    if slot.amount == 0 {
+                        *item = None;
+                    }
+
+                    return Some(result);
+
+                }
+
+                None
+            },
+
+           StructureData::Silo { inventory } => {
                 let item = &mut inventory[index];
                 let item = item;
 
@@ -337,7 +401,7 @@ impl Structure {
             },
 
 
-            StructureData::Furnace { input, output } => {
+            StructureData::Furnace { output, .. } => {
                 if let Some(output_item) = output {
                     output_item.amount -= 1;
                     let mut item = *output_item;
@@ -414,6 +478,22 @@ impl StructureKind {
                     IVec3::ZERO)
             }
 
+            StructureKind::Silo => {
+                blocks_arr!(dir,
+                    IVec3::new(0, 0, 0), IVec3::new(1, 0, 0), IVec3::new(2, 0, 0),
+                    IVec3::new(0, 0, 1), IVec3::new(1, 0, 1), IVec3::new(2, 0, 1),
+                    IVec3::new(0, 0, 2), IVec3::new(1, 0, 2), IVec3::new(2, 0, 2),
+
+                    IVec3::new(0, 1, 0), IVec3::new(1, 1, 0), IVec3::new(2, 1, 0),
+                    IVec3::new(0, 1, 1), IVec3::new(1, 1, 1), IVec3::new(2, 1, 1),
+                    IVec3::new(0, 1, 2), IVec3::new(1, 1, 2), IVec3::new(2, 1, 2),
+
+                    IVec3::new(0, 2, 0), IVec3::new(1, 2, 0), IVec3::new(2, 2, 0),
+                    IVec3::new(0, 2, 1), IVec3::new(1, 2, 1), IVec3::new(2, 2, 1),
+                    IVec3::new(0, 2, 2), IVec3::new(1, 2, 2), IVec3::new(2, 2, 2)
+                )
+            }
+
 
             StructureKind::Belt => {
                 blocks_arr!(dir,
@@ -468,6 +548,7 @@ impl StructureKind {
             StructureKind::Quarry => rotate_block_vector(dir, IVec3::new(4, 0, 2)),
             StructureKind::Inserter => rotate_block_vector(dir, IVec3::new(2, 0, 0)),
             StructureKind::Chest => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
+            StructureKind::Silo => rotate_block_vector(dir, IVec3::new(2, 0, 1)),
             StructureKind::Belt => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
             StructureKind::Splitter => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
             StructureKind::Assembler => rotate_block_vector(dir, IVec3::new(2, 0, 1)),
@@ -481,8 +562,9 @@ impl StructureKind {
             StructureKind::Quarry => Mesh::from_obj("assets/models/quarry.obj"),
             StructureKind::Inserter => Mesh::from_obj("assets/models/inserter.obj"),
             StructureKind::Chest => Mesh::from_obj("assets/models/block_outline.obj"),
+            StructureKind::Silo => Mesh::from_obj("assets/models/assembler.obj"),
             StructureKind::Belt => Mesh::from_obj("assets/models/belt.obj"),
-            StructureKind::Splitter => Mesh::from_obj("assets/models/belt.obj"),
+            StructureKind::Splitter => Mesh::from_obj("assets/models/splitter.obj"),
             StructureKind::Assembler => Mesh::from_obj("assets/models/assembler.obj"),
             StructureKind::Furnace => Mesh::from_obj("assets/models/assembler.obj"),
         }

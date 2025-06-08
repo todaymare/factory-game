@@ -4,6 +4,8 @@
 		- [x] damaging blocks
 		- [x] blocks having hp
 	- [ ] world generation
+    - [ ] version numbers on chunks
+        - this is needed in the case of changing a chunk while it is being remeshed
 - [ ] machines:
 	- [ ] furnaces
 		- [ ] smelting logic

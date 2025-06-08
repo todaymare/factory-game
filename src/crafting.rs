@@ -51,8 +51,18 @@ pub const RECIPES : &'static [Recipe] = &[
         time: TICKS_PER_SECOND*2,
     },
     Recipe {
+        requirements: &[Item::new(ItemKind::Structure(StructureKind::Belt), 4), Item::new(ItemKind::ElectronicsKit, 1)],
+        result: Item::new(ItemKind::Structure(StructureKind::Splitter), 3),
+        time: TICKS_PER_SECOND*2,
+    },
+    Recipe {
         requirements: &[Item::new(ItemKind::IronGearWheel, 2), Item::new(ItemKind::Voxel(VoxelKind::Stone), 16)],
         result: Item::new(ItemKind::Structure(StructureKind::Chest), 1),
+        time: TICKS_PER_SECOND*2,
+    },
+    Recipe {
+        requirements: &[Item::new(ItemKind::Structure(StructureKind::Chest), 4), Item::new(ItemKind::Voxel(VoxelKind::Stone), 64)],
+        result: Item::new(ItemKind::Structure(StructureKind::Silo), 1),
         time: TICKS_PER_SECOND*2,
     },
     Recipe {
@@ -61,8 +71,18 @@ pub const RECIPES : &'static [Recipe] = &[
         time: TICKS_PER_SECOND*2,
     },
     Recipe {
+        requirements: &[Item::new(ItemKind::Voxel(VoxelKind::Stone), 16), Item::new(ItemKind::Coal, 4)],
+        result: Item::new(ItemKind::Structure(StructureKind::Furnace), 1),
+        time: TICKS_PER_SECOND*2,
+    },
+    Recipe {
         requirements: &[Item::new(ItemKind::MechanicalComponent, 4), Item::new(ItemKind::Voxel(VoxelKind::Stone), 12)],
         result: Item::new(ItemKind::Structure(StructureKind::Quarry), 1),
+        time: TICKS_PER_SECOND*2,
+    },
+    Recipe {
+        requirements: &[Item::new(ItemKind::MechanicalComponent, 3), Item::new(ItemKind::ElectronicsKit, 2)],
+        result: Item::new(ItemKind::Structure(StructureKind::Assembler), 1),
         time: TICKS_PER_SECOND*2,
     },
 ];

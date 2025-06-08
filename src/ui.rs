@@ -25,6 +25,7 @@ pub enum UILayer {
 
 pub enum InventoryMode {
     Chest(StructureId),
+    Silo(StructureId),
     Assembler(StructureId),
     Recipes,
 }
@@ -267,8 +268,8 @@ impl UILayer {
                 'mode: {
                 match inventory_mode {
                     InventoryMode::Chest(structure) => {
-                        let rows = 6;
-                        let cols = 6;
+                        let rows = 3;
+                        let cols = 3;
                         let external_view_size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
 
                         let mut corner = window * 0.5 - external_view_size * 0.5;
@@ -280,13 +281,29 @@ impl UILayer {
                         let StructureData::Chest { inventory } = &mut structure.data
                         else { unreachable!() };
 
-                        let style = Style::new()
-                            .margin(Vec4::splat(padding * 0.5))
-                            .bg(Vec4::ONE);
+                        renderer.draw_rect(corner, external_view_size, Vec4::ONE);
+                        draw_inventory(renderer, inventory, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
 
-                        renderer.with_style(style, |renderer| {
-                            draw_inventory(renderer, inventory, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
-                        });
+                        other_inv = Some(inventory.as_mut_slice());
+                    },
+
+
+                    InventoryMode::Silo(structure) => {
+                        let rows = 6;
+                        let cols = 6;
+                        let external_view_size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
+
+                        let mut corner = window * 0.5 - external_view_size * 0.5;
+                        corner.x += external_view_size.x * 0.5;
+                        corner.x += padding * 0.5;
+
+
+                        let structure = game.structures.get_mut(*structure);
+                        let StructureData::Silo { inventory } = &mut structure.data
+                        else { unreachable!() };
+
+                        renderer.draw_rect(corner, external_view_size, Vec4::ONE);
+                        draw_inventory(renderer, inventory, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
 
                         other_inv = Some(inventory.as_mut_slice());
                     },
@@ -381,7 +398,7 @@ impl UILayer {
                 draw_player_inventory(renderer, &mut game.player, &mut other_inv, input, holding_item, corner);
             }
 
-            UILayer::Gameplay { smoothed_dt} => {
+            UILayer::Gameplay { smoothed_dt } => {
                 // render debug text
                 {
                     let mut text = String::new();
@@ -392,8 +409,11 @@ impl UILayer {
                     let colour_code = if fps > 55.0 { 'a' } else if fps > 25.0 { '6' } else { '4' };
 
                     let _ = writeln!(text, "§eFPS: §{colour_code}{fps}§r");
+                    let _ = writeln!(text, "§eTRIANGLE COUNT: §a{}§r", game.triangle_count);
+                    let _ = writeln!(text, "§eRENDER WORLD TIME: §a{}ms§r", game.render_world_time);
+                    let _ = writeln!(text, "§eRENDERED CHUNKS: §a{}§r", game.total_rendered_chunks);
 
-                    let _ = writeln!(text, "§ePITCH: §a{:.1} §eYAW: §a{:.1}§r", game.camera.pitch.to_degrees(), game.camera.yaw.to_degrees());
+                    let _ = writeln!(text, "§ePITCH: §a{:.1}({:.1}) §eYAW: §a{:.1}({:.1})§r", game.camera.pitch.to_degrees(), game.camera.pitch, game.camera.yaw.to_degrees(), game.camera.yaw);
                     let _ = writeln!(text, "§ePOSITION: §a{:.1}, {:.1} {:.1}§r", game.camera.position.x, game.camera.position.y, game.camera.position.z);
 
                     let (chunk_pos, chunk_local_pos) = split_world_pos(game.player.body.position.floor().as_ivec3());
@@ -403,7 +423,7 @@ impl UILayer {
                     let _ = writeln!(text, "§eDIRECTION: §b{:?}§r", game.camera.compass_direction());
 
 
-                    let target_block = game.world.raycast_voxel(game.camera.position, game.camera.direction, PLAYER_REACH);
+                    let target_block = game.world.raycast_voxel(game.camera.position, game.camera.front, PLAYER_REACH);
                     if let Some(target_block) = target_block {
                         let target_voxel = game.world.get_voxel(target_block.0);
                         let target_voxel_kind = target_voxel.kind;
@@ -460,7 +480,21 @@ impl UILayer {
 
                                 StructureData::Chest { inventory } => {
                                     let _ = writeln!(text, "Chest");
-                                    let _ = writeln!(text, "§e    - INPUT:");
+                                    let _ = writeln!(text, "§e    - INVENTORY:");
+
+                                    for slot in inventory {
+                                        if let Some(item) = slot {
+                                            let _ = writeln!(text, "§e      - §b{:?} §e{}x/{}x", item.kind, item.amount, item.kind.max_stack_size());
+                                        } else {
+                                            let _ = writeln!(text, "§e      - §bEmpty");
+                                        }
+                                   }
+                                }
+
+
+                                StructureData::Silo { inventory } => {
+                                    let _ = writeln!(text, "Silo");
+                                    let _ = writeln!(text, "§e    - INVENTORY:");
 
                                     for slot in inventory {
                                         if let Some(item) = slot {
@@ -676,7 +710,7 @@ fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, 
                         item.amount = 0;
                     }
 
-                    game.craft_queue.push((item, recipe.time));
+                    game.craft_queue.push((item, recipe.time*step.amount));
                 }
             }
 
@@ -738,6 +772,7 @@ struct CraftStep {
     item: ItemKind,
     depth: u32,
     result: CraftStepResult,
+    amount: u32,
 }
 
 
@@ -765,7 +800,7 @@ impl RecipeCraft {
 
     fn perform_craft(&mut self, depth: u32, recipe: Recipe, amount: u32) -> bool {
         let index = self.craft_queue.len();
-        let step = CraftStep { item: recipe.result.kind, depth,
+        let step = CraftStep { item: recipe.result.kind, depth, amount,
                                 result: CraftStepResult::NotCraftable };
 
         self.craft_queue.push(step);
@@ -780,6 +815,7 @@ impl RecipeCraft {
 
                 let step = CraftStep {
                     item: required_item.kind, depth: depth + 1,
+                    amount: required_item.amount,
                     result: CraftStepResult::DirectlyAvailable
                 };
 
@@ -795,6 +831,7 @@ impl RecipeCraft {
             else {
                 let step = CraftStep {
                     item: required_item.kind, depth: depth + 1,
+                    amount: required_item.amount,
                     result: CraftStepResult::NotAvailableRawMaterial
                 };
 
@@ -807,6 +844,7 @@ impl RecipeCraft {
             if !this.perform_craft(depth + 1, *recipe, recipe_amount) {
                 let step = CraftStep {
                     item: required_item.kind, depth: depth + 1,
+                    amount: recipe_amount,
                     result: CraftStepResult::NotCraftable
                 };
 

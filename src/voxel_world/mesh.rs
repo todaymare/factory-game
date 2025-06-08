@@ -24,7 +24,7 @@ pub struct VoxelMesh {
 
 
 impl VoxelMesh {
-    pub fn new(verticies: Vec<Vertex>, indicies: Vec<u32>) -> Self {
+    pub fn new(verticies: &[Vertex], indicies: &[u32]) -> Self {
         let vao = unsafe { 
             let mut vao = 0;
             gl::GenVertexArrays(1, &mut vao);

@@ -226,6 +226,8 @@ impl Renderer {
         atlases.register(assets_ta.build(), ui_shader);
         atlases.register(font_ta, text_shader);
 
+        glfw.set_swap_interval(glfw::SwapInterval::None);
+
         let this = Self {
             glfw,
             window,
@@ -247,10 +249,10 @@ impl Renderer {
     }
 
 
-    pub fn begin(&mut self) {
+    pub fn begin(&mut self, colour: Vec4) {
         unsafe {
             gl::Enable(gl::DEPTH_TEST);
-            gl::ClearColor(0.05, 0.05, 0.05, 1.0);
+            gl::ClearColor(colour.x, colour.y, colour.z, colour.w);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
 
@@ -295,7 +297,7 @@ impl Renderer {
         }
         self.rects.clear();
 
-        let projection = glam::Mat4::orthographic_rh(0.0, self.window.get_size().0 as f32 / self.ui_scale, self.window.get_size().1 as f32 / self.ui_scale, 0.0, 0.001, 100.0);
+        let projection = glam::Mat4::orthographic_rh(0.0, self.window.get_size().0 as f32 / self.ui_scale, self.window.get_size().1 as f32 / self.ui_scale, 0.0, 0.0001, 100.0);
         for (atlas, shader, buf) in self.atlases.atlases.values_mut() {
             shader.use_program();
             shader.set_matrix4(c"projection", projection);

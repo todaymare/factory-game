@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fmt::Write, ops::Bound};
 
 use glam::{Vec2, Vec3};
+use rand::seq::IndexedRandom;
 use save_format::{Arena, Value};
 use sti::format_in;
 
@@ -42,7 +43,7 @@ impl Game {
 
 
         // player
-        game.player.body.position = hm["player.body.position"].as_vec3();
+        game.player.body.position = hm["player.body.position"].as_vec3().as_dvec3();
         game.player.body.velocity = hm["player.body.velocity"].as_vec3();
         game.player.hand = hm["player.hand"].as_u32() as usize;
 
@@ -146,8 +147,8 @@ impl Game {
 
                 StructureKind::Chest => {
                     let mut inv_i = 0;
-                    let mut inventory = vec![None; 36];
-                    while inv_i < 36 {
+                    let mut inventory = [None; 3*3];
+                    while inv_i < inventory.len() {
                         buf.clear();
                         write!(buf, "structure[{i}].inventory[{inv_i}]");
                         let Some(str) = hm.get(buf.as_str())
@@ -159,6 +160,24 @@ impl Game {
                     }
 
                     StructureData::Chest { inventory }
+                },
+
+
+                StructureKind::Silo => {
+                    let mut inv_i = 0;
+                    let mut inventory = [None; 6*6];
+                    while inv_i < inventory.len() {
+                        buf.clear();
+                        write!(buf, "structure[{i}].inventory[{inv_i}]");
+                        let Some(str) = hm.get(buf.as_str())
+                        else { inv_i += 1; continue; };
+
+                        let item = parse_item(str.as_str());
+                        inventory[inv_i] = Some(item);
+                        inv_i += 1;
+                    }
+
+                    StructureData::Silo { inventory }
                 },
 
 
@@ -238,7 +257,7 @@ impl Game {
                         if parsed_item.kind == item.kind {
                             item.amount += parsed_item.amount;
                         } else {
-                            game.world.dropped_items.push(DroppedItem::new(*item, origin.as_vec3()));
+                            game.world.dropped_items.push(DroppedItem::new(*item, origin.as_dvec3()));
                         }
                     }
 
@@ -250,7 +269,7 @@ impl Game {
                     if output.kind == crafter.output.kind {
                         crafter.output.amount += output.amount;
                     } else {
-                        game.world.dropped_items.push(DroppedItem::new(output, origin.as_vec3()));
+                        game.world.dropped_items.push(DroppedItem::new(output, origin.as_dvec3()));
                     }
 
                     StructureData::Assembler { crafter }
@@ -305,7 +324,7 @@ impl Game {
         }
 
 
-        insert!(self.player.body.position, Vec3);
+        v.push(("player.body.position", Value::Vec3(self.player.body.position.as_vec3())));
         insert!(self.player.body.velocity, Vec3);
         insert!(self.player.hand, Num);
 
@@ -377,6 +396,18 @@ impl Game {
 
 
                 StructureData::Chest { inventory } => {
+                    for (i, slot) in inventory.iter().enumerate() {
+
+                        let Some(item) = slot
+                        else { continue };
+
+                        let path = format_in!(&arena, "{buf}.inventory[{i}]").leak();
+                        save_item(&arena, &mut v, path, *item);
+                    }
+                },
+
+
+                StructureData::Silo { inventory } => {
                     for (i, slot) in inventory.iter().enumerate() {
 
                         let Some(item) = slot
@@ -496,7 +527,7 @@ fn save_dropped_item<'a>(
     item: &DroppedItem) {
     let path = format_in!(arena, "{prefix}.item");
     save_item(arena, v, path.leak(), item.item);
-    v.push((format_in!(arena, "{prefix}.body.position").leak(), Value::Vec3(item.body.position)));
+    v.push((format_in!(arena, "{prefix}.body.position").leak(), Value::Vec3(item.body.position.as_vec3())));
     v.push((format_in!(arena, "{prefix}.body.velocity").leak(), Value::Vec3(item.body.velocity)));
     v.push((format_in!(arena, "{prefix}.creation_tick").leak(), Value::Num(item.creation_tick.u32() as _)));
 }
@@ -545,7 +576,7 @@ fn parse_dropped_item(hm: &HashMap<&str, Value>, buf: &mut sti::string::String<&
 
     let dropped_item = DroppedItem {
         item,
-        body: PhysicsBody { position, velocity, aabb_dims: Vec3::splat(DROPPED_ITEM_SCALE) },
+        body: PhysicsBody { position: position.as_dvec3(), velocity, aabb_dims: Vec3::splat(DROPPED_ITEM_SCALE) },
         creation_tick: Tick(creation_tick),
     };
 

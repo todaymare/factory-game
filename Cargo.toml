@@ -15,8 +15,9 @@ obj-rs = "*"
 
 image = "*"
 
-dhat = "*"
+#dhat = "*"
 libnoise = "1.2.0"
+rayon = "*"
 
 [profile.release]
 debug = 1

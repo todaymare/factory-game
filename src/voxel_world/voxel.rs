@@ -42,7 +42,7 @@ impl VoxelKind {
     pub fn colour(self) -> Vec4 { 
         match self {
             VoxelKind::Stone => Vec4::new(0.4, 0.4, 0.4, 1.0),
-            VoxelKind::Dirt => Vec4::new(0.54, 0.27, 0.07, 1.0),
+            VoxelKind::Dirt => Vec4::new(0.30, 0.6, 0.10, 1.0),
 
             VoxelKind::Copper => Vec4::new(0.8, 0.6, 0.6, 1.0),
             VoxelKind::Iron => Vec4::new(0.8, 0.8, 0.8, 1.0),

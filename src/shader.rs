@@ -124,6 +124,15 @@ impl ShaderProgram {
     }
 
 
+    pub fn set_f32(&self, name: &CStr, value: f32) {
+        unsafe {
+            let loc = gl::GetUniformLocation(self.id, name.as_ptr());
+            gl::Uniform1f(loc, value);
+        }
+    }
+
+
+
     pub fn set_vec3(&self, name: &CStr, value: Vec3) {
         unsafe {
             let loc = gl::GetUniformLocation(self.id, name.as_ptr());

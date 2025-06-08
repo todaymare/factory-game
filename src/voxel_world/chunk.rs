@@ -1,4 +1,4 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::{hash::{DefaultHasher, Hash, Hasher}, sync::Arc, time::Instant};
 
 use glam::IVec3;
 use libnoise::{Generator, Perlin, Simplex};
@@ -11,13 +11,19 @@ use super::{mesh::VoxelMesh, voxel::Voxel};
 
 pub const CHUNK_SIZE : usize = 32;
 
-
 #[derive(Debug)]
 pub struct Chunk {
-    pub data: [Voxel; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
+    pub data: Arc<ChunkData>,
     pub is_dirty: bool,
-    pub mesh: VoxelMesh,
+    pub mesh: Option<VoxelMesh>,
     pub mesh_state: MeshState,
+    pub persistent: bool,
+}
+
+
+#[derive(Debug, Clone)]
+pub struct ChunkData {
+    pub data: [Voxel; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
 }
 
 
@@ -33,10 +39,11 @@ pub enum MeshState {
 impl Chunk {
     pub fn empty_chunk() -> Chunk {
         Chunk {
-            data: [Voxel { kind: VoxelKind::Air }; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
+            data: Arc::new(ChunkData { data: [Voxel { kind: VoxelKind::Air }; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE] }),
             is_dirty: false,
-            mesh: VoxelMesh::new(vec![], vec![]),
+            mesh: None,
             mesh_state: MeshState::ShouldUpdate,
+            persistent: false,
         }
     }
 
@@ -47,10 +54,11 @@ impl Chunk {
         let hash = hasher.finish();
         let mut rng = rand::rngs::SmallRng::seed_from_u64(hash);
         let mut chunk = Chunk::empty_chunk();
+        let data = Arc::make_mut(&mut chunk.data);
     
         for z in 0..CHUNK_SIZE {
-            for y in 0..CHUNK_SIZE {
-                for x in 0..CHUNK_SIZE {
+            for x in 0..CHUNK_SIZE {
+                for y in 0..CHUNK_SIZE {
                     let chunk_local_position = IVec3::new(x as i32, y as i32, z as i32);
                     let global_position = pos * CHUNK_SIZE as i32 + chunk_local_position;
 
@@ -59,13 +67,13 @@ impl Chunk {
                         global_position.z as f64 * 0.001 + 100_000.0,
                     ];
                     let height = perlin.sample(sample_point);
-                    let height = (height*128.0).floor() as i32;
+                    let height = (height*512.0).floor() as i32;
 
                     let mut kind = VoxelKind::Air;
                     if global_position.y == height {
                         kind = VoxelKind::Dirt;
                     } else if global_position.y > height {
-                        kind = VoxelKind::Air;
+                        continue
                     } else {
                         let rand : f32 = rng.random_range(0.0..1.0);
                         if rand < 0.5 {
@@ -79,16 +87,43 @@ impl Chunk {
                         }
                     }
 
-
                     let voxel = Voxel { kind };
-                    *chunk.get_mut(chunk_local_position) = voxel;
-
+                    *data.get_mut(chunk_local_position) = voxel;
                 }
             }
         }
 
         chunk.is_dirty = true;
         chunk
+    }
+
+
+    pub fn get_mut(&mut self, pos: IVec3) -> &mut Voxel {
+        self.get_mut_usize(pos.x as usize, pos.y as usize, pos.z as usize)
+    }
+
+
+    pub fn get_mut_usize(&mut self, x: usize, y: usize, z: usize) -> &mut Voxel {
+        Arc::make_mut(&mut self.data).get_mut_usize(x, y, z)
+    }
+
+
+    pub fn get(&self, pos: IVec3) -> &Voxel {
+        self.get_usize(pos.x as usize, pos.y as usize, pos.z as usize)
+    }
+
+
+    pub fn get_usize(&self, x: usize, y: usize, z: usize) -> &Voxel {
+        self.data.get_usize(x, y, z)
+    }
+}
+
+
+impl ChunkData {
+    pub fn empty() -> Self {
+        Self {
+            data: [Voxel { kind: VoxelKind::Air }; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
+        }
     }
 
 
