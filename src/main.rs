@@ -497,10 +497,9 @@ fn main() {
                             let min = (pos * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
                             let max = ((pos + IVec3::ONE) * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
 
-                            /*
                             if !frustum.is_box_visible(min.as_vec3(), max.as_vec3()) {
                                 continue;
-                            }*/
+                            }
 
                             total_rendered += 1;
                             let Some(mesh) = game.world.try_get_mesh(pos)

@@ -742,7 +742,6 @@ impl VoxelWorld {
 
 pub fn split_world_pos(pos: IVec3) -> (IVec3, IVec3) {
     let chunk_pos = pos.div_euclid(IVec3::splat(CHUNK_SIZE as i32));
-    let chunk_pos = chunk_pos % 16;
     let chunk_local_pos = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
 
     (chunk_pos, chunk_local_pos)
