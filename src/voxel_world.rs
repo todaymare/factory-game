@@ -74,10 +74,19 @@ impl VoxelWorld {
     }
 
 
-    fn spawn_mesh_job(&self, pos: IVec3) {
+    fn spawn_mesh_job(&mut self, pos: IVec3) -> bool {
+        for i in 0..7 {
+            let pos = if i == 0 { pos }
+                      else { pos + SURROUNDING_OFFSETS[i-1] };
+
+            if self.try_get(pos).is_none() { return false }
+        }
+
         let chunks = core::array::from_fn(|i| {
-            if i == 0 { Some(self.chunks.get(&pos).unwrap().as_ref().unwrap().data.clone()) }
-            else { self.chunks.get(&(pos + SURROUNDING_OFFSETS[i-1])).map(|x| x.as_ref()).flatten().map(|x| x.data.clone()) }
+            let pos = if i == 0 { pos }
+                      else { pos + SURROUNDING_OFFSETS[i-1] };
+
+            self.chunks[&pos].as_ref().unwrap().data.clone()
         });
 
         let sender = self.mesh_sender.clone();
@@ -85,9 +94,10 @@ impl VoxelWorld {
         rayon::spawn(move || {
             let mut vertices = vec![];
             let mut indices = vec![];
-            VoxelWorld::remesh_chunk(chunks, &mut vertices, &mut indices);
+            VoxelWorld::greedy_mesh(chunks, &mut vertices, &mut indices);
             sender.send((pos, vertices, indices)).unwrap();
         });
+        true
     }
 
 
@@ -95,20 +105,14 @@ impl VoxelWorld {
 
     pub fn process(&mut self) {
         let remesh_queue = core::mem::take(&mut self.remesh_queue);
-        for pos in &remesh_queue {
-            self.try_get(*pos);
-        }
 
-        println!("meshing {} chunks", remesh_queue.len());
         for pos in &remesh_queue {
-            println!("meshed");
-            self.ensure_chunk_exists(*pos);
+            if !self.spawn_mesh_job(*pos) {
+                self.remesh_queue.push(*pos);
+                continue;
+            }
+
             self.chunks.get_mut(pos).unwrap().as_mut().unwrap().mesh_state = MeshState::Updating;
-            //self.spawn_mesh_job(*pos);
-            let mut vertices = vec![];
-            let mut indices = vec![];
-            self.greedy_mesh(*pos, &mut vertices, &mut indices);
-            self.mesh_sender.send((*pos, vertices, indices)).unwrap();
             self.queued_meshes += 1;
         }
 
@@ -123,6 +127,15 @@ impl VoxelWorld {
             else { continue };
             chunk.mesh = Some(mesh);
             chunk.mesh_state = MeshState::Okay;
+        }
+
+        if self.queued_meshes > 0 {
+            println!("{} meshes remaining", self.queued_meshes);
+        }
+
+
+        if self.queued_chunks > 0 {
+            println!("{} chunks remaining", self.queued_chunks);
         }
 
         self.process_chunks();
@@ -441,7 +454,6 @@ impl VoxelWorld {
 
         let mut position = physics_body.position;
 
-
         physics_body.velocity.x *= 1.0 - 10.0 * delta_time;
         physics_body.velocity.z *= 1.0 - 10.0 * delta_time;
 
@@ -564,8 +576,8 @@ impl VoxelWorld {
     }
 
 
-    pub fn greedy_mesh(&mut self, pos: IVec3, vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>) -> bool {
-        let chunk_pos = pos * CHUNK_SIZE as i32;
+    pub fn greedy_mesh(chunks: [Arc<ChunkData>; 7], vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>) -> bool {
+        let chunk = &chunks[0];
         // sweep over each axis
 
         for d in 0..3 {
@@ -574,16 +586,13 @@ impl VoxelWorld {
             let mut x = IVec3::ZERO;
             let mut q = IVec3::ZERO;
 
-            let mut mask = [false; CHUNK_SIZE*CHUNK_SIZE];
+            let mut block_mask = [VoxelKind::Air; CHUNK_SIZE*CHUNK_SIZE];
             q[d] = 1;
 
 
 
-            x[d] = -1;
+            x[d] = 0;
             while x[d] < CHUNK_SIZE as i32 {
-
-
-                // compute mask
                 let mut n = 0;
                 x[v] = 0;
 
@@ -592,20 +601,48 @@ impl VoxelWorld {
 
                     while x[u] < CHUNK_SIZE as i32 {
 
-                        let block_current = if 0 <= x[d] {
-                            let block = self.get_voxel(x + chunk_pos);
-                            !block.kind.is_transparent()
-                        } else { true };
+                        let block_current = {
+                            let block = chunk.get(x);
+                            block.kind
+                        };
 
 
                         let block_compare = if x[d] < CHUNK_SIZE as i32 {
-                            let block = self.get_voxel(x + q + chunk_pos);
-                            !block.kind.is_transparent()
-                        } else { true };
+                            let r = x+q;
+                            let is_out_of_bounds =    r.x < 0 || r.x >= CHUNK_SIZE as i32
+                                                   || r.y < 0 || r.y >= CHUNK_SIZE as i32
+                                                   || r.z < 0 || r.z >= CHUNK_SIZE as i32;
+
+                            if is_out_of_bounds {
+                                let nchunk = match q.to_array() {
+                                    [ 1,  0,  0] => 1,
+                                    [-1,  0,  0] => 2,
+                                    [ 0,  1,  0] => 3,
+                                    [ 0, -1,  0] => 4,
+                                    [ 0,  0,  1] => 5,
+                                    [ 0,  0, -1] => 6,
+                                    _ => unreachable!(),
+                                };
+
+
+                                let nchunk = &chunks[nchunk];
+                                let pos = r;
+                                let voxel = (pos + CHUNK_SIZE as i32) % CHUNK_SIZE as i32;
+                                let voxel = nchunk.get(voxel);
+                                voxel.kind
+                            } else {
+                                chunk.get(r).kind
+                            }
+                        } else { block_current };
 
                         // the mask is set to true if there is a visible face
                         // between two blocks, i.e. both aren't empty and both aren't blocks
-                        mask[n] = block_current != block_compare;
+                        block_mask[n] = match (block_current, block_compare) {
+                            (VoxelKind::Air, VoxelKind::Air) => VoxelKind::Air,
+                            (VoxelKind::Air, other) => other,
+                            (current, VoxelKind::Air) => current,
+                            (_, _) => VoxelKind::Air,
+                        };
                         n += 1;
 
                         x[u] += 1;
@@ -617,25 +654,24 @@ impl VoxelWorld {
 
                 x[d] += 1;
 
+
                 let mut n = 0;
-
-
-                // Generate a mesh from the mask using lexicographic ordering,      
-                // by looping over each block in this slice of the chunk
                 for j in 0..CHUNK_SIZE {
                     let mut i = 0;
                     while i < CHUNK_SIZE {
-                        if !mask[n] {
+                        if block_mask[n] == VoxelKind::Air {
                             i += 1;
                             n += 1;
                             continue;
                         }
 
+                        let kind = block_mask[n];
+
                         
                         // Compute the width of this quad and store it in w                        
                         //   This is done by searching along the current axis until mask[n + w] is false
                         let mut w = 1;
-                        while i + w < CHUNK_SIZE && mask[n + w] { w += 1; }
+                        while i + w < CHUNK_SIZE && block_mask[n + w] == kind { w += 1; }
 
 
                         // Compute the height of this quad and store it in h                        
@@ -648,7 +684,7 @@ impl VoxelWorld {
                         while j + h < CHUNK_SIZE {
                             for k in 0..w {
                                 // if there's a hole in the mask, exit
-                                if !mask[n + k + h * CHUNK_SIZE] {
+                                if block_mask[n + k + h * CHUNK_SIZE] != kind {
                                     done = true;
                                     break;
                                 }
@@ -672,7 +708,7 @@ impl VoxelWorld {
                         dv[v] = h as _;
 
                         let quad = mesh::Quad {
-                            color: Vec4::ONE,
+                            color: kind.colour(),
                             corners: [
                                 x.as_vec3(),
                                 (x+du).as_vec3(),
@@ -680,16 +716,16 @@ impl VoxelWorld {
                                 (x+dv).as_vec3(),
                             ],
                         };
+
                         draw_quad(vertices, indices, quad);
 
 
                         // clear this part of the mask so we don't add duplicates
                         for l in 0..h  {
                             for k in 0..w {
-                                mask[n+k+l*CHUNK_SIZE] = false;
+                                block_mask[n+k+l*CHUNK_SIZE] = VoxelKind::Air;
                             }
                         }
-
 
                         // increment counters and continue
                         i += w;
@@ -706,6 +742,7 @@ impl VoxelWorld {
 
 pub fn split_world_pos(pos: IVec3) -> (IVec3, IVec3) {
     let chunk_pos = pos.div_euclid(IVec3::splat(CHUNK_SIZE as i32));
+    let chunk_pos = chunk_pos % 16;
     let chunk_local_pos = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
 
     (chunk_pos, chunk_local_pos)

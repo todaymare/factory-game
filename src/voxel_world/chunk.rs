@@ -1,7 +1,7 @@
 use std::{hash::{DefaultHasher, Hash, Hasher}, sync::Arc, time::Instant};
 
-use glam::{DVec2, IVec3, Vec2, Vec3Swizzles};
-use libnoise::{Generator, ImprovedPerlin, Perlin, RidgedMulti, Simplex, Source};
+use glam::{DVec2, DVec3, IVec3, Vec2, Vec3Swizzles};
+use libnoise::{Fbm, Generator, ImprovedPerlin, Perlin, RidgedMulti, Simplex, Source};
 use rand::{Rng, SeedableRng};
 
 use crate::{perlin::PerlinNoise, voxel_world::voxel::VoxelKind};
@@ -39,6 +39,8 @@ pub struct Noise {
     perlin: ImprovedPerlin<2>,
     simplex: Simplex<2>,
     biomes: ImprovedPerlin<2>,
+    perlin_3d: ImprovedPerlin<3>,
+    simplex_3d: Simplex<3>,
 }
 
 impl Noise {
@@ -47,6 +49,8 @@ impl Noise {
             perlin: Source::improved_perlin(seed),
             simplex: Source::simplex(seed),
             biomes: Source::improved_perlin(seed+69),
+            perlin_3d: Source::improved_perlin(seed),
+            simplex_3d: Source::simplex(seed),
         }
     }
 
@@ -100,6 +104,48 @@ impl Noise {
         height
     }
 
+
+    pub fn sample_ore(&self, pos: DVec3, offset: DVec3) -> f64 {
+        let local_lands_scale = 0.25;
+        let distant_lands_scale = 0.005;
+        let distant_lands_begin = 1_000.0;
+        let distant_lands_end = 5_000.0;
+        let distant_lands_inbetween = distant_lands_end-distant_lands_begin;
+
+        let offset_pos = pos + offset + DVec3::new(100_000.0, 30543.0, 342123.0);
+
+        let local_lands = {
+            let mut noise = self.perlin_3d.sample((offset_pos * local_lands_scale).to_array());
+
+            let detail = self.simplex_3d.sample(((pos + 593.4) * 0.2).to_array()) * 0.3;
+            noise += detail;
+            noise
+        };
+        let distant_lands = {
+            let mut noise = self.perlin_3d.sample((offset_pos * distant_lands_scale).to_array());
+
+            let detail = self.simplex_3d.sample(((pos + 5832.4) * 0.2).to_array()) * 0.15;
+            noise += detail;
+            noise
+        };
+
+        let dist = pos.length();
+        let t = if dist < distant_lands_begin {
+            0.0
+        } else {
+            let dist = dist - distant_lands_begin;
+            let unit = dist / distant_lands_inbetween;
+            unit.min(1.0)
+        };
+
+
+        let noise = lerp(local_lands, distant_lands, smoothstep(t));
+
+
+        noise
+    }
+
+
 }
 
 
@@ -126,10 +172,6 @@ impl Chunk {
 
 
     pub fn generate(pos: IVec3, noise: &Noise) -> Chunk {
-        let mut hasher = DefaultHasher::new();
-        pos.hash(&mut hasher);
-        let hash = hasher.finish();
-        let mut rng = rand::rngs::SmallRng::seed_from_u64(hash);
         let mut chunk = Chunk::empty_chunk();
         let data = Arc::make_mut(&mut chunk.data);
     
@@ -143,22 +185,29 @@ impl Chunk {
                     let height = noise.sample(global_position.xz().as_dvec2());
                     let height = height as i32;
 
-                    let mut kind = VoxelKind::Air;
+                    let mut kind;
                     if global_position.y == height {
-                        kind = VoxelKind::Dirt;
+                        kind = VoxelKind::Air;
                     } else if global_position.y > height {
                         continue
                     } else {
-                        let rand : f32 = rng.random_range(0.0..1.0);
-                        if rand < 0.5 {
-                            kind = VoxelKind::Stone;
-                        } else if rand < 0.70 {
-                            kind = VoxelKind::Coal;
-                        } else if rand < 0.85 {
-                            kind = VoxelKind::Iron;
-                        } else if rand <= 1.0 {
-                            kind = VoxelKind::Copper;
-                        }
+
+                        let sample_pos = global_position.as_dvec3();
+
+                        let coal_val = noise.sample_ore(sample_pos, DVec3::new(1337.0, 3123.0, 0.0));
+                        let iron_val = noise.sample_ore(sample_pos, DVec3::new(420.0, 9684.0, 0.0));
+                        let copper_val = noise.sample_ore(sample_pos, DVec3::new(69.0, 0.0, 0.0));
+
+                        let coal_val = (coal_val + 1.0) * 0.5;
+                        let iron_val = (iron_val + 1.0) * 0.5;
+                        let copper_val = (copper_val + 1.0) * 0.5;
+
+                        kind = VoxelKind::Stone;
+
+                        if coal_val > 0.65 { kind = VoxelKind::Coal; }
+                        if iron_val > 0.65 { kind = VoxelKind::Iron; }
+                        if copper_val > 0.65 { kind = VoxelKind::Copper; }
+
                     }
 
                     let voxel = Voxel { kind };
