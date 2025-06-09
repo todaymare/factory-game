@@ -1,4 +1,3 @@
-#![feature(duration_millis_float)]
 #![feature(portable_simd)]
 #![feature(btree_cursors)]
 #![feature(str_as_str)]
@@ -32,7 +31,7 @@ use gl::RGBA32F;
 use image::{codecs::png::PngEncoder, EncodableLayout, ImageEncoder};
 use libnoise::Visualizer;
 use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
-use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, split_world_pos, VoxelWorld};
+use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, mesh::VoxelMesh, split_world_pos, VoxelWorld};
 use glam::{DVec2, DVec3, IVec3, Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{Key, MouseButton};
 use input::InputManager;
@@ -65,10 +64,10 @@ const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32;
 
 
 fn main() {
-    let mut game = Game::new();
+    let mut renderer = Renderer::new((1920/2, 1080/2));
 
     let mut ui_layer = UILayer::Gameplay { smoothed_dt: 0.0 };
-    let mut renderer = Renderer::new((1920/2, 1080/2));
+    let mut game = Game::new();
 
 
     /*
@@ -467,6 +466,11 @@ fn main() {
             let projection = game.camera.perspective_matrix();
             let view = game.camera.view_matrix();
 
+            mesh_shader.use_program();
+
+            mesh_shader.set_matrix4(c"projection", projection);
+            mesh_shader.set_matrix4(c"view", view);
+            mesh_shader.set_vec4(c"modulate", Vec4::ONE);
 
             let mut triangles = 0;
             let mut total_rendered = 0;
@@ -493,7 +497,12 @@ fn main() {
                 for x in -rd..rd {
                     for y in -rd..rd {
                         for z in -rd..rd {
-                            let pos = player_chunk + IVec3::new(x, y, z);
+                            let offset = IVec3::new(x, y, z);
+                            if offset.length_squared() > (rd*rd) {
+                                continue;
+                            }
+
+                            let pos = player_chunk + offset;
                             let min = (pos * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
                             let max = ((pos + IVec3::ONE) * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
 
@@ -504,6 +513,7 @@ fn main() {
                             total_rendered += 1;
                             let Some(mesh) = game.world.try_get_mesh(pos)
                             else { continue };
+
                             if mesh.indices == 0 { continue }
 
                             let offset = pos * IVec3::splat(CHUNK_SIZE as i32);
@@ -522,14 +532,7 @@ fn main() {
             game.render_world_time = time.elapsed().as_millis() as _;
             game.total_rendered_chunks = total_rendered;
 
-
             mesh_shader.use_program();
-
-            mesh_shader.set_matrix4(c"projection", projection);
-            mesh_shader.set_matrix4(c"view", view);
-            mesh_shader.set_vec4(c"modulate", Vec4::ONE);
-
-
             // render items
             {
                 for item in game.world.dropped_items.iter().chain(game.player.pulling.iter()) {
@@ -698,7 +701,7 @@ impl Game {
                 fov: 80.0f32.to_radians(),
                 aspect_ratio: 16.0/9.0,
                 near: 0.001,
-                far: 10000.0,
+                far: 20_000.0,
 
             },
 

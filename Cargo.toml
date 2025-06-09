@@ -15,7 +15,6 @@ obj-rs = "*"
 
 image = "*"
 
-#dhat = "*"
 libnoise = { version = "1.2.0", features = ["image"] }
 rayon = "*"
 

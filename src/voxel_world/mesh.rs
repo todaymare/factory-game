@@ -104,6 +104,13 @@ impl Vertex {
 
         Self { data1, data2 }
     }
+
+
+    pub fn set_colour(&mut self, colour: Vec4) {
+        let UVec4 { x: r, y: g, z: b, w: a } = (colour * 255.0).as_uvec4();
+        let colour = ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | (a as u32);
+        self.data2 = colour;
+    }
 }
 
 

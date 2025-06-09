@@ -1,8 +1,9 @@
-use std::{hash::{DefaultHasher, Hash, Hasher}, sync::Arc, time::Instant};
+use std::{hash::{DefaultHasher, Hash, Hasher}, i32, sync::Arc, time::Instant};
 
-use glam::{DVec2, DVec3, IVec3, Vec2, Vec3Swizzles};
+use glam::{DVec2, DVec3, IVec2, IVec3, Vec2, Vec3Swizzles};
 use libnoise::{Fbm, Generator, ImprovedPerlin, Perlin, RidgedMulti, Simplex, Source};
-use rand::{Rng, SeedableRng};
+use rand::{rngs::SmallRng, seq::IndexedRandom, Rng, SeedableRng};
+use sti::hash::fxhash::FxHasher64;
 
 use crate::{perlin::PerlinNoise, voxel_world::voxel::VoxelKind};
 
@@ -104,48 +105,6 @@ impl Noise {
         height
     }
 
-
-    pub fn sample_ore(&self, pos: DVec3, offset: DVec3) -> f64 {
-        let local_lands_scale = 0.25;
-        let distant_lands_scale = 0.005;
-        let distant_lands_begin = 1_000.0;
-        let distant_lands_end = 5_000.0;
-        let distant_lands_inbetween = distant_lands_end-distant_lands_begin;
-
-        let offset_pos = pos + offset + DVec3::new(100_000.0, 30543.0, 342123.0);
-
-        let local_lands = {
-            let mut noise = self.perlin_3d.sample((offset_pos * local_lands_scale).to_array());
-
-            let detail = self.simplex_3d.sample(((pos + 593.4) * 0.2).to_array()) * 0.3;
-            noise += detail;
-            noise
-        };
-        let distant_lands = {
-            let mut noise = self.perlin_3d.sample((offset_pos * distant_lands_scale).to_array());
-
-            let detail = self.simplex_3d.sample(((pos + 5832.4) * 0.2).to_array()) * 0.15;
-            noise += detail;
-            noise
-        };
-
-        let dist = pos.length();
-        let t = if dist < distant_lands_begin {
-            0.0
-        } else {
-            let dist = dist - distant_lands_begin;
-            let unit = dist / distant_lands_inbetween;
-            unit.min(1.0)
-        };
-
-
-        let noise = lerp(local_lands, distant_lands, smoothstep(t));
-
-
-        noise
-    }
-
-
 }
 
 
@@ -172,51 +131,113 @@ impl Chunk {
 
 
     pub fn generate(pos: IVec3, noise: &Noise) -> Chunk {
-        let mut chunk = Chunk::empty_chunk();
-        let data = Arc::make_mut(&mut chunk.data);
-    
-        for z in 0..CHUNK_SIZE {
-            for x in 0..CHUNK_SIZE {
-                for y in 0..CHUNK_SIZE {
-                    let chunk_local_position = IVec3::new(x as i32, y as i32, z as i32);
-                    let global_position = pos * CHUNK_SIZE as i32 + chunk_local_position;
+        let time = Instant::now();
+
+        let mut data = ChunkData::empty();
+
+        let mut height_map = [[0; CHUNK_SIZE]; CHUNK_SIZE];
+        let mut max_height = i32::MIN;
+        'out: for x in 0..CHUNK_SIZE {
+            for z in 0..CHUNK_SIZE {
+                let global_pos = (pos * CHUNK_SIZE as i32).xz() + IVec2::new(x as i32, z as i32);
+
+                let height = noise.sample(global_pos.as_dvec2());
+                let height = height as i32;
+
+                max_height = max_height.max(height);
 
 
-                    let height = noise.sample(global_position.xz().as_dvec2());
-                    let height = height as i32;
-
-                    let mut kind;
-                    if global_position.y == height {
-                        kind = VoxelKind::Air;
-                    } else if global_position.y > height {
-                        continue
-                    } else {
-
-                        let sample_pos = global_position.as_dvec3();
-
-                        let coal_val = noise.sample_ore(sample_pos, DVec3::new(1337.0, 3123.0, 0.0));
-                        let iron_val = noise.sample_ore(sample_pos, DVec3::new(420.0, 9684.0, 0.0));
-                        let copper_val = noise.sample_ore(sample_pos, DVec3::new(69.0, 0.0, 0.0));
-
-                        let coal_val = (coal_val + 1.0) * 0.5;
-                        let iron_val = (iron_val + 1.0) * 0.5;
-                        let copper_val = (copper_val + 1.0) * 0.5;
-
-                        kind = VoxelKind::Stone;
-
-                        if coal_val > 0.65 { kind = VoxelKind::Coal; }
-                        if iron_val > 0.65 { kind = VoxelKind::Iron; }
-                        if copper_val > 0.65 { kind = VoxelKind::Copper; }
-
-                    }
-
-                    let voxel = Voxel { kind };
-                    *data.get_mut(chunk_local_position) = voxel;
-                }
+                height_map[x][z] = height;
             }
         }
 
-        chunk.is_dirty = true;
+        let skip = (pos.y * CHUNK_SIZE as i32) > max_height ;
+    
+        if !skip {
+            for z in 0..CHUNK_SIZE {
+                for x in 0..CHUNK_SIZE {
+                    for y in 0..CHUNK_SIZE {
+                        let chunk_local_position = IVec3::new(x as i32, y as i32, z as i32);
+                        let global_position = pos * CHUNK_SIZE as i32 + chunk_local_position;
+
+                        let height = height_map[x][z];
+
+                        let kind;
+                        if global_position.y == height {
+                            kind = VoxelKind::Dirt;
+                        } else if global_position.y > height {
+                            continue
+                        } else {
+                            kind = VoxelKind::Stone;
+                        }
+
+                        let voxel = Voxel { kind };
+                        *data.get_mut_usize(x, y, z) = voxel;
+                    }
+                }
+            }
+
+
+            let mut hasher = FxHasher64::new();
+            pos.hash(&mut hasher);
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(hasher.hash);
+
+
+            let vein_count = rng.random_range(64..128);
+            let mut buff : Vec<IVec3> = vec![];
+            let mut i = 0;
+            while i < vein_count {
+                i += 1;
+                buff.clear();
+                buff.push(random_pos(&mut rng));
+
+                let vein_block = match rng.random_range(0..100) {
+                    0..20 => VoxelKind::Coal,
+                    20..60 => VoxelKind::Copper,
+                    _ => VoxelKind::Iron,
+                };
+
+                let vein_size = rng.random_range(64..168);
+                let mut j = 0;
+                while buff.len() < vein_size && j < vein_size * 2 {
+                    j += 1;
+
+                    let base = buff[rng.random_range(0..buff.len())];
+                    let x = rng.random_range(-1..=1);
+                    let y = rng.random_range(-1..=1);
+                    let z = rng.random_range(-1..=1);
+                    let pos = base + IVec3::new(x, y, z);
+
+                    if pos.x < 0 || pos.y < 0 || pos.z < 0
+                        || pos.x >= CHUNK_SIZE as i32
+                        || pos.y >= CHUNK_SIZE as i32
+                        || pos.z >= CHUNK_SIZE as i32 {
+                        j -= 1;
+                        continue;
+                    }
+                        
+
+                    let voxel = data.get_mut(pos);
+                    if voxel.kind == VoxelKind::Stone {
+                        voxel.kind = vein_block;
+                        buff.push(pos);
+                    }
+                }
+
+                if buff.is_empty() {
+                    i -= 1;
+                }
+            }
+
+        }
+
+        let mut chunk = Chunk {
+            data: data.into(),
+            is_dirty: true,
+            mesh: None,
+            mesh_state: MeshState::ShouldUpdate,
+            persistent: false,
+        };
         chunk
     }
 
@@ -242,6 +263,11 @@ impl Chunk {
 }
 
 
+fn random_pos(rng: &mut SmallRng) -> IVec3 {
+    IVec3::new(rng.random_range(0..CHUNK_SIZE) as _, rng.random_range(0..CHUNK_SIZE) as _, rng.random_range(0..CHUNK_SIZE) as _)
+}
+
+
 impl ChunkData {
     pub fn empty() -> Self {
         Self {
@@ -250,21 +276,25 @@ impl ChunkData {
     }
 
 
+    #[inline(always)]
     pub fn get_mut(&mut self, pos: IVec3) -> &mut Voxel {
         self.get_mut_usize(pos.x as usize, pos.y as usize, pos.z as usize)
     }
 
 
+    #[inline(always)]
     pub fn get_mut_usize(&mut self, x: usize, y: usize, z: usize) -> &mut Voxel {
         &mut self.data[z * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + x]
     }
 
 
+    #[inline(always)]
     pub fn get(&self, pos: IVec3) -> &Voxel {
         self.get_usize(pos.x as usize, pos.y as usize, pos.z as usize)
     }
 
 
+    #[inline(always)]
     pub fn get_usize(&self, x: usize, y: usize, z: usize) -> &Voxel {
         &self.data[z * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + x]
     }

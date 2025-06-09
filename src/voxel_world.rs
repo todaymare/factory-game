@@ -38,6 +38,8 @@ pub struct VoxelWorld {
     queued_meshes: u32,
     queued_chunks: u32,
 
+    pub loading_chunk_mesh: VoxelMesh,
+
 }
 
 
@@ -56,6 +58,23 @@ impl VoxelWorld {
         let (ms, mr) = mpsc::channel();
         let (cs, cr) = mpsc::channel();
 
+        let mut full_chunk = Chunk::empty_chunk();
+        let data = Arc::make_mut(&mut full_chunk.data);
+        data.data.iter_mut().for_each(|x| x.kind = VoxelKind::Stone);
+
+        let mut vertices = vec![];
+        let mut indices = vec![];
+
+        let arr = core::array::from_fn(|i| if i == 0 { full_chunk.data.clone() } else { Chunk::empty_chunk().data.clone() });
+        Self::greedy_mesh(arr, &mut vertices, &mut indices);
+
+        for vertex in &mut vertices {
+            vertex.set_colour(Vec4::new(1.0, 0.0, 0.0, 1.0));
+        }
+        dbg!(&vertices);
+
+        let mesh = VoxelMesh::new(&vertices, &indices);
+
         Self {
             chunks: HashMap::new(),
             structure_blocks: sti::hash::HashMap::new(),
@@ -70,7 +89,10 @@ impl VoxelWorld {
 
             queued_meshes: 0,
             queued_chunks: 0,
+
+            loading_chunk_mesh: mesh,
         }
+
     }
 
 
@@ -115,6 +137,7 @@ impl VoxelWorld {
             self.chunks.get_mut(pos).unwrap().as_mut().unwrap().mesh_state = MeshState::Updating;
             self.queued_meshes += 1;
         }
+        println!("{} jobs remaning", self.remesh_queue.len());
 
         while let Ok((pos, vertices, indices)) = self.mesh_reciever.try_recv() {
             self.queued_meshes -= 1;
@@ -130,12 +153,12 @@ impl VoxelWorld {
         }
 
         if self.queued_meshes > 0 {
-            println!("{} meshes remaining", self.queued_meshes);
+            //println!("{} meshes remaining", self.queued_meshes);
         }
 
 
         if self.queued_chunks > 0 {
-            println!("{} chunks remaining", self.queued_chunks);
+            //println!("{} chunks remaining", self.queued_chunks);
         }
 
         self.process_chunks();
@@ -266,6 +289,7 @@ impl VoxelWorld {
             rayon::spawn(move || {
                 let path = format!("saves/chunks/{pos}.chunk");
                 let chunk = match fs::read(&path) {
+                    /*
                     Ok(ref v) if let Some(mut byte_reader) = ByteReader::new(&v) => {
                         let mut chunk = Chunk::empty_chunk();
                         let data = Arc::make_mut(&mut chunk.data);
@@ -276,7 +300,7 @@ impl VoxelWorld {
                         }
 
                         chunk
-                    },
+                    },*/
 
 
                     _ => {
@@ -297,7 +321,7 @@ impl VoxelWorld {
 
     pub fn try_get_mesh(&mut self, pos: IVec3) -> Option<&VoxelMesh> {
         let Some(chunk) = self.try_get(pos)
-        else { return None };
+        else { return Some(&self.loading_chunk_mesh) };
 
         if chunk.mesh_state == MeshState::ShouldUpdate {
             let chunk = self.chunks.get_mut(&pos).unwrap().as_mut().unwrap();
