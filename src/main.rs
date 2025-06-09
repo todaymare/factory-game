@@ -4,6 +4,7 @@
 #![feature(str_as_str)]
 #![feature(path_add_extension)]
 #![feature(if_let_guard)]
+#![feature(generic_arg_infer)]
 
 pub mod shader;
 pub mod mesh;
@@ -22,14 +23,17 @@ pub mod crafting;
 pub mod perlin;
 pub mod frustum;
 
-use std::{collections::HashSet, f32::consts::{PI, TAU}, fs, ops::{self}, sync::Arc, time::Instant};
+use std::{collections::HashSet, f32::consts::{PI, TAU}, fs, io::BufWriter, ops::{self}, sync::Arc, time::Instant};
 
 use commands::{Command, CommandRegistry};
 use directions::CardinalDirection;
 use frustum::{Frustum};
+use gl::RGBA32F;
+use image::{codecs::png::PngEncoder, EncodableLayout, ImageEncoder};
+use libnoise::Visualizer;
 use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
 use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, split_world_pos, VoxelWorld};
-use glam::{DVec3, IVec3, Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
+use glam::{DVec2, DVec3, IVec3, Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{Key, MouseButton};
 use input::InputManager;
 use items::{DroppedItem, Item, ItemKind};
@@ -66,13 +70,15 @@ fn main() {
     let mut ui_layer = UILayer::Gameplay { smoothed_dt: 0.0 };
     let mut renderer = Renderer::new((1920/2, 1080/2));
 
+
+    /*
     for x in -RENDER_DISTANCE..RENDER_DISTANCE {
         for y in -RENDER_DISTANCE..RENDER_DISTANCE {
             for z in -RENDER_DISTANCE..RENDER_DISTANCE {
                 let _= game.world.get_chunk(IVec3::new(x, y, z));
             }
         }
-    }
+    }*/
 
     let mut input = InputManager::default();
     let block_outline_mesh = Mesh::from_obj("assets/models/block_outline.obj");
@@ -91,6 +97,7 @@ fn main() {
     renderer.window.set_cursor_mode(glfw::CursorMode::Disabled);
 
 
+    println!("loading");
     if !fs::exists("saves/").is_ok_and(|f| f == true) {
         let _ = fs::create_dir("saves/");
         let _ = fs::create_dir("saves/chunks/");
@@ -100,6 +107,7 @@ fn main() {
 
     game.load();
 
+    println!("[info] starting game loop");
     let mut last_frame = 0.0;
     let mut time_since_last_simulation_step = 0.0;
     while !renderer.window.should_close() {
@@ -366,7 +374,7 @@ fn main() {
 
 
                 let voxel = game.world.get_voxel(pos);
-                if mining_progress < voxel.kind.base_hardness()/2 {
+                if mining_progress < voxel.kind.base_hardness() {
                     break 'input_block;
                 }
 
@@ -489,9 +497,10 @@ fn main() {
                             let min = (pos * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
                             let max = ((pos + IVec3::ONE) * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
 
+                            /*
                             if !frustum.is_box_visible(min.as_vec3(), max.as_vec3()) {
                                 continue;
-                            }
+                            }*/
 
                             total_rendered += 1;
                             let Some(mesh) = game.world.try_get_mesh(pos)

@@ -4,8 +4,8 @@ pub mod mesh;
 
 use std::{collections::HashMap, fs, hint::spin_loop, ops::Bound, sync::{mpsc, Arc}, time::Instant};
 
-use chunk::{ChunkData, MeshState};
-use glam::{DVec3, IVec3, Vec3};
+use chunk::{ChunkData, MeshState, Noise};
+use glam::{DVec3, IVec3, Vec3, Vec4};
 use libnoise::{Perlin, Simplex, Source};
 use mesh::{draw_quad, Vertex, VoxelMesh};
 use rand::seq::IndexedRandom;
@@ -27,7 +27,7 @@ pub struct VoxelWorld {
     remesh_queue: Vec<IVec3>,
     pub unload_queue: Vec<IVec3>,
 
-    perlin_noise: Arc<Perlin<2>>,
+    pub noise: Arc<Noise>,
 
     mesh_sender: mpsc::Sender<MeshMPSC>,
     mesh_reciever: mpsc::Receiver<MeshMPSC>,
@@ -62,7 +62,7 @@ impl VoxelWorld {
             dropped_items: vec![],
             remesh_queue: vec![],
             unload_queue: vec![],
-            perlin_noise: Arc::new(Source::perlin(6969696969)),
+            noise: Arc::new(Noise::new(6969696969)),
             mesh_sender: ms,
             mesh_reciever: mr,
             chunk_sender: cs,
@@ -99,10 +99,16 @@ impl VoxelWorld {
             self.try_get(*pos);
         }
 
+        println!("meshing {} chunks", remesh_queue.len());
         for pos in &remesh_queue {
+            println!("meshed");
             self.ensure_chunk_exists(*pos);
             self.chunks.get_mut(pos).unwrap().as_mut().unwrap().mesh_state = MeshState::Updating;
-            self.spawn_mesh_job(*pos);
+            //self.spawn_mesh_job(*pos);
+            let mut vertices = vec![];
+            let mut indices = vec![];
+            self.greedy_mesh(*pos, &mut vertices, &mut indices);
+            self.mesh_sender.send((*pos, vertices, indices)).unwrap();
             self.queued_meshes += 1;
         }
 
@@ -141,13 +147,6 @@ impl VoxelWorld {
 
             self.chunks.remove(pos);
             self.unload_queue.remove(i);
-        }
-
-        if self.queued_chunks > 0 {
-            println!("{} chunks left", self.queued_chunks);
-        }
-        if self.queued_meshes > 0 {
-            println!("{} meshes left", self.queued_meshes);
         }
     }
 
@@ -232,8 +231,7 @@ impl VoxelWorld {
             self.chunks.insert(pos, None);
 
             let sender = self.chunk_sender.clone();
-            let perlin = &*self.perlin_noise.clone();
-            let perlin = perlin.clone();
+            let perlin = self.noise.clone();
             rayon::spawn(move || {
                 let chunk = Chunk::generate(pos, &perlin);
                 sender.send((pos, chunk)).unwrap();
@@ -250,7 +248,7 @@ impl VoxelWorld {
             self.chunks.insert(pos, None);
 
             let sender = self.chunk_sender.clone();
-            let perlin = self.perlin_noise.clone();
+            let perlin = self.noise.clone();
             self.queued_chunks += 1;
             rayon::spawn(move || {
                 let path = format!("saves/chunks/{pos}.chunk");
@@ -554,14 +552,153 @@ impl VoxelWorld {
                         };
 
                         if should_draw {
-                            draw_quad(vertices, indices,
-                                      Quad::from_direction(*dir, voxel_pos, voxel.kind.colour()));
+                            mesh::draw_quad(vertices, indices,
+                                      mesh::Quad::from_direction(*dir, voxel_pos, voxel.kind.colour()));
                         }
                     }
                 }
             }
         }
 
+        true
+    }
+
+
+    pub fn greedy_mesh(&mut self, pos: IVec3, vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>) -> bool {
+        let chunk_pos = pos * CHUNK_SIZE as i32;
+        // sweep over each axis
+
+        for d in 0..3 {
+            let u = (d + 1) % 3;
+            let v = (d + 2) % 3;
+            let mut x = IVec3::ZERO;
+            let mut q = IVec3::ZERO;
+
+            let mut mask = [false; CHUNK_SIZE*CHUNK_SIZE];
+            q[d] = 1;
+
+
+
+            x[d] = -1;
+            while x[d] < CHUNK_SIZE as i32 {
+
+
+                // compute mask
+                let mut n = 0;
+                x[v] = 0;
+
+                while x[v] < CHUNK_SIZE as i32 {
+                    x[u] = 0;
+
+                    while x[u] < CHUNK_SIZE as i32 {
+
+                        let block_current = if 0 <= x[d] {
+                            let block = self.get_voxel(x + chunk_pos);
+                            !block.kind.is_transparent()
+                        } else { true };
+
+
+                        let block_compare = if x[d] < CHUNK_SIZE as i32 {
+                            let block = self.get_voxel(x + q + chunk_pos);
+                            !block.kind.is_transparent()
+                        } else { true };
+
+                        // the mask is set to true if there is a visible face
+                        // between two blocks, i.e. both aren't empty and both aren't blocks
+                        mask[n] = block_current != block_compare;
+                        n += 1;
+
+                        x[u] += 1;
+                    }
+
+                    x[v] += 1;
+                }
+
+
+                x[d] += 1;
+
+                let mut n = 0;
+
+
+                // Generate a mesh from the mask using lexicographic ordering,      
+                // by looping over each block in this slice of the chunk
+                for j in 0..CHUNK_SIZE {
+                    let mut i = 0;
+                    while i < CHUNK_SIZE {
+                        if !mask[n] {
+                            i += 1;
+                            n += 1;
+                            continue;
+                        }
+
+                        
+                        // Compute the width of this quad and store it in w                        
+                        //   This is done by searching along the current axis until mask[n + w] is false
+                        let mut w = 1;
+                        while i + w < CHUNK_SIZE && mask[n + w] { w += 1; }
+
+
+                        // Compute the height of this quad and store it in h                        
+                        //   This is done by checking if every block next to this row (range 0 to w) is also part of the mask.
+                        //   For example, if w is 5 we currently have a quad of dimensions 1 x 5. To reduce triangle count,
+                        //   greedy meshing will attempt to expand this quad out to CHUNK_SIZE x 5, but will stop if it reaches a hole in the mask
+                        
+                        let mut done = false;
+                        let mut h = 1;
+                        while j + h < CHUNK_SIZE {
+                            for k in 0..w {
+                                // if there's a hole in the mask, exit
+                                if !mask[n + k + h * CHUNK_SIZE] {
+                                    done = true;
+                                    break;
+                                }
+                            }
+
+
+                            if done { break }
+
+                            h += 1;
+                        }
+
+
+                        x[u] = i as _;
+                        x[v] = j as _;
+
+                        // du and dv determine the size and orientation of this face
+                        let mut du = IVec3::ZERO;
+                        du[u] = w as _;
+
+                        let mut dv = IVec3::ZERO;
+                        dv[v] = h as _;
+
+                        let quad = mesh::Quad {
+                            color: Vec4::ONE,
+                            corners: [
+                                x.as_vec3(),
+                                (x+du).as_vec3(),
+                                (x+du+dv).as_vec3(),
+                                (x+dv).as_vec3(),
+                            ],
+                        };
+                        draw_quad(vertices, indices, quad);
+
+
+                        // clear this part of the mask so we don't add duplicates
+                        for l in 0..h  {
+                            for k in 0..w {
+                                mask[n+k+l*CHUNK_SIZE] = false;
+                            }
+                        }
+
+
+                        // increment counters and continue
+                        i += w;
+                        n += w;
+                    }
+                }
+
+            }
+        }
         true
     }
 }

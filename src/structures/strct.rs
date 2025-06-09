@@ -207,8 +207,12 @@ impl Structure {
             }
 
 
-            StructureData::Furnace { input, .. } => {
+            StructureData::Furnace { input, output } => {
                 if let Some(input) = input {
+                    input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
+                } else if let Some(output) = output {
+                    let curr_recipe = FURNACE_RECIPES.iter().find(|x| x.result.kind == output.kind).unwrap();
+                    let input = curr_recipe.requirements[0];
                     input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
                 } else {
                     FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == item.kind).is_some()

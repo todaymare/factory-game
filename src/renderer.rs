@@ -226,7 +226,7 @@ impl Renderer {
         atlases.register(assets_ta.build(), ui_shader);
         atlases.register(font_ta, text_shader);
 
-        glfw.set_swap_interval(glfw::SwapInterval::None);
+        //glfw.set_swap_interval(glfw::SwapInterval::None);
 
         let this = Self {
             glfw,

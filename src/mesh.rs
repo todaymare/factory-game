@@ -15,7 +15,7 @@ pub struct Vertex {
 
 #[derive(Debug)]
 pub struct Mesh {
-    indicies: u32,
+    pub indices: u32,
     vbo: u32,
     vao: u32,
     ebo: u32,
@@ -97,7 +97,7 @@ impl obj::FromRawVertex<u32> for Vertex {
 
 
 impl Mesh {
-    pub fn new(verticies: Vec<Vertex>, indicies: Vec<u32>) -> Self {
+    pub fn new(verticies: &[Vertex], indicies: &[u32]) -> Self {
         let vao = unsafe { 
             let mut vao = 0;
             gl::GenVertexArrays(1, &mut vao);
@@ -139,7 +139,7 @@ impl Mesh {
 
         }
 
-        Self { vao, indicies: indicies.len() as _, vbo, ebo }
+        Self { vao, indices: indicies.len() as _, vbo, ebo }
     }
 
 
@@ -147,14 +147,14 @@ impl Mesh {
         let Ok(file) = std::fs::File::open(path)
         else { panic!("no such file as {path}") };
         let model : Obj<Vertex, u32> = obj::load_obj(BufReader::new(file)).unwrap();
-        Mesh::new(model.vertices, model.indices)
+        Mesh::new(&model.vertices, &model.indices)
     }
 
 
     pub fn draw(&self) {
         unsafe {
             gl::BindVertexArray(self.vao);
-            gl::DrawElements(gl::TRIANGLES, self.indicies as _, gl::UNSIGNED_INT, null_mut());
+            gl::DrawElements(gl::TRIANGLES, self.indices as _, gl::UNSIGNED_INT, null_mut());
             gl::BindVertexArray(0);
         }
     }
@@ -173,7 +173,7 @@ impl Drop for Mesh {
 
 
 impl Vertex {
-    pub fn new(pos: Vec3, _: Vec3, colour: Vec4) -> Self {
+    pub fn new(pos: Vec3, colour: Vec4) -> Self {
         Self { position: pos, colour }
     }
 }
@@ -195,7 +195,7 @@ pub fn draw_quad(verticies: &mut Vec<Vertex>, indicies: &mut Vec<u32>, quad: Qua
         let mut colour = quad.color;
         colour = colour * 0.9 + colour * (i as f32 * 0.1);
         colour.w = quad.color.w;
-        verticies.push(Vertex::new(Vec3::new(corner[0] as f32, corner[1] as f32, corner[2] as f32), normal, colour));
+        verticies.push(Vertex::new(Vec3::new(corner[0] as f32, corner[1] as f32, corner[2] as f32), colour));
         i += 1;
     }
 

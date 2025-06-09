@@ -1,7 +1,7 @@
 use std::{hash::{DefaultHasher, Hash, Hasher}, sync::Arc, time::Instant};
 
-use glam::IVec3;
-use libnoise::{Generator, Perlin, Simplex};
+use glam::{DVec2, IVec3, Vec2, Vec3Swizzles};
+use libnoise::{Generator, ImprovedPerlin, Perlin, RidgedMulti, Simplex, Source};
 use rand::{Rng, SeedableRng};
 
 use crate::{perlin::PerlinNoise, voxel_world::voxel::VoxelKind};
@@ -35,6 +35,83 @@ pub enum MeshState {
 }
 
 
+pub struct Noise {
+    perlin: ImprovedPerlin<2>,
+    simplex: Simplex<2>,
+    biomes: ImprovedPerlin<2>,
+}
+
+impl Noise {
+    pub fn new(seed: u64) -> Self {
+        Self {
+            perlin: Source::improved_perlin(seed),
+            simplex: Source::simplex(seed),
+            biomes: Source::improved_perlin(seed+69),
+        }
+    }
+
+
+    pub fn sample(&self, pos: DVec2) -> f64 {
+        let x = pos.x + 10_000.0;
+        let z = pos.y + 10_000.0;
+        let biome = self.biomes.sample([x * 0.0055, z * 0.0055]);
+        let biome = (biome + 1.0) * 0.5;
+
+        let giant_mountain_height = {
+            let base_scale = 0.0003;
+            let detail_scale = 0.02;
+
+            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 360.0 + 160.0;
+
+            let detail = self.simplex.sample([x * detail_scale + 1337.0, z * detail_scale + 420.0]) * 16.0;
+            base + detail
+        };
+
+
+        let mountain_height = {
+            let base_scale = 0.003;
+            let detail_scale = 0.02;
+
+            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 80.0 + 40.0;
+
+            let detail = self.simplex.sample([x * detail_scale + 1337.0, z * detail_scale + 420.0]) * 8.0;
+            base + detail
+        };
+
+
+        let plateau_height = {
+            let base_scale = 0.005;
+            let detail_scale = 0.02;
+
+            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 3.0;
+
+            let detail = self.simplex.sample([x * detail_scale + 1337.0, z * detail_scale + 420.0]) * 1.0;
+            base + detail
+        };
+
+        let height = if biome < 0.5 {
+            let t = (biome / 0.5).clamp(0.0, 1.0);
+            lerp(plateau_height, mountain_height, smoothstep(t))
+        } else {
+            let t = ((biome - 0.5) / 0.5).clamp(0.0, 1.0);
+            lerp(mountain_height, giant_mountain_height, smoothstep(t))
+        };
+
+        height
+    }
+
+}
+
+
+fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    a * (1.0 - t) + b * t
+}
+
+
+fn smoothstep(t: f64) -> f64 {
+    t * t * (3.0 - 2.0 * t)
+}
+
 
 impl Chunk {
     pub fn empty_chunk() -> Chunk {
@@ -48,7 +125,7 @@ impl Chunk {
     }
 
 
-    pub fn generate(pos: IVec3, perlin: &Perlin<2>) -> Chunk {
+    pub fn generate(pos: IVec3, noise: &Noise) -> Chunk {
         let mut hasher = DefaultHasher::new();
         pos.hash(&mut hasher);
         let hash = hasher.finish();
@@ -62,12 +139,9 @@ impl Chunk {
                     let chunk_local_position = IVec3::new(x as i32, y as i32, z as i32);
                     let global_position = pos * CHUNK_SIZE as i32 + chunk_local_position;
 
-                    let sample_point = [
-                        global_position.x as f64 * 0.001 + 100_000.0,
-                        global_position.z as f64 * 0.001 + 100_000.0,
-                    ];
-                    let height = perlin.sample(sample_point);
-                    let height = (height*512.0).floor() as i32;
+
+                    let height = noise.sample(global_position.xz().as_dvec2());
+                    let height = height as i32;
 
                     let mut kind = VoxelKind::Air;
                     if global_position.y == height {

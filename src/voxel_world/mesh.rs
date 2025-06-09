@@ -3,14 +3,13 @@ use std::{mem::offset_of, ptr::null_mut};
 use glam::{UVec3, UVec4, Vec3, Vec4};
 use obj::{raw::object::Polygon, Obj, ObjResult};
 
-use crate::{directions::Direction, quad::Quad};
+use crate::{directions::Direction};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Vertex {
     data1: u32,
     data2: u32,
-    //colour: Vec4,
 }
 
 
@@ -92,11 +91,11 @@ impl Drop for VoxelMesh {
 
 
 impl Vertex {
-    pub fn new(pos: Vec3, normal: Vec3, colour: Vec4) -> Self {
+    pub fn new(pos: Vec3, colour: Vec4) -> Self {
         let UVec3 { x, y, z } = pos.as_uvec3();
         let UVec4 { x: r, y: g, z: b, w: a } = (colour * 255.0).as_uvec4();
 
-        assert!(x <= 32 && y <= 32 && z <= 32, "{x} {y} {z}");
+        debug_assert!(x <= 32 && y <= 32 && z <= 32, "{x} {y} {z}");
         let pos = ((z as u32) << 12) | ((y as u32) << 6) | (x as u32);
         let colour = ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | (a as u32);
 
@@ -108,23 +107,75 @@ impl Vertex {
 }
 
 
-pub fn draw_quad(verticies: &mut Vec<Vertex>, indicies: &mut Vec<u32>, quad: Quad) {
-    let normal = match quad.direction {
-        Direction::Left => Vec3::new(1.0, 0.0, 0.0),
-        Direction::Right => Vec3::new(-1.0, 0.0, 0.0),
-        Direction::Down => Vec3::new(0.0, -1.0, 0.0),
-        Direction::Up => Vec3::new(0.0, 1.0, 0.0),
-        Direction::Back => Vec3::new(0.0, 0.0, -1.0),
-        Direction::Forward => Vec3::new(0.0, 0.0, 1.0),
-    };
+#[derive(Debug)]
+///! plane data with 4 vertices
+pub struct Quad {
+    pub color: Vec4,
+    pub corners: [Vec3; 4],
+}
 
+
+impl Quad {
+    // the input position is assumed to be a voxel's (0,0,0) pos
+    // therefore right / up / forward are offset by 1
+    #[inline]
+    pub fn from_direction(direction: Direction, pos: Vec3, color: Vec4) -> Self {
+        let corners = match direction {
+            Direction::Left => [
+                Vec3::new(pos.x+1.0, pos.y, pos.z),
+                Vec3::new(pos.x+1.0, pos.y, pos.z + 1.0),
+                Vec3::new(pos.x+1.0, pos.y + 1.0, pos.z + 1.0),
+                Vec3::new(pos.x+1.0, pos.y + 1.0, pos.z),
+            ],
+            Direction::Right => [
+                Vec3::new(pos.x, pos.y + 1.0, pos.z),
+                Vec3::new(pos.x, pos.y + 1.0, pos.z + 1.0),
+                Vec3::new(pos.x, pos.y, pos.z + 1.0),
+                Vec3::new(pos.x, pos.y, pos.z),
+            ],
+            Direction::Down => [
+                Vec3::new(pos.x, pos.y, pos.z + 1.0),
+                Vec3::new(pos.x + 1.0, pos.y, pos.z + 1.0),
+                Vec3::new(pos.x + 1.0, pos.y, pos.z),
+                Vec3::new(pos.x, pos.y, pos.z),
+            ],
+            Direction::Up => [
+                Vec3::new(pos.x    , pos.y+1.0, pos.z),
+                Vec3::new(pos.x + 1.0, pos.y+1.0, pos.z),
+                Vec3::new(pos.x + 1.0, pos.y+1.0, pos.z + 1.0),
+                Vec3::new(pos.x,   pos.y+1.0, pos.z + 1.0),
+            ],
+            Direction::Back => [
+                Vec3::new(pos.x + 1.0, pos.y, pos.z),
+                Vec3::new(pos.x + 1.0, pos.y + 1.0, pos.z),
+                Vec3::new(pos.x, pos.y + 1.0, pos.z),
+                Vec3::new(pos.x, pos.y, pos.z),
+            ],
+            Direction::Forward => [
+                Vec3::new(pos.x, pos.y, pos.z+1.0),
+                Vec3::new(pos.x, pos.y + 1.0, pos.z+1.0),
+                Vec3::new(pos.x + 1.0, pos.y + 1.0, pos.z+1.0),
+                Vec3::new(pos.x + 1.0, pos.y, pos.z+1.0),
+            ],
+        };
+
+        Self {
+            corners,
+            color,
+        }
+    }
+
+}
+
+
+pub fn draw_quad(verticies: &mut Vec<Vertex>, indicies: &mut Vec<u32>, quad: Quad) {
     let k = verticies.len() as u32;
     let mut i = 0;
     for corner in quad.corners {
         let mut colour = quad.color;
         colour = colour * 0.9 + colour * (i as f32 * 0.1);
         colour.w = quad.color.w;
-        verticies.push(Vertex::new(Vec3::new(corner[0] as f32, corner[1] as f32, corner[2] as f32), normal, colour));
+        verticies.push(Vertex::new(Vec3::new(corner[0] as f32, corner[1] as f32, corner[2] as f32), colour));
         i += 1;
     }
 

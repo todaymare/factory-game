@@ -164,7 +164,7 @@ impl ItemKind {
                 draw_quad(&mut verticies, &mut indicies, Quad::from_direction(Direction::Forward, pos, colour));
                 draw_quad(&mut verticies, &mut indicies, Quad::from_direction(Direction::Back, pos, colour));
 
-                Mesh::new(verticies, indicies)
+                Mesh::new(&verticies, &indicies)
             }
         }
     }
