@@ -18,6 +18,9 @@ image = "*"
 libnoise = { version = "1.2.0", features = ["image"] }
 rayon = "*"
 
+tracing = "*"
+tracing-subscriber = "*"
+
 [profile.release]
 debug = 1
 

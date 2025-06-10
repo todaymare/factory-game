@@ -30,6 +30,8 @@ use frustum::{Frustum};
 use gl::RGBA32F;
 use image::{codecs::png::PngEncoder, EncodableLayout, ImageEncoder};
 use libnoise::Visualizer;
+use rand::seq::IndexedRandom;
+use tracing::warn;
 use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
 use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, mesh::VoxelMesh, split_world_pos, VoxelWorld};
 use glam::{DVec2, DVec3, IVec3, Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
@@ -55,7 +57,7 @@ const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-const RENDER_DISTANCE : i32 = 10;
+const RENDER_DISTANCE : i32 = 4;
 
 const DROPPED_ITEM_SCALE : f32 = 0.25;
 
@@ -64,20 +66,12 @@ const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32;
 
 
 fn main() {
+    tracing_subscriber::fmt().finish();
     let mut renderer = Renderer::new((1920/2, 1080/2));
 
     let mut ui_layer = UILayer::Gameplay { smoothed_dt: 0.0 };
     let mut game = Game::new();
 
-
-    /*
-    for x in -RENDER_DISTANCE..RENDER_DISTANCE {
-        for y in -RENDER_DISTANCE..RENDER_DISTANCE {
-            for z in -RENDER_DISTANCE..RENDER_DISTANCE {
-                let _= game.world.get_chunk(IVec3::new(x, y, z));
-            }
-        }
-    }*/
 
     let mut input = InputManager::default();
     let block_outline_mesh = Mesh::from_obj("assets/models/block_outline.obj");
@@ -197,7 +191,7 @@ fn main() {
                                                   PLAYER_REACH);
                 if let Some((pos, _)) = raycast {
                     let voxel = game.world.get_voxel(pos);
-                    if voxel.kind.is_structure() {
+                    if voxel.is_structure() {
                         let structure = game.world.structure_blocks.get(&pos).unwrap();
                         let structure = game.structures.get_mut(*structure);
 
@@ -226,7 +220,7 @@ fn main() {
                                                   PLAYER_REACH);
                 if let Some((pos, _)) = raycast {
                     let voxel = game.world.get_voxel(pos);
-                    if voxel.kind.is_structure() {
+                    if voxel.is_structure() {
                         let structure = game.world.structure_blocks.get(&pos).unwrap();
                         let structure = game.structures.get_mut(*structure);
 
@@ -304,12 +298,6 @@ fn main() {
             }
 
 
-            if input.is_key_pressed(Key::F3) && input.is_key_just_pressed(Key::T) {
-                game.world.chunks.iter_mut().filter_map(|x| x.1.as_mut()).for_each(|x| x.mesh_state = MeshState::ShouldUpdate);
-            }
-
-
-
             if input.is_key_just_pressed(Key::F7) {
                 println!("loading");
                 let time = Instant::now();
@@ -373,7 +361,7 @@ fn main() {
 
 
                 let voxel = game.world.get_voxel(pos);
-                if mining_progress < voxel.kind.base_hardness() {
+                if mining_progress < voxel.base_hardness() {
                     break 'input_block;
                 }
 
@@ -411,7 +399,7 @@ fn main() {
                 let place_position = pos + normal;
 
                 let voxel = game.world.get_voxel(place_position);
-                if !voxel.kind.is_air() { break 'input_block }
+                if !voxel.is_air() { break 'input_block }
 
                 let Some(Some(item_in_hand)) = game.player.inventory.get(game.player.hand_index())
                 else { break 'input_block };
@@ -419,7 +407,7 @@ fn main() {
                 if let Some(voxel) = item_in_hand.kind.as_voxel() {
                     let _ = game.player.take_item(game.player.hand_index(), 1).unwrap();
 
-                    game.world.get_voxel_mut(place_position).kind = voxel;
+                    *game.world.get_voxel_mut(place_position) = voxel;
 
                 } else if let Some(structure_kind) = item_in_hand.kind.as_structure() {
 
@@ -505,16 +493,19 @@ fn main() {
                             let pos = player_chunk + offset;
                             let min = (pos * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
                             let max = ((pos + IVec3::ONE) * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
-
                             if !frustum.is_box_visible(min.as_vec3(), max.as_vec3()) {
                                 continue;
                             }
 
-                            total_rendered += 1;
                             let Some(mesh) = game.world.try_get_mesh(pos)
                             else { continue };
 
-                            if mesh.indices == 0 { continue }
+                            if mesh.indices == 0 {
+                                warn!("an empty mesh was generated");
+                                continue;
+                            }
+
+                            total_rendered += 1;
 
                             let offset = pos * IVec3::splat(CHUNK_SIZE as i32);
                             let offset = offset.as_dvec3() - game.camera.position;
@@ -562,7 +553,7 @@ fn main() {
                                                   PLAYER_REACH);
                 if let Some((pos, _)) = raycast {
                     let voxel = game.world.get_voxel(pos);
-                    let target_hardness = voxel.kind.base_hardness();
+                    let target_hardness = voxel.base_hardness();
                     let pos = pos.as_dvec3() - game.camera.position;
 
                     let model = Mat4::from_translation(pos.as_vec3() + Vec3::new(0.5, -0.005, 0.5));
@@ -657,7 +648,7 @@ fn main() {
     }
 
 
-    game.save();
+    //game.save();
 }
 
 
@@ -701,7 +692,7 @@ impl Game {
                 fov: 80.0f32.to_radians(),
                 aspect_ratio: 16.0/9.0,
                 near: 0.001,
-                far: 20_000.0,
+                far: 2_000.0,
 
             },
 
@@ -842,7 +833,7 @@ impl Game {
         let pos = pos - structure.origin(direction);
         let blocks = structure.blocks(direction);
         for offset in blocks {
-            if !self.world.get_voxel(pos + offset).kind.is_air() {
+            if !self.world.get_voxel(pos + offset).is_air() {
                 return false;
             }
         }
@@ -855,6 +846,25 @@ impl Game {
         self.current_tick = self.current_tick.inc();
 
         let delta_time = DELTA_TICK;
+
+        if self.current_tick.u32() % TICKS_PER_SECOND == 0 
+            && self.world.unload_queue.is_empty() {
+            let time = Instant::now();
+            let (player_chunk, _) = split_world_pos(self.player.body.position.as_ivec3());
+            let rd = self.player.render_distance;
+            let mins = player_chunk - IVec3::splat(rd);
+            let maxs = player_chunk + IVec3::splat(rd);
+
+            for (pos, _) in &self.world.chunks {
+                if pos.x < mins.x || pos.y < mins.y || pos.z < mins.z
+                    || pos.x > maxs.x || pos.y > maxs.y || pos.z > maxs.z
+                {
+                    self.world.unload_queue.push(*pos);
+                }
+            }
+
+            println!("the purge took {:?}", time.elapsed());
+        }
 
         if !self.craft_queue.is_empty() && self.player.can_give(self.craft_queue[0].0) {
             self.craft_progress += 1;

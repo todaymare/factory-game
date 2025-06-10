@@ -1,13 +1,13 @@
-use std::{hash::{DefaultHasher, Hash, Hasher}, i32, sync::Arc, time::Instant};
+use std::{hash::{DefaultHasher, Hash, Hasher}, i32, simd::{cmp::SimdPartialEq, u8x64}, sync::Arc, time::Instant};
 
 use glam::{DVec2, DVec3, IVec2, IVec3, Vec2, Vec3Swizzles};
 use libnoise::{Fbm, Generator, ImprovedPerlin, Perlin, RidgedMulti, Simplex, Source};
 use rand::{rngs::SmallRng, seq::IndexedRandom, Rng, SeedableRng};
 use sti::hash::fxhash::FxHasher64;
 
-use crate::{perlin::PerlinNoise, voxel_world::voxel::VoxelKind};
+use crate::{perlin::PerlinNoise, voxel_world::voxel::Voxel};
 
-use super::{mesh::VoxelMesh, voxel::Voxel};
+use super::mesh::VoxelMesh;
 
 
 pub const CHUNK_SIZE : usize = 32;
@@ -25,6 +25,7 @@ pub struct Chunk {
 #[derive(Debug, Clone)]
 pub struct ChunkData {
     pub data: [Voxel; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
+    pub is_empty: bool,
 }
 
 
@@ -40,8 +41,6 @@ pub struct Noise {
     perlin: ImprovedPerlin<2>,
     simplex: Simplex<2>,
     biomes: ImprovedPerlin<2>,
-    perlin_3d: ImprovedPerlin<3>,
-    simplex_3d: Simplex<3>,
 }
 
 impl Noise {
@@ -49,9 +48,7 @@ impl Noise {
         Self {
             perlin: Source::improved_perlin(seed),
             simplex: Source::simplex(seed),
-            biomes: Source::improved_perlin(seed+69),
-            perlin_3d: Source::improved_perlin(seed),
-            simplex_3d: Source::simplex(seed),
+            biomes: Source::improved_perlin(seed),
         }
     }
 
@@ -121,7 +118,7 @@ fn smoothstep(t: f64) -> f64 {
 impl Chunk {
     pub fn empty_chunk() -> Chunk {
         Chunk {
-            data: Arc::new(ChunkData { data: [Voxel { kind: VoxelKind::Air }; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE] }),
+            data: Arc::new(ChunkData::empty()),
             is_dirty: false,
             mesh: None,
             mesh_state: MeshState::ShouldUpdate,
@@ -131,13 +128,11 @@ impl Chunk {
 
 
     pub fn generate(pos: IVec3, noise: &Noise) -> Chunk {
-        let time = Instant::now();
-
         let mut data = ChunkData::empty();
 
         let mut height_map = [[0; CHUNK_SIZE]; CHUNK_SIZE];
         let mut max_height = i32::MIN;
-        'out: for x in 0..CHUNK_SIZE {
+        for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
                 let global_pos = (pos * CHUNK_SIZE as i32).xz() + IVec2::new(x as i32, z as i32);
 
@@ -164,15 +159,14 @@ impl Chunk {
 
                         let kind;
                         if global_position.y == height {
-                            kind = VoxelKind::Dirt;
+                            kind = Voxel::Dirt;
                         } else if global_position.y > height {
                             continue
                         } else {
-                            kind = VoxelKind::Stone;
+                            kind = Voxel::Stone;
                         }
 
-                        let voxel = Voxel { kind };
-                        *data.get_mut_usize(x, y, z) = voxel;
+                        *data.get_mut_usize(x, y, z) = kind;
                     }
                 }
             }
@@ -192,9 +186,9 @@ impl Chunk {
                 buff.push(random_pos(&mut rng));
 
                 let vein_block = match rng.random_range(0..100) {
-                    0..20 => VoxelKind::Coal,
-                    20..60 => VoxelKind::Copper,
-                    _ => VoxelKind::Iron,
+                    0..20 => Voxel::Coal,
+                    20..60 => Voxel::Copper,
+                    _ => Voxel::Iron,
                 };
 
                 let vein_size = rng.random_range(64..168);
@@ -218,8 +212,8 @@ impl Chunk {
                         
 
                     let voxel = data.get_mut(pos);
-                    if voxel.kind == VoxelKind::Stone {
-                        voxel.kind = vein_block;
+                    if *voxel == Voxel::Stone {
+                        *voxel = vein_block;
                         buff.push(pos);
                     }
                 }
@@ -231,7 +225,7 @@ impl Chunk {
 
         }
 
-        let mut chunk = Chunk {
+        let chunk = Chunk {
             data: data.into(),
             is_dirty: true,
             mesh: None,
@@ -252,14 +246,23 @@ impl Chunk {
     }
 
 
-    pub fn get(&self, pos: IVec3) -> &Voxel {
+    pub fn get(&self, pos: IVec3) -> Voxel {
         self.get_usize(pos.x as usize, pos.y as usize, pos.z as usize)
     }
 
 
-    pub fn get_usize(&self, x: usize, y: usize, z: usize) -> &Voxel {
+    pub fn get_usize(&self, x: usize, y: usize, z: usize) -> Voxel {
         self.data.get_usize(x, y, z)
     }
+
+}
+
+
+fn is_all_zero_simd(data: &[u8]) -> bool {
+    data.chunks_exact(64).all(|chunk| {
+        let simd = u8x64::from_slice(chunk);
+        simd.simd_eq(u8x64::splat(0)).all()
+    })
 }
 
 
@@ -271,8 +274,18 @@ fn random_pos(rng: &mut SmallRng) -> IVec3 {
 impl ChunkData {
     pub fn empty() -> Self {
         Self {
-            data: [Voxel { kind: VoxelKind::Air }; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
+            data: [Voxel::Air; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
+            is_empty: true,
         }
+    }
+
+
+    pub fn is_empty(&self) -> bool {
+        let data = unsafe {
+            core::mem::transmute::<_, &[u8; CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE]>
+                (&self.data) };
+
+        is_all_zero_simd(data)
     }
 
 
@@ -289,14 +302,14 @@ impl ChunkData {
 
 
     #[inline(always)]
-    pub fn get(&self, pos: IVec3) -> &Voxel {
+    pub fn get(&self, pos: IVec3) -> Voxel {
         self.get_usize(pos.x as usize, pos.y as usize, pos.z as usize)
     }
 
 
     #[inline(always)]
-    pub fn get_usize(&self, x: usize, y: usize, z: usize) -> &Voxel {
-        &self.data[z * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + x]
+    pub fn get_usize(&self, x: usize, y: usize, z: usize) -> Voxel {
+        self.data[z * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + x]
     }
 }
 

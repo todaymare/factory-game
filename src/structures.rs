@@ -11,7 +11,7 @@ use sti::define_key;
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use work_queue::WorkQueue;
 
-use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::Item, renderer::Renderer, shader::ShaderProgram, voxel_world::{split_world_pos, voxel::VoxelKind, VoxelWorld}, Camera, Tick, DROPPED_ITEM_SCALE};
+use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::Item, renderer::Renderer, shader::ShaderProgram, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick, DROPPED_ITEM_SCALE};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
@@ -127,7 +127,7 @@ impl Structures {
             let pos = placement_origin + offset;
             let (chunk_pos, voxel_pos) = split_world_pos(pos);
             let chunk = world.get_chunk_mut(chunk_pos);
-            chunk.get_mut(voxel_pos).kind = VoxelKind::StructureBlock;
+            *chunk.get_mut(voxel_pos) = Voxel::StructureBlock;
             chunk.persistent = true;
             world.structure_blocks.insert(pos, id);
         }
@@ -290,7 +290,7 @@ impl Structure {
 
                 *current_progress += 1;
 
-                if !voxel.kind.is_air() {
+                if !voxel.is_air() {
                     let item = world.block_item(structures, zz + pos);
 
                     world.break_block(structures, zz + pos);
@@ -494,12 +494,12 @@ impl Structure {
                     let pos = rotate_block_vector(dir, pos);
                     let voxel = world.get_voxel(zz + pos);
 
-                    if voxel.kind.is_air() {
+                    if voxel.is_air() {
                         *current_progress += 1;
                         continue;
                     }
 
-                    let mut hardness = voxel.kind.base_hardness();
+                    let mut hardness = voxel.base_hardness();
                     if pos.y < 0 { 
                         hardness = (hardness as f32 * (1.0 + (pos.y as f32 * 0.01).powi(2))) as u32;
                     }

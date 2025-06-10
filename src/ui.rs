@@ -426,7 +426,7 @@ impl UILayer {
                     let target_block = game.world.raycast_voxel(game.camera.position, game.camera.front, PLAYER_REACH);
                     if let Some(target_block) = target_block {
                         let target_voxel = game.world.get_voxel(target_block.0);
-                        let target_voxel_kind = target_voxel.kind;
+                        let target_voxel_kind = target_voxel;
 
 
                         let _ = writeln!(text, "§eTARGET LOCATION: §a{}, {}, {}", target_block.0.x, target_block.0.y, target_block.0.z);
@@ -435,7 +435,7 @@ impl UILayer {
                         let _ = write!(text, "§eTARGET BLOCK: §b");
 
 
-                        if target_voxel.kind.is_structure() {
+                        if target_voxel.is_structure() {
                            let structure = game.world.structure_blocks.get(&target_block.0).unwrap();
                            let structure = game.structures.get(*structure);
 
@@ -573,7 +573,7 @@ impl UILayer {
                             }
                         } else {
 
-                           let _ = writeln!(text, "{:?}", target_voxel.kind);
+                           let _ = writeln!(text, "{:?}", target_voxel);
                         }
 
 

@@ -4,7 +4,7 @@ use glam::{DVec3, IVec2, Vec3, Vec4};
 use image::{codecs::png::PngDecoder, ImageDecoder};
 use rand::random;
 
-use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::StructureKind, voxel_world::voxel::VoxelKind, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
+use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::StructureKind, voxel_world::voxel::Voxel, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
 
 
 #[derive(Clone)]
@@ -29,7 +29,7 @@ pub enum ItemKind {
     IronOre,
 
     Structure(StructureKind),
-    Voxel(VoxelKind),
+    Voxel(Voxel),
 
     IronPlate,
     CopperPlate,
@@ -60,8 +60,8 @@ impl Item {
 
 impl ItemKind {
     pub const ALL : &[ItemKind] = &[
-        ItemKind::Voxel(VoxelKind::Dirt),
-        ItemKind::Voxel(VoxelKind::Stone),
+        ItemKind::Voxel(Voxel::Dirt),
+        ItemKind::Voxel(Voxel::Stone),
         ItemKind::CopperOre,
         ItemKind::IronOre,
         ItemKind::Coal,
@@ -99,8 +99,8 @@ impl ItemKind {
             ItemKind::Structure(StructureKind::Quarry) => "quarry",
             ItemKind::Structure(StructureKind::Assembler) => "assembler",
             ItemKind::Structure(StructureKind::Furnace) => "furnace",
-            ItemKind::Voxel(VoxelKind::Dirt) => "dirt_block",
-            ItemKind::Voxel(VoxelKind::Stone) => "stone_block",
+            ItemKind::Voxel(Voxel::Dirt) => "dirt_block",
+            ItemKind::Voxel(Voxel::Stone) => "stone_block",
 
             ItemKind::IronPlate => "iron_plate",
             ItemKind::CopperPlate => "copper_plate",
@@ -121,7 +121,7 @@ impl ItemKind {
     }
 
 
-    pub fn as_voxel(self) -> Option<VoxelKind> {
+    pub fn as_voxel(self) -> Option<Voxel> {
         match self {
             ItemKind::Voxel(vk) => Some(vk),
             _ => None,
@@ -147,9 +147,9 @@ impl ItemKind {
                 let colour = match self {
                     ItemKind::Voxel(vk) => vk.colour(),
                     ItemKind::Structure(structure) => return structure.mesh(),
-                    ItemKind::CopperOre => VoxelKind::Copper.colour(),
-                    ItemKind::IronOre => VoxelKind::Iron.colour(),
-                    ItemKind::Coal => VoxelKind::Coal.colour(),
+                    ItemKind::CopperOre => Voxel::Copper.colour(),
+                    ItemKind::IronOre => Voxel::Iron.colour(),
+                    ItemKind::Coal => Voxel::Coal.colour(),
                     _ => Vec4::ONE,
                 };
 

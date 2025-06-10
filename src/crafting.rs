@@ -1,4 +1,4 @@
-use crate::{items::{Item, ItemKind}, structures::strct::StructureKind, voxel_world::voxel::VoxelKind, TICKS_PER_SECOND};
+use crate::{items::{Item, ItemKind}, structures::strct::StructureKind, voxel_world::voxel::Voxel, TICKS_PER_SECOND};
 
 
 pub const FURNACE_RECIPES : &'static [Recipe] = &[
@@ -46,7 +46,7 @@ pub const RECIPES : &'static [Recipe] = &[
     },
 
     Recipe {
-        requirements: &[Item::new(ItemKind::IronGearWheel, 1), Item::new(ItemKind::Voxel(VoxelKind::Stone), 4)],
+        requirements: &[Item::new(ItemKind::IronGearWheel, 1), Item::new(ItemKind::Voxel(Voxel::Stone), 4)],
         result: Item::new(ItemKind::Structure(StructureKind::Belt), 3),
         time: TICKS_PER_SECOND*2,
     },
@@ -56,12 +56,12 @@ pub const RECIPES : &'static [Recipe] = &[
         time: TICKS_PER_SECOND*2,
     },
     Recipe {
-        requirements: &[Item::new(ItemKind::IronGearWheel, 2), Item::new(ItemKind::Voxel(VoxelKind::Stone), 16)],
+        requirements: &[Item::new(ItemKind::IronGearWheel, 2), Item::new(ItemKind::Voxel(Voxel::Stone), 16)],
         result: Item::new(ItemKind::Structure(StructureKind::Chest), 1),
         time: TICKS_PER_SECOND*2,
     },
     Recipe {
-        requirements: &[Item::new(ItemKind::Structure(StructureKind::Chest), 4), Item::new(ItemKind::Voxel(VoxelKind::Stone), 64)],
+        requirements: &[Item::new(ItemKind::Structure(StructureKind::Chest), 4), Item::new(ItemKind::Voxel(Voxel::Stone), 64)],
         result: Item::new(ItemKind::Structure(StructureKind::Silo), 1),
         time: TICKS_PER_SECOND*2,
     },
@@ -71,12 +71,12 @@ pub const RECIPES : &'static [Recipe] = &[
         time: TICKS_PER_SECOND*2,
     },
     Recipe {
-        requirements: &[Item::new(ItemKind::Voxel(VoxelKind::Stone), 16), Item::new(ItemKind::Coal, 4)],
+        requirements: &[Item::new(ItemKind::Voxel(Voxel::Stone), 16), Item::new(ItemKind::Coal, 4)],
         result: Item::new(ItemKind::Structure(StructureKind::Furnace), 1),
         time: TICKS_PER_SECOND*2,
     },
     Recipe {
-        requirements: &[Item::new(ItemKind::MechanicalComponent, 4), Item::new(ItemKind::Voxel(VoxelKind::Stone), 12)],
+        requirements: &[Item::new(ItemKind::MechanicalComponent, 4), Item::new(ItemKind::Voxel(Voxel::Stone), 12)],
         result: Item::new(ItemKind::Structure(StructureKind::Quarry), 1),
         time: TICKS_PER_SECOND*2,
     },
