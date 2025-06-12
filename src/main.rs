@@ -475,6 +475,7 @@ fn main() {
                 voxel_shader.set_vec3(c"cameraPos", game.camera.position.as_vec3());
                 voxel_shader.set_vec3(c"fog_color", game.sky_colour.xyz());
                 voxel_shader.set_f32(c"fog_density", 1.0);
+                voxel_shader.set_f32(c"time", renderer.glfw.get_time() as f32);
                 let fog_distance = game.player.render_distance - 1;
                 voxel_shader.set_f32(c"fog_start", (fog_distance * CHUNK_SIZE as i32) as f32 * 0.9);
                 voxel_shader.set_f32(c"fog_end", (fog_distance * CHUNK_SIZE as i32) as f32);
@@ -555,7 +556,7 @@ fn main() {
                     let voxel = game.world.get_voxel(pos);
                     let target_hardness = voxel.base_hardness();
                     let pos = pos.as_dvec3() - game.camera.position;
-
+ 
                     let model = Mat4::from_translation(pos.as_vec3() + Vec3::new(0.5, -0.005, 0.5));
                     let model = model * Mat4::from_scale(Vec3::new(1.01, 1.01, 1.01));
                     mesh_shader.set_matrix4(c"model", model);
@@ -691,8 +692,8 @@ impl Game {
                 yaw: 90.0f32.to_radians(),
                 fov: 80.0f32.to_radians(),
                 aspect_ratio: 16.0/9.0,
-                near: 0.001,
-                far: 2_000.0,
+                near: 0.1,
+                far: 5_000.0,
 
             },
 

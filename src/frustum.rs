@@ -30,6 +30,8 @@ pub struct Frustum {
   planes: [Vec4; PLANE_COUNT],
   points: [Vec3A; POINT_COUNT]
 }
+
+
 impl Frustum {
   pub fn compute(perspective_matrix: Mat4, view_matrix: Mat4) -> Self {
     //compute transposed view-projection matrix

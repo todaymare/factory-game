@@ -9,7 +9,7 @@ use glam::{DVec3, IVec3, Vec3, Vec4};
 use libnoise::{Perlin, Simplex, Source};
 use mesh::{draw_quad, Vertex, VoxelMesh};
 use rand::seq::IndexedRandom;
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::{current_num_threads, iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator}};
 use save_format::byte::{ByteReader, ByteWriter};
 use tracing::{info, warn};
 use voxel::Voxel;
@@ -141,6 +141,7 @@ impl VoxelWorld {
             let mut indices = vec![];
             let time = Instant::now();
             VoxelWorld::greedy_mesh(chunks, &mut vertices, &mut indices);
+            println!("meshes in {:?}", time.elapsed());
             if let Err(_) = sender.send((pos, vertices, indices, time.elapsed())) {
                 warn!("job receiver terminated before all meshing jobs were done");
             }
@@ -221,8 +222,8 @@ impl VoxelWorld {
             let pos = pos + invalidate;
             let Some(Some(chunk)) = self.chunks.get_mut(&pos)
             else { continue };
+
             chunk.mesh_state = MeshState::ShouldUpdate;
-            chunk.is_dirty = true;
         }
 
 
@@ -554,6 +555,7 @@ impl VoxelWorld {
     }
 
 
+    /*
     pub fn remesh_chunk(chunks: [Option<Arc<ChunkData>>; 7], vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>) -> bool {
         // direction of the face
         // the block offset to move in that direction
@@ -612,7 +614,7 @@ impl VoxelWorld {
         }
 
         true
-    }
+    }*/
 
 
     pub fn greedy_mesh(chunks: [Arc<ChunkData>; 7], vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>) -> bool {
@@ -623,12 +625,27 @@ impl VoxelWorld {
             let u = (d + 1) % 3;
             let v = (d + 2) % 3;
             let mut x = IVec3::ZERO;
-            let mut q = IVec3::ZERO;
 
-            let mut block_mask = [Voxel::Air; CHUNK_SIZE*CHUNK_SIZE];
-            q[d] = 1;
+            let mut block_mask = [(Voxel::Air, false); CHUNK_SIZE*CHUNK_SIZE];
 
-            x[d] = 0;
+            
+            let curr_nchunk = match d {
+                0 => 2,
+                1 => 4,
+                2 => 6,
+                _ => unreachable!(),
+            };
+            
+
+            let cmp_nchunk = match d {
+                0 => 1,
+                1 => 3,
+                2 => 5,
+
+                _ => unreachable!(),
+            };
+
+            x[d] = -1;
             while x[d] < CHUNK_SIZE as i32 {
                 let mut n = 0;
                 x[v] = 0;
@@ -638,43 +655,45 @@ impl VoxelWorld {
 
                     while x[u] < CHUNK_SIZE as i32 {
 
-                        let block_current = chunk.get(x);
-
-
-                        let block_compare = if x[d] < CHUNK_SIZE as i32 {
-                            let r = x+q;
-                            let is_out_of_bounds =    r.x < 0 || r.x >= CHUNK_SIZE as i32
-                                                   || r.y < 0 || r.y >= CHUNK_SIZE as i32
-                                                   || r.z < 0 || r.z >= CHUNK_SIZE as i32;
+                        let block_current = {
+                            let r = x;
+                            let is_out_of_bounds =    r.x < 0
+                                                   || r.y < 0
+                                                   || r.z < 0;
 
                             if is_out_of_bounds {
-                                let nchunk = match q.to_array() {
-                                    [ 1,  0,  0] => 1,
-                                    [-1,  0,  0] => 2,
-                                    [ 0,  1,  0] => 3,
-                                    [ 0, -1,  0] => 4,
-                                    [ 0,  0,  1] => 5,
-                                    [ 0,  0, -1] => 6,
-                                    _ => unreachable!(),
-                                };
-
-
-                                let nchunk = &chunks[nchunk];
+                                let nchunk = &chunks[curr_nchunk];
                                 let pos = r;
-                                let voxel = (pos + CHUNK_SIZE as i32) % CHUNK_SIZE as i32;
+                                let voxel = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
                                 nchunk.get(voxel)
                             } else {
                                 chunk.get(r)
                             }
-                        } else { block_current };
+                        };
+
+                        let block_compare = {
+                            let mut r = x;
+                            r[d] += 1;
+                            let is_out_of_bounds =    r.x == CHUNK_SIZE as i32
+                                                   || r.y == CHUNK_SIZE as i32
+                                                   || r.z == CHUNK_SIZE as i32;
+
+                            if is_out_of_bounds {
+                                let nchunk = &chunks[cmp_nchunk];
+                                let pos = r;
+                                let voxel = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
+                                nchunk.get(voxel)
+                            } else {
+                                chunk.get(r)
+                            }
+                        };
 
                         // the mask is set to true if there is a visible face
                         // between two blocks, i.e. both aren't empty and both aren't blocks
-                        block_mask[n] = match (block_current, block_compare) {
-                            (Voxel::Air, Voxel::Air) => Voxel::Air,
-                            (Voxel::Air, other) => other,
-                            (current, Voxel::Air) => current,
-                            (_, _) => Voxel::Air,
+                        block_mask[n] = match (block_current.is_transparent(), block_compare.is_transparent()) {
+                            (true, false) => (block_compare, true),
+                            (false, true) => (block_current, false),
+                            (_, _) => (Voxel::Air, false),
                         };
                         n += 1;
 
@@ -692,19 +711,19 @@ impl VoxelWorld {
                 for j in 0..CHUNK_SIZE {
                     let mut i = 0;
                     while i < CHUNK_SIZE {
-                        if block_mask[n] == Voxel::Air {
+                        if block_mask[n].0 == Voxel::Air {
                             i += 1;
                             n += 1;
                             continue;
                         }
 
-                        let kind = block_mask[n];
+                        let (kind, neg_d) = block_mask[n];
 
                         
                         // Compute the width of this quad and store it in w                        
                         //   This is done by searching along the current axis until mask[n + w] is false
                         let mut w = 1;
-                        while i + w < CHUNK_SIZE && block_mask[n + w] == kind { w += 1; }
+                        while i + w < CHUNK_SIZE && block_mask[n + w] == (kind, neg_d) { w += 1; }
 
 
                         // Compute the height of this quad and store it in h                        
@@ -717,7 +736,7 @@ impl VoxelWorld {
                         while j + h < CHUNK_SIZE {
                             for k in 0..w {
                                 // if there's a hole in the mask, exit
-                                if block_mask[n + k + h * CHUNK_SIZE] != kind {
+                                if block_mask[n + k + h * CHUNK_SIZE].0 != kind {
                                     done = true;
                                     break;
                                 }
@@ -740,15 +759,24 @@ impl VoxelWorld {
                         let mut dv = IVec3::ZERO;
                         dv[v] = h as _;
 
-                        let quad = mesh::Quad {
-                            color: kind.colour(),
-                            corners: [
-                                x.as_vec3(),
-                                (x+du).as_vec3(),
-                                (x+du+dv).as_vec3(),
-                                (x+dv).as_vec3(),
-                            ],
-                        };
+                        let quad =  mesh::Quad {
+                                    //color: if neg_d { Vec4::new(1.0, 0.0, 0.0, 1.0) }
+                                    //       else { Vec4::new(0.0, 1.0, 0.0, 1.0) },
+                                    color: kind.colour(),
+                                    corners: if neg_d {[
+                                        x.as_vec3(),
+                                        (x+du).as_vec3(),
+                                        (x+du+dv).as_vec3(),
+                                        (x+dv).as_vec3(),
+                                    ]} else {[
+                                        (x+dv).as_vec3(),
+                                        (x+du+dv).as_vec3(),
+                                        (x+du).as_vec3(),
+                                        x.as_vec3(),
+                                    ]
+                                    },
+                                    normal: d as u8 + neg_d as u8 * 3,
+                                };
 
                         draw_quad(vertices, indices, quad);
 
@@ -756,7 +784,7 @@ impl VoxelWorld {
                         // clear this part of the mask so we don't add duplicates
                         for l in 0..h  {
                             for k in 0..w {
-                                block_mask[n+k+l*CHUNK_SIZE] = Voxel::Air;
+                                block_mask[n+k+l*CHUNK_SIZE].0 = Voxel::Air;
                             }
                         }
 

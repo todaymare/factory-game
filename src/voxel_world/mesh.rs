@@ -91,12 +91,14 @@ impl Drop for VoxelMesh {
 
 
 impl Vertex {
-    pub fn new(pos: Vec3, colour: Vec4) -> Self {
+    pub fn new(pos: Vec3, colour: Vec4, normal: u8) -> Self {
         let UVec3 { x, y, z } = pos.as_uvec3();
         let UVec4 { x: r, y: g, z: b, w: a } = (colour * 255.0).as_uvec4();
 
         debug_assert!(x <= 32 && y <= 32 && z <= 32, "{x} {y} {z}");
+        debug_assert!(normal < 6);
         let pos = ((z as u32) << 12) | ((y as u32) << 6) | (x as u32);
+        let pos = pos << 3 | normal as u32;
         let colour = ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | (a as u32);
 
         let data1 = pos as u32;
@@ -119,9 +121,10 @@ impl Vertex {
 pub struct Quad {
     pub color: Vec4,
     pub corners: [Vec3; 4],
+    pub normal: u8,
 }
 
-
+/*
 impl Quad {
     // the input position is assumed to be a voxel's (0,0,0) pos
     // therefore right / up / forward are offset by 1
@@ -169,10 +172,11 @@ impl Quad {
         Self {
             corners,
             color,
+            normal: 
         }
     }
 
-}
+}*/
 
 
 pub fn draw_quad(verticies: &mut Vec<Vertex>, indicies: &mut Vec<u32>, quad: Quad) {
@@ -182,7 +186,7 @@ pub fn draw_quad(verticies: &mut Vec<Vertex>, indicies: &mut Vec<u32>, quad: Qua
         let mut colour = quad.color;
         colour = colour * 0.9 + colour * (i as f32 * 0.1);
         colour.w = quad.color.w;
-        verticies.push(Vertex::new(Vec3::new(corner[0] as f32, corner[1] as f32, corner[2] as f32), colour));
+        verticies.push(Vertex::new(Vec3::new(corner[0] as f32, corner[1] as f32, corner[2] as f32), colour, quad.normal));
         i += 1;
     }
 

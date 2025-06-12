@@ -70,8 +70,6 @@ impl Renderer {
         glfw.window_hint(glfw::WindowHint::OpenGlProfile(glfw::OpenGlProfileHint::Core));
         glfw.window_hint(glfw::WindowHint::OpenGlForwardCompat(true));
 
-
-
         let (mut window, window_events) = glfw.create_window(window_size.0 as u32, window_size.1 as u32, "factory game", glfw::WindowMode::Windowed)
             .unwrap();
 
@@ -98,12 +96,9 @@ impl Renderer {
         let vertex = Shader::new(&fs::read("shaders/ui.vs").unwrap(), ShaderType::Vertex).unwrap();
         let ui_shader = ShaderProgram::new(fragment, vertex).unwrap();
 
-        unsafe { gl::Enable(gl::DEPTH_TEST) };
+        //unsafe { gl::Enable(gl::DEPTH_TEST) };
         unsafe { gl::Enable(gl::BLEND) };
         unsafe { gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA); };
-
-
-
 
         let mut ft = null_mut();
         if unsafe { freetype::freetype::FT_Init_FreeType(&mut ft) } != 0 {
@@ -254,7 +249,10 @@ impl Renderer {
             gl::Enable(gl::DEPTH_TEST);
             gl::ClearColor(colour.x, colour.y, colour.z, colour.w);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-
+            /*
+            gl::Enable(gl::CULL_FACE);
+            gl::CullFace(gl::FRONT);
+            */
 
             if self.is_wireframe {
                 gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);

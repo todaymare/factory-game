@@ -242,6 +242,7 @@ impl Chunk {
 
 
     pub fn get_mut_usize(&mut self, x: usize, y: usize, z: usize) -> &mut Voxel {
+        println!("{}", Arc::strong_count(&self.data));
         Arc::make_mut(&mut self.data).get_mut_usize(x, y, z)
     }
 
