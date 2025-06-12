@@ -3,7 +3,7 @@ use std::{ops::Bound, fmt::Write};
 use glam::{Vec2, Vec4};
 use glfw::{CursorMode, Key};
 
-use crate::{commands::Command, crafting::{Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer, Style}, structures::{strct::{InserterState, StructureData}, Crafter, StructureId}, voxel_world::split_world_pos, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE};
+use crate::{commands::Command, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer, Style}, structures::{inventory::{SlotKind, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::split_world_pos, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE};
 
 pub enum UILayer {
     Inventory {
@@ -278,11 +278,10 @@ impl UILayer {
 
 
                         let structure = game.structures.get_mut(*structure);
-                        let StructureData::Chest { inventory } = &mut structure.data
-                        else { unreachable!() };
+                        let inventory = &mut structure.inventory.as_mut().unwrap().slots;
 
                         renderer.draw_rect(corner, external_view_size, Vec4::ONE);
-                        draw_inventory(renderer, inventory, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
+                        draw_inventory(renderer, &mut *inventory, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
 
                         other_inv = Some(inventory.as_mut_slice());
                     },
@@ -299,8 +298,7 @@ impl UILayer {
 
 
                         let structure = game.structures.get_mut(*structure);
-                        let StructureData::Silo { inventory } = &mut structure.data
-                        else { unreachable!() };
+                        let inventory = &mut structure.inventory.as_mut().unwrap().slots;
 
                         renderer.draw_rect(corner, external_view_size, Vec4::ONE);
                         draw_inventory(renderer, inventory, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
@@ -326,7 +324,8 @@ impl UILayer {
                         for col in 0..cols {
                             let mut pos = base;
                             for row in 0..rows {
-                                let Some(&recipe) = RECIPES.get(col*rows+row)
+                                let recipe_index = col*rows+row;
+                                let Some(&curr_recipe) = RECIPES.get(recipe_index)
                                 else { break 'mode };
 
                                 let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(slot_size));
@@ -337,34 +336,38 @@ impl UILayer {
                                 }
                                
                                 renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
-                                renderer.draw_item_icon(recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
-                                renderer.draw_text(format!("{}", recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
+                                renderer.draw_item_icon(curr_recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
+                                renderer.draw_text(format!("{}", curr_recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
 
 
                                 if is_mouse_intersecting && input.is_button_just_pressed(glfw::MouseButton::Button1) {
                                     let structure = game.structures.get_mut(*structure);
-                                    let StructureData::Assembler { crafter } = &mut structure.data
+                                    let StructureData::Assembler { recipe } = &mut structure.data
                                     else { unreachable!() };
 
-                                    for &item in &crafter.inventory {
-                                        if item.amount == 0 { continue }
-                                        if game.player.can_give(item) {
-                                            game.player.add_item(item);
+                                    let prev_inv = if recipe.is_some() {
+                                        core::mem::take(&mut structure.inventory.as_mut().unwrap().slots)
+                                    } else { vec![] };
+
+
+                                    let new_inventory_slots = crafting::crafting_recipe_inventory(recipe_index);
+                                    let new_inv = StructureInventory::new(new_inventory_slots);
+
+                                    structure.inventory = Some(new_inv);
+                                    *recipe = Some(curr_recipe);
+
+                                    for item in prev_inv {
+                                        let Some(item) = item
+                                        else { continue };
+
+                                        if structure.can_accept(item) {
+                                            structure.give_item(item);
                                         } else {
-                                            game.world.dropped_items.push(DroppedItem::new(item, game.player.body.position));
+                                            let dropped_item = DroppedItem::new(item, game.player.body.position);
+                                            game.world.dropped_items.push(dropped_item);
                                         }
                                     }
 
-                                    if crafter.output.amount != 0 {
-                                        let item = crafter.output;
-                                        if game.player.can_give(item) {
-                                            game.player.add_item(item);
-                                        } else {
-                                            game.world.dropped_items.push(DroppedItem::new(item, game.player.body.position));
-                                        }
-                                    }
-
-                                    *crafter = Crafter::from_recipe(recipe);
                                     self.close(game, dt);
                                     return;
                                 }
@@ -436,25 +439,57 @@ impl UILayer {
 
 
                         if target_voxel.is_structure() {
-                           let structure = game.world.structure_blocks.get(&target_block.0).unwrap();
-                           let structure = game.structures.get(*structure);
+                            let structure = game.world.structure_blocks.get(&target_block.0).unwrap();
+                            let structure = game.structures.get(*structure);
 
-                           let _ = writeln!(text, "Structure");
-                           let _ = writeln!(text, "§e- POSITION: §a{}, {}, {}", structure.position.x, structure.position.y, structure.position.z);
-                           let _ = writeln!(text, "§e- DIRECTION: §b{:?}", structure.direction);
-                           let _ = writeln!(text, "§e- IS ASLEEP: §b{}", structure.is_asleep);
+                            let _ = writeln!(text, "Structure");
+                            let _ = writeln!(text, "§e- POSITION: §a{}, {}, {}", structure.position.x, structure.position.y, structure.position.z);
+                            let _ = writeln!(text, "§e- DIRECTION: §b{:?}", structure.direction);
+                            let _ = writeln!(text, "§e- IS ASLEEP: §b{}", structure.is_asleep);
 
-                           let _ = write!(text, "§e- KIND: §b");
+                            if let Some(inv) = &structure.inventory {
+                                let input_len = inv.inputs_len();
+                                if input_len > 0 {
+                                    let _ = writeln!(text, "§e  - INPUTS:");
+                                    for i in 0..input_len {
+                                        let (item, meta) = inv.input(i);
+                                        let filter = match meta.kind {
+                                            SlotKind::Input { filter } => filter,
+                                            SlotKind::Storage => None,
+                                            SlotKind::Output => unreachable!(),
+                                        };
 
-                           match &structure.data {
-                                StructureData::Quarry { current_progress, output } => {
+                                        if let Some(item) = item {
+                                            let max_amount = meta.max_amount.min(item.kind.max_stack_size());
+                                            let _ = writeln!(text, "§e     - §b{:?} §a{}x/{}x", item.kind, item.amount, max_amount);
+                                        } else if let Some(filter) = filter && meta.max_amount != u32::MAX {
+                                            let max_amount = meta.max_amount;
+                                            let _ = writeln!(text, "§e     - §b{:?} §a0x/{}x", filter, max_amount);
+                                        } else {
+                                            let _ = writeln!(text, "§e     - §bEmpty");
+                                        }
+                                    }
+                                }
+
+                                let output_len = inv.outputs_len();
+                                let _ = writeln!(text, "§e  - OUTPUTS:");
+                                for i in 0..output_len {
+                                    let (item, meta) = inv.output(i);
+                                    if let Some(item) = item {
+                                        let max_amount = meta.max_amount.min(item.kind.max_stack_size());
+                                        let _ = writeln!(text, "§e     - §b{:?} §a{}x/{}x", item.kind, item.amount, max_amount);
+                                    } else {
+                                        let _ = writeln!(text, "§e     - §bEmpty");
+                                    }
+                                }
+                            }
+
+                            let _ = write!(text, "§e- KIND: §b");
+
+                            match &structure.data {
+                                StructureData::Quarry { current_progress } => {
                                     let _ = writeln!(text, "Quarry:");
                                     let _ = writeln!(text, "§e    - CURRENT PROGRESS: §a{}", current_progress);
-                                    if let Some(output) = output {
-                                        let _ = writeln!(text, "§e  - OUTPUT: §b{:?}", output);
-                                    } else {
-                                        let _ = writeln!(text, "§e  - OUTPUT: §bEmpty");
-                                    }
                                 },
 
                                 StructureData::Inserter { state, filter } => {
@@ -478,36 +513,19 @@ impl UILayer {
                                 },
 
 
-                                StructureData::Chest { inventory } => {
+                                StructureData::Chest { } => {
                                     let _ = writeln!(text, "Chest");
-                                    let _ = writeln!(text, "§e    - INVENTORY:");
-
-                                    for slot in inventory {
-                                        if let Some(item) = slot {
-                                            let _ = writeln!(text, "§e      - §b{:?} §e{}x/{}x", item.kind, item.amount, item.kind.max_stack_size());
-                                        } else {
-                                            let _ = writeln!(text, "§e      - §bEmpty");
-                                        }
-                                   }
                                 }
 
 
-                                StructureData::Silo { inventory } => {
+                                StructureData::Silo { } => {
                                     let _ = writeln!(text, "Silo");
-                                    let _ = writeln!(text, "§e    - INVENTORY:");
-
-                                    for slot in inventory {
-                                        if let Some(item) = slot {
-                                            let _ = writeln!(text, "§e      - §b{:?} §e{}x/{}x", item.kind, item.amount, item.kind.max_stack_size());
-                                        } else {
-                                            let _ = writeln!(text, "§e      - §bEmpty");
-                                        }
-                                   }
                                 }
 
 
-                                StructureData::Belt { inventory } => {
+                                StructureData::Belt { } => {
                                     let _ = writeln!(text, "Belt");
+                                    /*
                                     let _ = writeln!(text, "§e  - INVENTORY:");
                                     let _ = writeln!(text, "§e    - LEFT LANE:");
                                     for item in inventory[0] {
@@ -525,44 +543,18 @@ impl UILayer {
                                         } else {
                                             let _ = writeln!(text, "§e      - §bEmpty");
                                         }
-                                    }
+                                    }*/
                                 }
 
 
-                                StructureData::Splitter { inventory, priority } => {
+                                StructureData::Splitter { priority } => {
                                     let _ = writeln!(text, "Splitter");
                                     let _ = writeln!(text, "§e  - PRIORITY: §a{priority:?}");
-                                    let _ = writeln!(text, "§e  - INVENTORY:");
-                                    for inventory in inventory {
-                                        let _ = writeln!(text, "§e    - LEFT LANE:");
-                                        for item in inventory[0] {
-                                            if let Some(item) = item {
-                                                let _ = writeln!(text, "§e      - §b{item:?}");
-                                            } else {
-                                                let _ = writeln!(text, "§e      - §bEmpty");
-                                            }
-                                        }
-
-                                        let _ = writeln!(text, "§e    - RIGHT LANE:");
-                                        for item in inventory[1] {
-                                            if let Some(item) = item {
-                                                let _ = writeln!(text, "§e      - §b{item:?}");
-                                            } else {
-                                                let _ = writeln!(text, "§e      - §bEmpty");
-                                            }
-                                        }
-                                    }
                                 }
 
 
-                                StructureData::Assembler { crafter } => {
+                                StructureData::Assembler { recipe: crafter } => {
                                     let _ = writeln!(text, "Assembler");
-                                    let _ = writeln!(text, "§e  - INVENTORY:");
-                                    for item in &crafter.inventory {
-                                        let _ = writeln!(text, "§e      - §b{item:?}");
-                                    }
-                                    let _ = writeln!(text, "§e  - OUTPUT:");
-                                    let _ = writeln!(text, "§e      - §b{:?}", crafter.output);
                                 }
 
                                 StructureData::Furnace { input, output } => {
@@ -572,7 +564,6 @@ impl UILayer {
                                 }
                             }
                         } else {
-
                            let _ = writeln!(text, "{:?}", target_voxel);
                         }
 

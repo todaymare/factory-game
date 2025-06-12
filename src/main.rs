@@ -50,7 +50,7 @@ define_key!(EntityId(u32));
 const MOUSE_SENSITIVITY : f32 = 0.0016;
 
 const PLAYER_REACH : f32 = 5.0;
-const PLAYER_SPEED : f32 = 100.0;
+const PLAYER_SPEED : f32 = 10.0;
 const PLAYER_PULL_DISTANCE : f32 = 3.5;
 const PLAYER_INTERACT_DELAY : f32 = 0.2;
 const PLAYER_HOTBAR_SIZE : usize = 5;
@@ -692,7 +692,7 @@ impl Game {
                 yaw: 90.0f32.to_radians(),
                 fov: 80.0f32.to_radians(),
                 aspect_ratio: 16.0/9.0,
-                near: 0.1,
+                near: 0.05,
                 far: 5_000.0,
 
             },

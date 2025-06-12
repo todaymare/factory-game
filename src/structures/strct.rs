@@ -1,14 +1,16 @@
 use glam::IVec3;
 
-use crate::{crafting::{FURNACE_RECIPES, RECIPES}, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh};
+use crate::{crafting::{Recipe, FURNACE_RECIPES, RECIPES}, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh, ui::InventoryMode};
 
-use super::Crafter;
+use super::{inventory::{SlotKind, SlotMeta, StructureInventory}};
 
 #[derive(Debug)]
 pub struct Structure {
     pub position: IVec3,
     pub direction: CardinalDirection,
     pub data: StructureData,
+
+    pub inventory: Option<StructureInventory>,
 
     pub is_asleep: bool,
 }
@@ -18,7 +20,6 @@ pub struct Structure {
 pub enum StructureData {
     Quarry {
         current_progress: u32,
-        output: Option<Item>,
     },
 
     Inserter {
@@ -26,28 +27,17 @@ pub enum StructureData {
         filter: Option<ItemKind>,
     },
 
-    Chest {
-        inventory: [Option<Item>; 3*3],
-    },
-
-    Silo {
-        inventory: [Option<Item>; 6*6],
-    },
-
-
-    Belt {
-        inventory: [[Option<Item>; 2]; 2],
-    },
-
+    Chest,
+    Silo,
+    Belt,
 
     Splitter {
-        inventory: [[[Option<Item>; 2]; 2]; 2],
         priority: [u8; 2],
     },
 
 
     Assembler {
-        crafter: Crafter,
+        recipe: Option<Recipe>,
     },
 
     Furnace {
@@ -79,16 +69,46 @@ pub enum StructureKind {
 
 
 impl StructureData {
-    pub fn from_kind(kind: StructureKind) -> Self {
+    fn from_kind(kind: StructureKind) -> (Self, Option<StructureInventory>) {
         match kind {
-            StructureKind::Quarry => Self::Quarry { current_progress: 0, output: None },
-            StructureKind::Inserter => Self::Inserter { state: InserterState::Searching, filter: None },
-            StructureKind::Chest => Self::Chest { inventory: [None; 3*3] },
-            StructureKind::Silo => Self::Silo { inventory: [None; 6*6] },
-            StructureKind::Belt => Self::Belt { inventory: [[None; 2]; 2] },
-            StructureKind::Splitter => Self::Splitter { inventory: [[[None; 2]; 2]; 2], priority: [0, 0] },
-            StructureKind::Assembler => Self::Assembler { crafter: Crafter::from_recipe(RECIPES[0]) },
-            StructureKind::Furnace => Self::Furnace { input: None, output: None },
+
+            StructureKind::Quarry => {
+                const SLOTS : &[SlotMeta] = &[SlotMeta::new(1, SlotKind::Output)];
+                (Self::Quarry { current_progress: 0 }, Some(StructureInventory::new(SLOTS)))
+            },
+
+
+            StructureKind::Inserter => {
+                (Self::Inserter { state: InserterState::Searching, filter: None }, None)
+            },
+
+
+            StructureKind::Chest => {
+                const SLOTS : &[SlotMeta] = &[SlotMeta::new(u32::MAX, SlotKind::Storage); 3*3];
+                (Self::Chest, Some(StructureInventory::new(SLOTS)))
+            },
+
+
+            StructureKind::Silo => {
+                const SLOTS : &[SlotMeta] = &[SlotMeta::new(u32::MAX, SlotKind::Storage); 6*6];
+                (Self::Silo, Some(StructureInventory::new(SLOTS)))
+            },
+
+
+            StructureKind::Belt => {
+                const SLOTS : &[SlotMeta] = &[SlotMeta::new(1, SlotKind::Storage); 4];
+                (Self::Belt, Some(StructureInventory::new(SLOTS)))
+            },
+            StructureKind::Splitter => {
+                const SLOTS : &[SlotMeta] = &[SlotMeta::new(1, SlotKind::Storage); 8];
+                (Self::Splitter { priority: [0; 2] }, Some(StructureInventory::new(SLOTS)))
+            },
+
+
+            StructureKind::Assembler => (Self::Assembler { recipe: None }, None),
+
+
+            StructureKind::Furnace => (Self::Furnace { input: None, output: None }, None),
         }
     }
 
@@ -111,11 +131,13 @@ impl StructureData {
 
 impl Structure {
     pub fn from_kind(kind: StructureKind, pos: IVec3, direction: CardinalDirection) -> Structure {
+        let (data, inv) = StructureData::from_kind(kind);
         Structure {
-            data: StructureData::from_kind(kind),
+            data,
             position: pos,
             direction,
             is_asleep: true,
+            inventory: inv,
         }
     }
 
@@ -126,87 +148,7 @@ impl Structure {
 
 
     pub fn can_accept(&self, item: Item) -> bool {
-        match &self.data {
-            StructureData::Quarry { .. } => false,
-            StructureData::Inserter { .. } => false,
-
-
-            StructureData::Chest { inventory } => {
-                for slot in inventory {
-                    let Some(slot) = slot
-                    else { return true; };
-
-                    if slot.kind != item.kind { continue }
-
-                    if slot.amount + item.amount <= slot.kind.max_stack_size() {
-                        return true;
-                    }
-                }
-
-                false
-            },
-
-
-            StructureData::Silo { inventory } => {
-                for slot in inventory {
-                    let Some(slot) = slot
-                    else { return true; };
-
-                    if slot.kind != item.kind { continue }
-
-                    if slot.amount + item.amount <= slot.kind.max_stack_size() {
-                        return true;
-                    }
-                }
-
-                false
-            },
-
-
-            StructureData::Belt { inventory } => {
-                for arr in 0..inventory.len() {
-                    let arr = &inventory[arr];
-                    for i in 0..arr.len() {
-                        if arr[i].is_none() {
-                            return true;
-                        }
-                    }
-                }
-                false
-            },
-
-
-            StructureData::Splitter { inventory, .. } => {
-                for inventory in inventory {
-                    for arr in 0..inventory.len() {
-                        let arr = &inventory[arr];
-                        for i in 0..arr.len() {
-                            if arr[i].is_none() {
-                                return true;
-                            }
-                        }
-                    }
-                }
-                false
-            },
-
-
-            StructureData::Assembler { crafter } => {
-                for i in 0..crafter.inventory.len() {
-                    let inventory_item = crafter.inventory[i];
-                    if inventory_item.kind != item.kind { continue }
-
-                    let recipe_amount = crafter.recipe.requirements[i].amount;
-                    if inventory_item.amount < recipe_amount * 2 {
-                        return true
-                    }
-                    return false
-                }
-
-                false
-            }
-
-
+        match self.data {
             StructureData::Furnace { input, output } => {
                 if let Some(input) = input {
                     input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
@@ -218,78 +160,20 @@ impl Structure {
                     FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == item.kind).is_some()
                 }
             }
+
+
+            _ => {
+                let Some(inventory) = &self.inventory
+                else { return false };
+
+                inventory.can_accept(item)
+
+            }
         }
     }
 
-
     pub fn give_item(&mut self, item: Item) {
-        assert!(self.can_accept(item));
         match &mut self.data {
-            StructureData::Chest { inventory } => {
-                for slot in inventory {
-                    let Some(slot) = slot
-                    else { *slot = Some(item); return; };
-
-                    if slot.kind != item.kind { continue }
-
-                    if slot.amount + item.amount <= slot.kind.max_stack_size() {
-                        slot.amount += item.amount;
-                        return;
-                    }
-                }
-           },
-
-
-           StructureData::Silo { inventory } => {
-                for slot in inventory {
-                    let Some(slot) = slot
-                    else { *slot = Some(item); return; };
-
-                    if slot.kind != item.kind { continue }
-
-                    if slot.amount + item.amount <= slot.kind.max_stack_size() {
-                        slot.amount += item.amount;
-                        return;
-                    }
-                }
-            },
-
-
-
-            StructureData::Belt { inventory } => {
-                for inv in inventory {
-                    for slot in inv {
-                        if slot.is_none() {
-                            *slot = Some(item);
-                            return;
-                        }
-                    }
-                }
-            },
-
-
-            StructureData::Splitter { inventory, .. } => {
-                for inv in inventory {
-                    for inv in inv {
-                        for slot in inv {
-                            if slot.is_none() {
-                                *slot = Some(item);
-                                return;
-                            }
-                        }
-                    }
-                }
-            },
-
-
-            StructureData::Assembler { crafter } => {
-                for slot in &mut crafter.inventory {
-                    if slot.kind == item.kind {
-                        slot.amount += item.amount;
-                    }
-                }
-            },
-
             StructureData::Furnace { input, .. } => {
                 if let Some(input) = input {
                     input.amount += item.amount;
@@ -299,112 +183,51 @@ impl Structure {
             },
 
 
+            _ => {
+                let Some(inventory) = &mut self.inventory
+                else { panic!("tried to give an item '{item:?}' to a structure with no inventory") };
 
-            _ => unreachable!(),
+                inventory.give_item(item);
+
+            }
         }
     }
 
 
     pub fn available_items_len(&self) -> usize {
-        match &self.data {
-            StructureData::Quarry { output, .. } => output.is_some() as usize,
-            StructureData::Inserter { .. } => 0,
-            StructureData::Chest { inventory } => inventory.len(),
-            StructureData::Silo { inventory } => inventory.len(),
-            StructureData::Belt { .. } => 4,
-            StructureData::Splitter { .. } => 4,
-            StructureData::Assembler { crafter } => (crafter.output.amount != 0) as usize,
-            StructureData::Furnace { output, .. } => output.is_some() as usize,
+        match self.data {
+            StructureData::Furnace { output, .. } => output.is_some() as _,
+
+
+            _ => {
+                let Some(inventory) = &self.inventory
+                else { return 0 };
+
+                inventory.outputs_len()
+
+            }
         }
     }
 
 
-    pub fn available_item(&self, index: usize) -> Option<Item> {
-        assert!(index < self.available_items_len());
+    pub fn available_item(&self, index: usize) -> &Option<Item> {
         match &self.data {
-            StructureData::Quarry { output, .. } => *output,
-            StructureData::Inserter { .. } => None,
-            StructureData::Chest { inventory } => inventory[index],
-            StructureData::Silo { inventory } => inventory[index],
-            StructureData::Belt { inventory } => inventory[index/2][index%2],
-            StructureData::Splitter { inventory, .. } => inventory[index/4][(index%4)/2][index%2],
-            StructureData::Assembler { crafter } => {
-                let output = crafter.output;
-                if output.amount == 0 { return None };
-                Some(output)
+            StructureData::Furnace { output, .. } => &output,
+
+            _ => {
+                let Some(inventory) = &self.inventory
+                else { panic!("tried to view an item from a structure with no inventory") };
+
+                inventory.output(index).0
+
             }
-            StructureData::Furnace { output, .. } => *output,
         }
+
     }
 
 
     pub fn try_take(&mut self, index: usize) -> Option<Item> {
         match &mut self.data {
-            StructureData::Quarry { output, .. } => {
-                output.take()
-            },
-
-            StructureData::Inserter { .. } => None,
-            StructureData::Chest { inventory } => {
-                let item = &mut inventory[index];
-                let item = item;
-
-                if let Some(slot) = item {
-                    slot.amount -= 1;
-                    let mut result = *slot;
-                    result.amount = 1;
-
-                    if slot.amount == 0 {
-                        *item = None;
-                    }
-
-                    return Some(result);
-
-                }
-
-                None
-            },
-
-           StructureData::Silo { inventory } => {
-                let item = &mut inventory[index];
-                let item = item;
-
-                if let Some(slot) = item {
-                    slot.amount -= 1;
-                    let mut result = *slot;
-                    result.amount = 1;
-
-                    if slot.amount == 0 {
-                        *item = None;
-                    }
-
-                    return Some(result);
-
-                }
-
-                None
-            },
-
-
-            StructureData::Assembler { crafter } => {
-                let mut output = crafter.output;
-                if output.amount == 0 { return None };
-                crafter.output.amount -= 1;
-                output.amount = 1;
-                Some(output)
-            }
-
-            StructureData::Belt { inventory } => {
-                let slot = &mut inventory[index / 2][index % 2];
-                slot.take()
-            },
-
-            StructureData::Splitter { inventory, .. } => {
-                let slot = &mut inventory[index/4][(index%4)/ 2][index % 2];
-                slot.take()
-            },
-
-
             StructureData::Furnace { output, .. } => {
                 if let Some(output_item) = output {
                     output_item.amount -= 1;
@@ -418,6 +241,16 @@ impl Structure {
 
                 None
             }
+
+
+            _ => {
+                let Some(inventory) = &mut self.inventory
+                else { panic!("tried to take an item from a structure with no inventory") };
+
+                inventory.try_take(index)
+
+            }
+            
         }
     }
 }

@@ -1,11 +1,13 @@
 pub mod strct;
 pub mod work_queue;
 pub mod belts;
+pub mod inventory;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use belts::{Belts, Node};
 use glam::{DVec3, IVec3, Mat4, Vec3};
+use inventory::{SlotKind, StructureInventory};
 use rand::seq::IndexedRandom;
 use sti::define_key;
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
@@ -28,15 +30,6 @@ pub struct Structures {
     pub to_be_awoken: Vec<StructureId>,
     pub current_tick: Tick,
 }
-
-
-#[derive(PartialEq, Eq, Hash, Debug)]
-pub struct Crafter {
-    pub recipe: Recipe,
-    pub inventory: Vec<Item>,
-    pub output: Item,
-}
-
 
 
 impl Structures {
@@ -179,17 +172,19 @@ impl Structures {
             else { unreachable!() };
 
             
+            let inventory = structure.inventory.as_mut().unwrap();
+            let inventory = &mut inventory.slots;
             match &mut structure.data {
-                StructureData::Belt { inventory } => {
+                StructureData::Belt { } => {
                     assert!(output2.is_none());
                     let output = output1;
-                    Self::process_lanes(inventory, output);
+                    Self::process_lanes(&mut inventory[..4], output);
                 },
 
 
-                StructureData::Splitter { inventory, .. } => {
-                    for (i, output) in [output1, output2].into_iter().enumerate() {
-                        let inventory = &mut inventory[i];
+                StructureData::Splitter { .. } => {
+                    for (lane, output) in [output1, output2].into_iter().enumerate() {
+                        let inventory = &mut inventory[lane*4..(lane+1)*4];
                         Self::process_lanes(inventory, output);
                     }
                 },
@@ -201,44 +196,49 @@ impl Structures {
     }
 
 
-    fn process_lanes(inventory: &mut [[Option<Item>; 2]; 2], mut output: Option<&mut Structure>) {
-        for (lane, inventory) in inventory.iter_mut().enumerate() {
-            for i in 0..inventory.len() {
-                if i > 0 && inventory[i-1].is_none() {
-                    let item = &mut inventory[i];
-                    inventory[i-1] = item.take();
-                    continue;
-                }
+    fn process_lanes(inventory: &mut [Option<Item>], mut output: Option<&mut Structure>) {
+        for i in 0..4 {
+            let lane = i/2;
+            let i = i%2;
+            let inventory = &mut inventory[lane*2..(lane+1)*2];
 
+            if i > 0 && inventory[i-1].is_none() {
                 let item = &mut inventory[i];
-                let Some(output_structure) = &mut output
-                else { continue };
+                inventory[i-1] = item.take();
+                continue;
+            }
 
-                match &mut output_structure.data {
-                    StructureData::Belt { inventory } => {
-                        if inventory[lane][1].is_none() {
-                            inventory[lane][1] = item.take();
+            let item = &mut inventory[i];
+            let Some(output_structure) = &mut output
+            else { continue };
+
+            match &mut output_structure.data {
+                StructureData::Belt { } => {
+                    let inventory = &mut output_structure.inventory.as_mut().unwrap().slots;
+                    if inventory[lane * 2 + 1].is_none() {
+                        inventory[lane * 2 + 1] = item.take();
+                    }
+                },
+
+
+                StructureData::Splitter { priority } => {
+                    for side in [0, 1] {
+                        let inventory = &mut output_structure.inventory.as_mut().unwrap().slots;
+                        let side = (priority[lane] as usize + side) % 2;
+                        let inventory = &mut inventory[side*4..(side+1)*4];
+                        let inventory = &mut inventory[lane*2..(lane+1)*2];
+
+                        let slot = &mut inventory[1];
+                        if slot.is_none() {
+                            *slot = item.take();
+                            priority[lane] += 1;
+                            priority[lane] %= 2;
                         }
-                    },
 
+                    }
+                },
 
-                    StructureData::Splitter { inventory, priority } => {
-                        for side in [0, 1] {
-                            let inventory = &mut inventory[(priority[lane] as usize + side) % 2];
-                            let inventory = &mut inventory[lane];
-
-                            let slot = &mut inventory[1];
-                            if slot.is_none() {
-                                *slot = item.take();
-                                priority[lane] += 1;
-                                priority[lane] %= 2;
-                            }
-
-                        }
-                    },
-
-                    _ => unreachable!(),
-                }
+                _ => unreachable!(),
             }
         }
     }
@@ -270,15 +270,11 @@ impl Structure {
         let zz = structure.zero_zero();
 
         match &mut structure.data {
-            StructureData::Quarry { current_progress, output } => {
-                let x = *current_progress % 3;
-                let z = (*current_progress / 3) % 3;
-                let y = *current_progress / 9;
+            StructureData::Quarry { current_progress } => {
+                let inventory = &mut structure.inventory.as_mut().unwrap();
+                debug_assert!(inventory.outputs_len() == 1);
 
-                let pos = IVec3::new(x as i32 + 1, -(y as i32) - 1, z as i32 + 1);
-                let pos = rotate_block_vector(dir, pos);
-
-                let voxel = world.get_voxel(zz + pos);
+                let (output, _) = inventory.output(0);
 
                 let is_output_empty = output.is_none();
                 if !is_output_empty {
@@ -288,6 +284,16 @@ impl Structure {
                     return;
                 }
 
+
+                let x = *current_progress % 3;
+                let z = (*current_progress / 3) % 3;
+                let y = *current_progress / 9;
+
+                let pos = IVec3::new(x as i32 + 1, -(y as i32) - 1, z as i32 + 1);
+                let pos = rotate_block_vector(dir, pos);
+
+                let voxel = world.get_voxel(zz + pos);
+
                 *current_progress += 1;
 
                 if !voxel.is_air() {
@@ -296,8 +302,9 @@ impl Structure {
                     world.break_block(structures, zz + pos);
 
                     let structure = structures.get_mut_without_wake_up(id);
-                    let StructureData::Quarry { output, .. } = &mut structure.data
-                    else { unreachable!() };
+                    let inventory = &mut structure.inventory.as_mut().unwrap();
+                    let output = inventory.output_mut(0);
+                    println!("processing item {item:?}");
 
                     *output = Some(item);
                     structure.is_asleep = true;
@@ -326,7 +333,7 @@ impl Structure {
                         let available_items_len = input_structure.available_items_len();
                         for index in 0..available_items_len {
                             let input_structure = structures.get(*input_structure_id);
-                            let Some(mut item) = input_structure.available_item(index)
+                            let Some(mut item) = *input_structure.available_item(index)
                             else {
                                 // no item in this index
                                 continue;
@@ -363,11 +370,13 @@ impl Structure {
 
                         let item = *item;
                         let output_structure = structures.get_mut(*output_structure_id);
-                        if let StructureData::Belt { inventory } = &mut output_structure.data {
+                        if let StructureData::Belt = &mut output_structure.data {
+                            let inventory = &mut output_structure.inventory.as_mut().unwrap().slots;
                             let lane = placement_lane(dir, output_structure.direction);
-                            let inv = &mut inventory[lane];
+                            let inventory = &mut inventory[lane*2..(lane+1)*2];
 
-                            for slot in inv {
+                            for index in 0..2 {
+                                let slot = &mut inventory[index];
                                 if slot.is_none() {
                                     *slot = Some(item);
                                     final_state = InserterState::Searching;
@@ -415,14 +424,24 @@ impl Structure {
             },
 
 
-            StructureData::Assembler { crafter } => {
-                crafter.output.amount += 1;
-                if crafter.try_consume() {
-                    let time = crafter.recipe.time;
+            StructureData::Assembler { recipe } => {
+                let Some(recipe) = recipe
+                else { structure.is_asleep = true; return };
+
+                let inventory = structure.inventory.as_mut().unwrap();
+                let output = inventory.output_mut(0);
+                match output {
+                    Some(v) => v.amount += recipe.result.amount,
+                    None => *output = Some(recipe.result),
+                }
+
+                if try_consume(inventory, *recipe) {
+                    let time = recipe.time;
                     structures.schedule_in(id, time);
                 } else {
                     structure.is_asleep = true;
                 }
+
             }
 
 
@@ -516,9 +535,14 @@ impl Structure {
             },
 
 
-            StructureData::Assembler { crafter } => {
-                if crafter.try_consume() {
-                    let time = crafter.recipe.time;
+            StructureData::Assembler { recipe } => {
+                let Some(recipe) = recipe
+                else { structure.is_asleep = true; return };
+
+                let inventory = structure.inventory.as_mut().unwrap();
+
+                if try_consume(inventory, *recipe) {
+                    let time = recipe.time;
                     structures.schedule_in(id, time);
                 } else {
                     structure.is_asleep = true;
@@ -587,7 +611,8 @@ impl Structure {
         mesh.draw();
 
         match &self.data {
-            StructureData::Chest { inventory } => {
+            StructureData::Chest { } => {
+                /*
                 for (i, slot) in inventory.iter().enumerate() {
                     let Some(item) = slot
                     else { continue };
@@ -603,14 +628,16 @@ impl Structure {
                     let pos = mesh_position + Vec3::new(x, y, z) * 0.9 + Vec3::new(-0.45, 0.0, -0.45);
 
                     renderer.draw_item(shader, item.kind, pos, Vec3::splat(0.1), 0.00);
-                }
+                }*/
             },
 
 
-            StructureData::Belt { inventory, .. } => {
+            StructureData::Belt => {
+                let inventory = &self.inventory.as_ref().unwrap().slots;
+
                 let base = mesh_position + rotate_block_vector(self.direction, IVec3::new(-3, 3, 0)).as_vec3() / 4.0;
                 let mut left_base = base + rotate_block_vector(self.direction, IVec3::new(0, 0, -1)).as_vec3() * 0.3;
-                for item in inventory[1] {
+                for item in &inventory[..2] {
                     left_base += rotate_block_vector(self.direction, IVec3::new(1, 0, 0)).as_vec3() * 0.5;
                     if let Some(item) = item {
                         renderer.draw_item(shader, item.kind, left_base, Vec3::splat(DROPPED_ITEM_SCALE), 0.0);
@@ -618,7 +645,7 @@ impl Structure {
                 }
 
                 let mut right_base = base + rotate_block_vector(self.direction, IVec3::new(0, 0, 1)).as_vec3() * 0.3;
-                for item in inventory[0] {
+                for item in &inventory[2..4] {
                     right_base += rotate_block_vector(self.direction, IVec3::new(1, 0, 0)).as_vec3() * 0.5;
                     if let Some(item) = item {
                         renderer.draw_item(shader, item.kind, right_base, Vec3::splat(DROPPED_ITEM_SCALE), 0.0);
@@ -631,45 +658,40 @@ impl Structure {
 }
 
 
-impl Crafter {
-    pub fn from_recipe(recipe: Recipe) -> Self {
-        let mut items = Vec::with_capacity(recipe.requirements.len());
-        for item in recipe.requirements {
-            let mut item = *item;
-            item.amount = 0;
+pub fn try_consume(inventory: &mut StructureInventory, recipe: Recipe) -> bool {
+    let (output_slot, output_meta) = inventory.output(0);
+    if let Some(output) = output_slot
+        && output.amount + recipe.result.amount > output_meta.max_amount {
+        return false;
+    }
 
-            items.push(item);
-        }
 
-        let mut output = recipe.result;
-        output.amount = 0;
+    let input_len = recipe.requirements.len();
+    for index in 0..input_len {
+        let Some(inv_item) = inventory.slots[index]
+        else { return false };
 
-        Self {
-            recipe,
-            inventory: items,
-            output,
+        let recipe_item = recipe.requirements[index];
+
+        if inv_item.amount < recipe_item.amount {
+            return false;
         }
     }
 
 
-    pub fn try_consume(&mut self) -> bool {
-        if self.output.amount >= self.recipe.result.amount * 2 { return false }
-        for i in 0..self.inventory.len() {
-            let recipe_item = self.recipe.requirements[i];
-            let inv_item = self.inventory[i];
-            if inv_item.amount < recipe_item.amount {
-                return false;
-            }
-        }
-    
+    let input_len = recipe.requirements.len();
+    for index in 0..input_len {
+        let Some(inv_item) = &mut inventory.slots[index]
+        else { unreachable!() };
 
-        for i in 0..self.inventory.len() {
-            let recipe_item = self.recipe.requirements[i];
-            let inv_item = &mut self.inventory[i];
-            inv_item.amount -= recipe_item.amount;
+        let recipe_item = recipe.requirements[index];
+        inv_item.amount -= recipe_item.amount;
+        if inv_item.amount == 0 {
+            inventory.slots[index] = None;
         }
-        true
     }
+
+    true
 }
 
 
@@ -698,14 +720,14 @@ fn placement_lane(inserter_dir: CardinalDirection, belt_dir: CardinalDirection) 
     use CardinalDirection as CD;
 
     match (inserter_dir, belt_dir) {
-        (CD::North, CD::East) => 1,
-        (CD::North, CD::West) => 0,
-        (CD::South, CD::East) => 0,
-        (CD::South, CD::West) => 1,
-        (CD::East, CD::North) => 0,
-        (CD::East, CD::South) => 1,
-        (CD::West, CD::North) => 1,
-        (CD::West, CD::South) => 0,
+        (CD::North, CD::East) => 0,
+        (CD::North, CD::West) => 1,
+        (CD::South, CD::East) => 1,
+        (CD::South, CD::West) => 0,
+        (CD::East, CD::North) => 1,
+        (CD::East, CD::South) => 0,
+        (CD::West, CD::North) => 0,
+        (CD::West, CD::South) => 1,
         _ => 0,
     }
 }

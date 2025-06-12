@@ -180,15 +180,6 @@ impl Vertex {
 
 
 pub fn draw_quad(verticies: &mut Vec<Vertex>, indicies: &mut Vec<u32>, quad: Quad) {
-    let normal = match quad.direction {
-        Direction::Left => Vec3::new(1.0, 0.0, 0.0),
-        Direction::Right => Vec3::new(-1.0, 0.0, 0.0),
-        Direction::Down => Vec3::new(0.0, -1.0, 0.0),
-        Direction::Up => Vec3::new(0.0, 1.0, 0.0),
-        Direction::Back => Vec3::new(0.0, 0.0, -1.0),
-        Direction::Forward => Vec3::new(0.0, 0.0, 1.0),
-    };
-
     let k = verticies.len() as u32;
     let mut i = 0;
     for corner in quad.corners {

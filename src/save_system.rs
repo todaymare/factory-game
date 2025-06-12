@@ -5,7 +5,7 @@ use rand::seq::IndexedRandom;
 use save_format::{Arena, Value};
 use sti::format_in;
 
-use crate::{crafting::RECIPES, directions::CardinalDirection, items::{DroppedItem, Item, ItemKind}, structures::{strct::{InserterState, Structure, StructureData, StructureKind}, Crafter}, Game, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
+use crate::{crafting::RECIPES, directions::CardinalDirection, items::{DroppedItem, Item, ItemKind}, structures::{strct::{InserterState, Structure, StructureData, StructureKind}}, Game, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
 
 impl Game {
     #[allow(unused_must_use)]
@@ -117,7 +117,7 @@ impl Game {
                     write!(buf, "structure[{i}].output");
                     let output = hm.get(buf.as_str()).map(|str| parse_item(str.as_str()));
 
-                    StructureData::Quarry { current_progress, output }
+                    StructureData::Quarry { current_progress }
                 },
 
 
@@ -159,7 +159,7 @@ impl Game {
                         inv_i += 1;
                     }
 
-                    StructureData::Chest { inventory }
+                    StructureData::Chest { }
                 },
 
 
@@ -177,7 +177,7 @@ impl Game {
                         inv_i += 1;
                     }
 
-                    StructureData::Silo { inventory }
+                    StructureData::Silo { }
                 },
 
 
@@ -198,7 +198,7 @@ impl Game {
                     }
 
 
-                    StructureData::Belt { inventory }
+                    StructureData::Belt { }
                 },
 
 
@@ -235,7 +235,7 @@ impl Game {
                     ];
 
 
-                    StructureData::Splitter { inventory, priority }
+                    StructureData::Splitter { priority }
 
                 },
 
@@ -245,50 +245,20 @@ impl Game {
                     write!(buf, "structure[{i}].recipe");
                     let recipe = hm[&*buf].as_u32();
                     let recipe = RECIPES[recipe as usize];
-                    let mut crafter = Crafter::from_recipe(recipe);
 
-                    for (index, item) in crafter.inventory.iter_mut().enumerate() {
-                        buf.clear();
-                        write!(buf, "structure[{i}].inventory[{index}]");
-                        dbg!(&buf);
-                        let str = hm[&*buf].as_str();
-                        let parsed_item = parse_item(&str);
-
-                        if parsed_item.kind == item.kind {
-                            item.amount += parsed_item.amount;
-                        } else {
-                            game.world.dropped_items.push(DroppedItem::new(*item, origin.as_dvec3()));
-                        }
-                    }
-
-
-                    buf.clear();
-                    write!(buf, "structure[{i}].output");
-                    let str = hm[&*buf].as_str();
-                    let output = parse_item(&str);
-                    if output.kind == crafter.output.kind {
-                        crafter.output.amount += output.amount;
-                    } else {
-                        game.world.dropped_items.push(DroppedItem::new(output, origin.as_dvec3()));
-                    }
-
-                    StructureData::Assembler { crafter }
+                    StructureData::Assembler { recipe: Some(recipe) }
                 }
 
 
 
                 StructureKind::Furnace => {
-                    StructureData::from_kind(StructureKind::Furnace)
+                    i += 1;
+                    continue;
                 }
             };
 
 
-            let structure = Structure {
-                position: origin,
-                direction,
-                data,
-                is_asleep: true,
-            };
+            let structure = Structure::from_kind(kind, origin, direction);
 
             game.structures.add_structure(&mut game.world, structure);
             i += 1;
@@ -366,12 +336,8 @@ impl Game {
             v.push((format_in!(&arena, "{buf}.direction").leak(), Value::String(direction)));
 
             match &structure.data {
-                StructureData::Quarry { current_progress, output } => {
+                StructureData::Quarry { current_progress, } => {
                     v.push((format_in!(&arena, "{buf}.current_progress").leak(), Value::Num(*current_progress as f64)));
-                    if let Some(output) = *output {
-                        let path = format_in!(&arena, "{buf}.output").leak();
-                        save_item(&arena, &mut v, path, output);
-                    }
                 },
 
 
@@ -395,31 +361,16 @@ impl Game {
                 },
 
 
-                StructureData::Chest { inventory } => {
-                    for (i, slot) in inventory.iter().enumerate() {
-
-                        let Some(item) = slot
-                        else { continue };
-
-                        let path = format_in!(&arena, "{buf}.inventory[{i}]").leak();
-                        save_item(&arena, &mut v, path, *item);
-                    }
+                StructureData::Chest { } => {
                 },
 
 
-                StructureData::Silo { inventory } => {
-                    for (i, slot) in inventory.iter().enumerate() {
-
-                        let Some(item) = slot
-                        else { continue };
-
-                        let path = format_in!(&arena, "{buf}.inventory[{i}]").leak();
-                        save_item(&arena, &mut v, path, *item);
-                    }
+                StructureData::Silo { } => {
                 },
 
 
-                StructureData::Belt { inventory } => {
+                StructureData::Belt { } => {
+                    /*
                     for (lane, items) in inventory.iter().enumerate() {
 
                         for (i, item) in items.iter().enumerate() {
@@ -430,11 +381,12 @@ impl Game {
                             save_item(&arena, &mut v, path, *item);
 
                         }
-                    }
+                    }*/
                 },
 
 
-                StructureData::Splitter { inventory, priority } => {
+                StructureData::Splitter { priority } => {
+                    /*
                     let inventory : [Option<Item>; 8] = unsafe { core::mem::transmute(*inventory) };
 
                     for (i, item) in inventory.iter().enumerate() {
@@ -444,13 +396,15 @@ impl Game {
                         let path = format_in!(&arena, "{buf}.inventory[{}]", i).leak();
                         save_item(&arena, &mut v, path, *item);
                     }
+                    */
 
                     v.push((format_in!(&arena, "{buf}.priority[0]").leak(), Value::Num(priority[0] as _)));
                     v.push((format_in!(&arena, "{buf}.priority[1]").leak(), Value::Num(priority[1] as _)));
                 },
 
 
-                StructureData::Assembler { crafter } => {
+                StructureData::Assembler { recipe: crafter } => {
+                    /*
                     let (recipe_index, _) = RECIPES.iter().enumerate().find(|x| x.1 == &crafter.recipe).unwrap();
 
                     v.push((format_in!(&arena, "{buf}.recipe").leak(), Value::Num(recipe_index as _)));
@@ -459,7 +413,7 @@ impl Game {
                     for (i, item) in crafter.inventory.iter().enumerate() {
                         let path = format_in!(&arena, "{buf}.inventory[{i}]").leak();
                         save_item(&arena, &mut v, path, *item);
-                    }
+                    }*/
                 }
 
 

@@ -1,4 +1,4 @@
-use crate::{items::{Item, ItemKind}, structures::strct::StructureKind, voxel_world::voxel::Voxel, TICKS_PER_SECOND};
+use crate::{items::{Item, ItemKind}, structures::{inventory::{SlotKind, SlotMeta}, strct::StructureKind}, voxel_world::voxel::Voxel, TICKS_PER_SECOND};
 
 
 pub const FURNACE_RECIPES : &'static [Recipe] = &[
@@ -96,3 +96,19 @@ pub struct Recipe {
 }
 
 
+
+pub fn crafting_recipe_index(recipe: Recipe) -> usize {
+    RECIPES.iter().enumerate().find(|x| x.1 == &recipe).unwrap().0
+}
+
+
+pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
+    match index {
+        0 => {
+            const SLOTS : &[SlotMeta] = &[SlotMeta::new(4, SlotKind::Input { filter: Some(ItemKind::IronPlate) }), SlotMeta::new(4, SlotKind::Output)];
+            SLOTS
+        }
+
+        _ => unreachable!(),
+    }
+}

@@ -249,10 +249,8 @@ impl Renderer {
             gl::Enable(gl::DEPTH_TEST);
             gl::ClearColor(colour.x, colour.y, colour.z, colour.w);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-            /*
             gl::Enable(gl::CULL_FACE);
-            gl::CullFace(gl::FRONT);
-            */
+            gl::CullFace(gl::BACK);
 
             if self.is_wireframe {
                 gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
@@ -284,13 +282,14 @@ impl Renderer {
             z += 0.0001;
             let z = if let Some(z) = rect.z { z } else { z };
 
-            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
-            buf.push(UIVertex::new(pos, Vec2::new(x0, y0), modulate, z));
-            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
-
-            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
-            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
             buf.push(UIVertex::new(pos+dims, Vec2::new(x1, y1), modulate, z));
+            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
+            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
+
+            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
+            buf.push(UIVertex::new(pos, Vec2::new(x0, y0), modulate, z));
+            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
+
 
         }
         self.rects.clear();

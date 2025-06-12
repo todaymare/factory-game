@@ -307,18 +307,17 @@ impl VoxelWorld {
             rayon::spawn(move || {
                 let path = format!("saves/chunks/{pos}.chunk");
                 let chunk = match fs::read(&path) {
-                    /*
                     Ok(ref v) if let Some(mut byte_reader) = ByteReader::new(&v) => {
                         let mut chunk = Chunk::empty_chunk();
                         let data = Arc::make_mut(&mut chunk.data);
 
                         for voxel in data.data.iter_mut() {
-                            let kind = VoxelKind::from_u8(byte_reader.read_u8().unwrap());
-                            voxel.kind = kind;
+                            let kind = Voxel::from_u8(byte_reader.read_u8().unwrap());
+                            *voxel = kind;
                         }
 
                         chunk
-                    },*/
+                    },
 
 
                     _ => {
@@ -736,7 +735,7 @@ impl VoxelWorld {
                         while j + h < CHUNK_SIZE {
                             for k in 0..w {
                                 // if there's a hole in the mask, exit
-                                if block_mask[n + k + h * CHUNK_SIZE].0 != kind {
+                                if block_mask[n + k + h * CHUNK_SIZE] != (kind, neg_d) {
                                     done = true;
                                     break;
                                 }
@@ -763,7 +762,7 @@ impl VoxelWorld {
                                     //color: if neg_d { Vec4::new(1.0, 0.0, 0.0, 1.0) }
                                     //       else { Vec4::new(0.0, 1.0, 0.0, 1.0) },
                                     color: kind.colour(),
-                                    corners: if neg_d {[
+                                    corners: if !neg_d {[
                                         x.as_vec3(),
                                         (x+du).as_vec3(),
                                         (x+du+dv).as_vec3(),

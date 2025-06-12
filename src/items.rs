@@ -55,6 +55,11 @@ impl Item {
             kind,
         }
     }
+
+
+    pub fn with_amount(self, amount: u32) -> Item {
+        Item::new(self.kind, amount)
+    }
 }
 
 
@@ -114,6 +119,7 @@ impl ItemKind {
             ItemKind::Voxel(_) => "invalid",
         }
     }
+
 
 
     pub fn max_stack_size(self) -> u32 {

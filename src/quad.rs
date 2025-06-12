@@ -20,40 +20,40 @@ impl Quad {
     pub fn from_direction(direction: Direction, pos: Vec3, color: Vec4) -> Self {
         let corners = match direction {
             Direction::Left => [
-                Vec3::new(pos.x+1.0, pos.y, pos.z),
-                Vec3::new(pos.x+1.0, pos.y, pos.z + 1.0),
-                Vec3::new(pos.x+1.0, pos.y + 1.0, pos.z + 1.0),
                 Vec3::new(pos.x+1.0, pos.y + 1.0, pos.z),
+                Vec3::new(pos.x+1.0, pos.y + 1.0, pos.z + 1.0),
+                Vec3::new(pos.x+1.0, pos.y, pos.z + 1.0),
+                Vec3::new(pos.x+1.0, pos.y, pos.z),
             ],
             Direction::Right => [
-                Vec3::new(pos.x, pos.y + 1.0, pos.z),
-                Vec3::new(pos.x, pos.y + 1.0, pos.z + 1.0),
-                Vec3::new(pos.x, pos.y, pos.z + 1.0),
                 Vec3::new(pos.x, pos.y, pos.z),
+                Vec3::new(pos.x, pos.y, pos.z + 1.0),
+                Vec3::new(pos.x, pos.y + 1.0, pos.z + 1.0),
+                Vec3::new(pos.x, pos.y + 1.0, pos.z),
             ],
             Direction::Down => [
-                Vec3::new(pos.x, pos.y, pos.z + 1.0),
-                Vec3::new(pos.x + 1.0, pos.y, pos.z + 1.0),
-                Vec3::new(pos.x + 1.0, pos.y, pos.z),
                 Vec3::new(pos.x, pos.y, pos.z),
+                Vec3::new(pos.x + 1.0, pos.y, pos.z),
+                Vec3::new(pos.x + 1.0, pos.y, pos.z + 1.0),
+                Vec3::new(pos.x, pos.y, pos.z + 1.0),
             ],
             Direction::Up => [
-                Vec3::new(pos.x    , pos.y+1.0, pos.z),
-                Vec3::new(pos.x + 1.0, pos.y+1.0, pos.z),
-                Vec3::new(pos.x + 1.0, pos.y+1.0, pos.z + 1.0),
                 Vec3::new(pos.x,   pos.y+1.0, pos.z + 1.0),
+                Vec3::new(pos.x + 1.0, pos.y+1.0, pos.z + 1.0),
+                Vec3::new(pos.x + 1.0, pos.y+1.0, pos.z),
+                Vec3::new(pos.x    , pos.y+1.0, pos.z),
             ],
             Direction::Back => [
-                Vec3::new(pos.x + 1.0, pos.y, pos.z),
-                Vec3::new(pos.x + 1.0, pos.y + 1.0, pos.z),
-                Vec3::new(pos.x, pos.y + 1.0, pos.z),
                 Vec3::new(pos.x, pos.y, pos.z),
+                Vec3::new(pos.x, pos.y + 1.0, pos.z),
+                Vec3::new(pos.x + 1.0, pos.y + 1.0, pos.z),
+                Vec3::new(pos.x + 1.0, pos.y, pos.z),
             ],
             Direction::Forward => [
-                Vec3::new(pos.x, pos.y, pos.z+1.0),
-                Vec3::new(pos.x, pos.y + 1.0, pos.z+1.0),
-                Vec3::new(pos.x + 1.0, pos.y + 1.0, pos.z+1.0),
                 Vec3::new(pos.x + 1.0, pos.y, pos.z+1.0),
+                Vec3::new(pos.x + 1.0, pos.y + 1.0, pos.z+1.0),
+                Vec3::new(pos.x, pos.y + 1.0, pos.z+1.0),
+                Vec3::new(pos.x, pos.y, pos.z+1.0),
             ],
         };
 
