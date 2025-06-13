@@ -11,6 +11,7 @@ use super::mesh::VoxelMesh;
 
 
 pub const CHUNK_SIZE : usize = 32;
+pub const CHUNK_SIZE_P3 : usize = 32*32*32;
 
 #[derive(Debug)]
 pub struct Chunk {
@@ -24,7 +25,7 @@ pub struct Chunk {
 
 #[derive(Debug, Clone)]
 pub struct ChunkData {
-    pub data: [Voxel; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
+    pub data: [Voxel; CHUNK_SIZE_P3],
     pub is_empty: bool,
 }
 
@@ -273,20 +274,35 @@ fn random_pos(rng: &mut SmallRng) -> IVec3 {
 
 
 impl ChunkData {
-    pub fn empty() -> Self {
+    pub fn from_bytes(bytes: [u8; CHUNK_SIZE_P3]) -> Self {
+        let voxels = unsafe { core::mem::transmute(bytes) };
+        Self::from_voxels(voxels)
+    }
+
+
+    pub fn from_voxels(voxels: [Voxel; CHUNK_SIZE_P3]) -> Self {
         Self {
-            data: [Voxel::Air; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
+            data: voxels,
             is_empty: true,
         }
     }
 
 
-    pub fn is_empty(&self) -> bool {
-        let data = unsafe {
-            core::mem::transmute::<_, &[u8; CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE]>
-                (&self.data) };
+    pub fn empty() -> Self {
+        Self::from_voxels([Voxel::Air; CHUNK_SIZE_P3])
+    }
 
-        is_all_zero_simd(data)
+
+    pub fn is_empty(&self) -> bool {
+        is_all_zero_simd(self.as_bytes())
+    }
+
+
+    pub fn as_bytes(&self) -> &[u8; CHUNK_SIZE_P3] {
+        unsafe {
+            core::mem::transmute::<_, &[u8; CHUNK_SIZE_P3]>
+                (&self.data)
+        }
     }
 
 

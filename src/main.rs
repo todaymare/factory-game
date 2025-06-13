@@ -22,19 +22,15 @@ pub mod crafting;
 pub mod perlin;
 pub mod frustum;
 
-use std::{collections::HashSet, f32::consts::{PI, TAU}, fs, io::BufWriter, ops::{self}, sync::Arc, time::Instant};
+use std::{f32::consts::{PI, TAU}, fs, ops::{self}, time::Instant};
 
 use commands::{Command, CommandRegistry};
 use directions::CardinalDirection;
-use frustum::{Frustum};
-use gl::RGBA32F;
-use image::{codecs::png::PngEncoder, EncodableLayout, ImageEncoder};
-use libnoise::Visualizer;
-use rand::seq::IndexedRandom;
-use tracing::warn;
+use frustum::Frustum;
+use tracing::{warn, Level};
 use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
-use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, mesh::VoxelMesh, split_world_pos, VoxelWorld};
-use glam::{DVec2, DVec3, IVec3, Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
+use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, split_world_pos, VoxelWorld};
+use glam::{DVec3, IVec3, Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{Key, MouseButton};
 use input::InputManager;
 use items::{DroppedItem, Item, ItemKind};
@@ -66,7 +62,9 @@ const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32;
 
 
 fn main() {
-    tracing_subscriber::fmt().finish();
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
     let mut renderer = Renderer::new((1920/2, 1080/2));
 
     let mut ui_layer = UILayer::Gameplay { smoothed_dt: 0.0 };
@@ -477,7 +475,7 @@ fn main() {
                 voxel_shader.set_f32(c"fog_density", 1.0);
                 voxel_shader.set_f32(c"time", renderer.glfw.get_time() as f32);
                 let fog_distance = game.player.render_distance - 1;
-                voxel_shader.set_f32(c"fog_start", (fog_distance * CHUNK_SIZE as i32) as f32 * 0.9);
+                voxel_shader.set_f32(c"fog_start", ((fog_distance) * CHUNK_SIZE as i32) as f32 * 0.9);
                 voxel_shader.set_f32(c"fog_end", (fog_distance * CHUNK_SIZE as i32) as f32);
 
                 let (player_chunk, _) = split_world_pos(game.player.body.position.as_ivec3());
@@ -575,6 +573,9 @@ fn main() {
                 }
             }
 
+            let slot_size = 64.0;
+            let padding = 16.0;
+
             // render hotbar
             {
                 let window = renderer.window_size();
@@ -583,9 +584,7 @@ fn main() {
 
                 let bottom_centre = Vec2::new(window.x * 0.5, window.y);
 
-                let slot_size = 64.0;
                 let slot_amount = PLAYER_HOTBAR_SIZE;
-                let padding = 16.0;
 
                 let mut base = bottom_centre - Vec2::new((padding + slot_size) * slot_amount as f32 * 0.5, slot_size + padding);
 
@@ -612,14 +611,18 @@ fn main() {
                 else { break 'block };
 
                 match &game.structures.get(*structure).data {
-                      StructureData::Chest { .. }
+                      StructureData::Chest
+                    | StructureData::Silo
                     | StructureData::Assembler { .. } => {
                         let window = renderer.window_size();
                         
                         let text = "Press E to interact";
                         let size = renderer.text_size(&text, 0.5);
-                        let size = Vec2::new(size.x*0.5, size.y*1.2);
-                        renderer.draw_text(text, (window*0.5)-size, 0.5, Vec4::ONE);
+                        let size = Vec2::new(
+                            window.x*0.5 - size.x*0.5,
+                            window.y - padding*2.0 - slot_size - size.y
+                        );
+                        renderer.draw_text(text, size, 0.5, Vec4::ONE);
 
                     },
                     _ => (),
@@ -639,6 +642,9 @@ fn main() {
                 let window = renderer.window.get_size();
                 renderer.window.set_cursor_pos(window.0 as f64 / 2.0,
                                                window.1 as f64 / 2.0);
+                input.move_cursor(Vec2::NAN);
+                input.move_cursor(Vec2::NAN);
+                input.move_cursor(Vec2::NAN);
             }
 
 
@@ -649,7 +655,7 @@ fn main() {
     }
 
 
-    //game.save();
+    game.save();
 }
 
 

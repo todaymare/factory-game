@@ -6,14 +6,14 @@ use crate::{items::ItemKind, TICKS_PER_SECOND};
 #[repr(u8)]
 pub enum Voxel {
     Air = 0,
-    Dirt,
-    Stone,
+    Dirt = 1,
+    Stone = 2,
 
-    Copper,
-    Iron,
-    Coal,
+    Copper = 3,
+    Iron = 4,
+    Coal = 5,
 
-    StructureBlock,
+    StructureBlock = 255,
 }
 
 
@@ -46,20 +46,6 @@ impl Voxel {
             Voxel::Air => unreachable!(),
         }
     }
-
-
-    pub fn to_u8(self) -> u8 {
-        match self {
-            Voxel::Dirt => 1,
-            Voxel::Stone => 2,
-            Voxel::Copper => 3,
-            Voxel::Iron => 4,
-            Voxel::Coal => 5,
-            Voxel::StructureBlock => 0,
-            Voxel::Air => 0,
-        }
-    }
-
 
 
     pub fn from_u8(u8: u8) -> Voxel {

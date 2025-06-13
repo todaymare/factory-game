@@ -11,14 +11,15 @@ use mesh::{draw_quad, Vertex, VoxelMesh};
 use rand::seq::IndexedRandom;
 use rayon::{current_num_threads, iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator}};
 use save_format::byte::{ByteReader, ByteWriter};
-use tracing::{info, warn};
+use tracing::{error, info, trace, warn};
 use voxel::Voxel;
 
 use crate::{directions::Direction, items::{DroppedItem, Item}, mesh::Mesh, perlin::PerlinNoise, quad::Quad, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::{Chunk, CHUNK_SIZE}, PhysicsBody};
 
 
-type MeshMPSC = (IVec3, Vec<Vertex>, Vec<u32>, Duration);
+type MeshMPSC = (IVec3, Vec<Vertex>, Vec<u32>);
 type ChunkMPSC = (IVec3, Chunk);
+type SaveChunkMPSC = ();
 
 
 pub struct VoxelWorld {
@@ -36,8 +37,13 @@ pub struct VoxelWorld {
     chunk_sender: mpsc::Sender<ChunkMPSC>,
     chunk_reciever: mpsc::Receiver<ChunkMPSC>,
 
+    save_chunk_sender: mpsc::Sender<SaveChunkMPSC>,
+    save_chunk_receiver: mpsc::Receiver<SaveChunkMPSC>,
+
     queued_meshes: u32,
     queued_chunks: u32,
+    queued_chunk_saves: u32,
+
     total_meshes: u32,
     total_chunks: u32,
 
@@ -61,6 +67,7 @@ impl VoxelWorld {
     pub fn new() -> Self {
         let (ms, mr) = mpsc::channel();
         let (cs, cr) = mpsc::channel();
+        let (scs, scr) = mpsc::channel();
 
         let mut full_chunk = Chunk::empty_chunk();
         let data = Arc::make_mut(&mut full_chunk.data);
@@ -92,9 +99,12 @@ impl VoxelWorld {
             mesh_reciever: mr,
             chunk_sender: cs,
             chunk_reciever: cr,
+            save_chunk_sender: scs,
+            save_chunk_receiver: scr,
 
             queued_meshes: 0,
             queued_chunks: 0,
+            queued_chunk_saves: 0,
 
             loading_chunk_mesh: mesh,
         }
@@ -141,9 +151,9 @@ impl VoxelWorld {
             let mut indices = vec![];
             let time = Instant::now();
             VoxelWorld::greedy_mesh(chunks, &mut vertices, &mut indices);
-            println!("meshes in {:?}", time.elapsed());
-            if let Err(_) = sender.send((pos, vertices, indices, time.elapsed())) {
-                warn!("job receiver terminated before all meshing jobs were done");
+            println!("mesh-generation: meshes in {:?}", time.elapsed());
+            if let Err(_) = sender.send((pos, vertices, indices)) {
+                warn!("mesh-generation: job receiver terminated before all meshing jobs were done");
             }
         });
     }
@@ -158,8 +168,7 @@ impl VoxelWorld {
             self.spawn_mesh_job(*pos);
         }
 
-        while let Ok((pos, vertices, indices, dur)) = self.mesh_reciever.try_recv() {
-            self.timings.push(dur);
+        while let Ok((pos, vertices, indices)) = self.mesh_reciever.try_recv() {
             self.queued_meshes -= 1;
             let Some(Some(chunk)) = self.chunks.get_mut(&pos)
             else {
@@ -179,15 +188,15 @@ impl VoxelWorld {
 
         if self.queued_meshes == 0 && self.queued_chunks == 0 {
         } else {
-            println!("{} total meshes {} total chunks {} meshes left {} chunks left", self.total_meshes, self.total_chunks, self.queued_meshes, self.queued_chunks);
+            info!("{} total meshes {} total chunks {} meshes left {} chunks left", self.total_meshes, self.total_chunks, self.queued_meshes, self.queued_chunks);
         }
 
 
         self.process_chunks();
 
         let mut i = 0;
-        while let Some(pos) = self.unload_queue.get(i) {
-            let Some(slot) = self.chunks.get(pos)
+        while let Some(&pos) = self.unload_queue.get(i) {
+            let Some(slot) = self.chunks.get(&pos)
             else { i += 1; continue };
 
             let Some(chunk) = slot
@@ -203,9 +212,42 @@ impl VoxelWorld {
                 continue;
             }
 
-            self.chunks.remove(pos);
             self.unload_queue.remove(i);
+            self.save_chunk(pos);
+
+            self.chunks.remove(&pos);
         }
+    }
+
+
+    pub fn save_chunk(&mut self, pos: IVec3) {
+        let chunk = self.chunks.get(&pos).unwrap().as_ref().unwrap();
+        if !chunk.is_dirty {
+            info!("chunk-save-system: chunk at '{pos}' isn't dirty. skipping saving");
+            return;
+        }
+
+        self.queued_chunk_saves += 1;
+
+        let data = chunk.data.clone();
+        let sender = self.save_chunk_sender.clone();
+
+        rayon::spawn(move || {
+            let time = Instant::now();
+            let mut byte_writer = ByteWriter::new();
+
+            byte_writer.write(*data.as_bytes());
+
+            let path = format!("saves/chunks/{pos}.chunk");
+            fs::write(path, byte_writer.finish()).unwrap();
+
+            if let Err(_) = sender.send(()) {
+                warn!("chunk-save-system: job receiver terminated before all meshing jobs were done");
+            }
+
+            info!("chunk-save-system: saved chunk at '{pos}' in {:?}", time.elapsed());
+
+        });
     }
 
 
@@ -272,10 +314,19 @@ impl VoxelWorld {
 
 
     pub fn process_blocking(&mut self) {
-        for (pos, chunk) in self.chunk_reciever.iter() {
-            let slot = self.chunks.get_mut(&pos).unwrap();
+        trace!("processing chunks, blocking");
+        while self.queued_chunks > 0 {
+            let Ok((pos, chunk)) = self.chunk_reciever.try_recv()
+            else { continue };
+
+            self.queued_chunks -= 1;
+
+            let Some(slot) = self.chunks.get_mut(&pos)
+            else { warn!("chunk {pos} was unloaded before being generated"); continue };
             *slot = Some(chunk);
         }
+
+        trace!("all chunk generation is complete");
     }
 
 
@@ -311,11 +362,7 @@ impl VoxelWorld {
                         let mut chunk = Chunk::empty_chunk();
                         let data = Arc::make_mut(&mut chunk.data);
 
-                        for voxel in data.data.iter_mut() {
-                            let kind = Voxel::from_u8(byte_reader.read_u8().unwrap());
-                            *voxel = kind;
-                        }
-
+                        *data = ChunkData::from_bytes(byte_reader.read().unwrap());
                         chunk
                     },
 
@@ -324,9 +371,9 @@ impl VoxelWorld {
                         Chunk::generate(pos, &perlin)
                     }
                 };
-                match sender.send((pos, chunk)) {
-                    Ok(_) => (),
-                    Err(e) => panic!("{}", e.to_string()),
+
+                if let Err(_) = sender.send((pos, chunk)) {
+                    warn!("chunk-generation-system: job receiver terminated before all meshing jobs were done");
                 }
             });
 
@@ -537,20 +584,25 @@ impl VoxelWorld {
 
 
     pub fn save(&mut self) {
-        for (&pos, chunk) in &mut self.chunks {
-            let Some(chunk) = chunk.as_mut()
-            else { continue };
-            if !chunk.is_dirty { continue }
-            chunk.is_dirty = false;
-            let mut byte_writer = ByteWriter::new();
+        trace!("voxel-save-system: saving the world..");
+        let time = Instant::now();
+        self.process_blocking();
 
-            for voxel in &chunk.data.data {
-                byte_writer.write_u8(voxel.to_u8());
-            }
+        // we just need the jobs to be over so we don't spam warnings
+        while self.queued_meshes > 0 { if self.mesh_reciever.try_recv().is_ok() { self.queued_meshes -= 1} };
 
-            let path = format!("saves/chunks/{pos}.chunk");
-            fs::write(path, byte_writer.finish()).unwrap();
+        for pos in self.chunks.keys() {
+            self.unload_queue.push(*pos);
         }
+
+        // unload all chunks
+        let save_queue = core::mem::take(&mut self.unload_queue);
+        for pos in save_queue {
+            self.save_chunk(pos);
+        }
+
+        while self.queued_chunk_saves > 0 { if self.save_chunk_receiver.try_recv().is_ok() { self.queued_chunk_saves -= 1} };
+        info!("voxel-save-system: saved the world in {:?}", time.elapsed())
     }
 
 
