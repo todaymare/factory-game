@@ -18,6 +18,34 @@ impl CardinalDirection {
             CardinalDirection::West => IVec3::new(-1, 0, 0),
         }
     }
+
+
+    pub fn from_index(i: u8) -> CardinalDirection {
+        match i {
+            3 => CardinalDirection::North,
+            2 => CardinalDirection::West,
+            1 => CardinalDirection::South,
+            0 => CardinalDirection::East,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn to_index(self) -> u8 {
+        match self {
+            CardinalDirection::North => 3,
+            CardinalDirection::West => 2,
+            CardinalDirection::South => 1,
+            CardinalDirection::East => 0,
+        }
+    }
+
+
+    pub fn next_n(self, n: u8) -> Self {
+        let index = self.to_index();
+        let index = index + n;
+        let index = index % 4;
+        Self::from_index(index)
+    }
 }
 
 

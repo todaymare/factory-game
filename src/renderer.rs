@@ -250,8 +250,8 @@ impl Renderer {
             gl::Enable(gl::DEPTH_TEST);
             gl::ClearColor(colour.x, colour.y, colour.z, colour.w);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-            //gl::Enable(gl::CULL_FACE);
-            //gl::CullFace(gl::BACK);
+            gl::Enable(gl::CULL_FACE);
+            gl::CullFace(gl::BACK);
 
             if self.is_wireframe {
                 gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);

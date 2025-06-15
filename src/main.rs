@@ -32,7 +32,7 @@ use frustum::Frustum;
 use tracing::{info, trace, warn, Level};
 use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
 use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, split_world_pos, VoxelWorld};
-use glam::{DVec3, IVec3, Mat4, USizeVec2, Vec2, Vec3, Vec4, Vec4Swizzles};
+use glam::{DVec3, IVec3, Mat4, Quat, USizeVec2, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{Key, MouseButton};
 use input::InputManager;
 use items::{DroppedItem, Item, ItemKind};
@@ -216,7 +216,19 @@ fn main() {
             }
 
 
-            if input.is_key_pressed(Key::R) {
+            if let Some(item) = game.player.inventory[game.player.hand_index()]
+                && item.kind.as_structure().is_some() {
+                if input.is_key_just_pressed(Key::R) {
+                    game.player.structure_rotation_offset += 1;
+                    game.player.structure_rotation_offset %= 4;
+                }
+            } else {
+                game.player.structure_rotation_offset = 0;
+
+            }
+
+
+            if input.is_key_pressed(Key::X) {
                 let raycast = game.world.raycast_voxel(game.camera.position,
                                                   game.camera.front,
                                                   PLAYER_REACH);
@@ -411,12 +423,13 @@ fn main() {
                     *game.world.get_voxel_mut(place_position) = voxel;
 
                 } else if let Some(structure_kind) = item_in_hand.kind.as_structure() {
+                    let dir = game.camera.compass_direction().next_n(game.player.structure_rotation_offset);
 
-                    if !game.can_place_structure(structure_kind, place_position, game.camera.compass_direction()) {
+                    if !game.can_place_structure(structure_kind, place_position, dir) {
                         break 'input_block;
                     }
 
-                    let structure = Structure::from_kind(structure_kind, pos+normal, game.camera.compass_direction());
+                    let structure = Structure::from_kind(structure_kind, pos+normal, dir);
                     let _ = game.player.take_item(game.player.hand_index(), 1).unwrap();
                     let id = game.structures.add_structure(&mut game.world, structure);
 
@@ -552,57 +565,103 @@ fn main() {
 
 
             // render block outline
-            {
-                let raycast = game.world.raycast_voxel(game.camera.position,
+            'block: {
+                let Some((pos, norm)) = game.world.raycast_voxel(game.camera.position,
                                                   game.camera.front,
-                                                  PLAYER_REACH);
-                if let Some((pos, _)) = raycast {
-                    let voxel = game.world.get_voxel(pos);
-                    let target_hardness = voxel.base_hardness();
-                    let mut mesh_pos = pos.as_dvec3();
-                    let mut dims = Vec3::ONE;
+                                                  PLAYER_REACH)
+                else { break 'block };
 
-                    'block: {
-                        let Some(strct) = game.world.structure_blocks.get(&pos)
-                        else { break 'block };
+                let held_item = game.player.inventory[game.player.hand_index()];
+                if let Some(held_item) = held_item && let Some(kind) = held_item.kind.as_structure() {
+                    let dir = game.camera.compass_direction()
+                        .next_n(game.player.structure_rotation_offset);
 
-                        let strct = game.structures.get(*strct);
-                        let blocks = strct.data.as_kind().blocks(strct.direction);
+                    let blocks = kind.blocks(dir);
 
-                        let mut min = IVec3::MAX;
-                        let mut max = IVec3::MIN;
-                        let mut pos_min = IVec3::MAX;
-                        let mut pos_max = IVec3::MIN;
+                    let mut min = IVec3::MAX;
+                    let mut max = IVec3::MIN;
+                    let mut pos_min = IVec3::MAX;
+                    let mut pos_max = IVec3::MIN;
+                    let can_place = game.can_place_structure(kind, pos+norm, dir);
 
-                        let position = strct.zero_zero();
-                        for &offset in blocks {
-                            min = min.min(offset);
-                            max = max.max(offset);
-                            pos_min = pos_min.min(position + offset);
-                            pos_max = pos_max.max(position + offset);
-                        }
+                    let zero_zero = (pos + norm) - kind.origin(dir);
+                    let position = zero_zero;
+                    for &offset in blocks {
+                        min = min.min(offset);
+                        max = max.max(offset);
+                        pos_min = pos_min.min(position + offset);
+                        pos_max = pos_max.max(position + offset);
+                    }
 
-                        dims = (max - min).abs().as_vec3() + Vec3::ONE;
-                        mesh_pos = (pos_min + pos_max).as_dvec3() * 0.5;
-                    };
- 
+                    let dims = (max - min).abs().as_vec3() + Vec3::ONE;
+                    let mesh_pos = (pos_min + pos_max).as_dvec3() * 0.5;
                     let mesh_pos = mesh_pos + DVec3::splat(0.5) - game.camera.position;
-                    let model = Mat4::from_translation(mesh_pos.as_vec3());
-                    let model = model * Mat4::from_scale(dims * Vec3::new(1.01, 1.01, 1.01));
+
+                    let rot = dir.as_ivec3().as_vec3();
+                    let rot = rot.x.atan2(rot.z);
+                    let rot = rot + 90f32.to_radians();
+
+                    let model = Mat4::from_scale_rotation_translation(Vec3::splat(1.01), Quat::from_rotation_y(rot), mesh_pos.as_vec3());
                     mesh_shader.set_matrix4(c"model", model);
 
-                    let modulate = if let Some(mining_progress) = game.player.mining_progress {
-                        let progress = mining_progress as f32 / target_hardness as f32;
-                        let eased = 1.0 - progress.powf(3.0);
-                        (Vec4::ONE * eased).with_w(1.0)
-                    } else {
-                        Vec4::ONE
+                    let colour = match can_place {
+                        true => Vec4::new(0.5, 0.8, 0.5, 0.8),
+                        false => Vec4::new(0.8, 0.5, 0.5, 0.8),
                     };
-
-                    mesh_shader.set_vec4(c"modulate", modulate);
+                    mesh_shader.set_vec4(c"modulate", colour);
+                    let mesh = renderer.meshes.get(ItemKind::Structure(kind));
+                    mesh.draw();
+                    let model = Mat4::from_scale_rotation_translation(dims * Vec3::splat(1.01), Quat::IDENTITY, mesh_pos.as_vec3() + Vec3::splat(0.005));
+                    mesh_shader.set_matrix4(c"model", model);
                     block_outline_mesh.draw();
 
+                    break 'block;
                 }
+
+                let voxel = game.world.get_voxel(pos);
+                let target_hardness = voxel.base_hardness();
+                let mut mesh_pos = pos.as_dvec3();
+                let mut dims = Vec3::ONE;
+
+                'dims: {
+                    let Some(strct) = game.world.structure_blocks.get(&pos)
+                    else { break 'dims };
+
+                    let strct = game.structures.get(*strct);
+                    let blocks = strct.data.as_kind().blocks(strct.direction);
+
+                    let mut min = IVec3::MAX;
+                    let mut max = IVec3::MIN;
+                    let mut pos_min = IVec3::MAX;
+                    let mut pos_max = IVec3::MIN;
+
+                    let position = strct.zero_zero();
+                    for &offset in blocks {
+                        min = min.min(offset);
+                        max = max.max(offset);
+                        pos_min = pos_min.min(position + offset);
+                        pos_max = pos_max.max(position + offset);
+                    }
+
+                    dims = (max - min).abs().as_vec3() + Vec3::ONE;
+                    mesh_pos = (pos_min + pos_max).as_dvec3() * 0.5;
+                };
+
+                let mesh_pos = mesh_pos + DVec3::splat(0.5) - game.camera.position;
+                let model = Mat4::from_translation(mesh_pos.as_vec3());
+                let model = model * Mat4::from_scale(dims * Vec3::new(1.01, 1.01, 1.01));
+                mesh_shader.set_matrix4(c"model", model);
+
+                let modulate = if let Some(mining_progress) = game.player.mining_progress {
+                    let progress = mining_progress as f32 / target_hardness as f32;
+                    let eased = 1.0 - progress.powf(3.0);
+                    (Vec4::ONE * eased).with_w(1.0)
+                } else {
+                    Vec4::ONE
+                };
+
+                mesh_shader.set_vec4(c"modulate", modulate);
+                block_outline_mesh.draw();
             }
 
             let slot_size = 64.0;
@@ -752,6 +811,7 @@ impl Game {
                 pulling: Vec::new(),
                 speed: PLAYER_SPEED,
                 render_distance: RENDER_DISTANCE,
+                structure_rotation_offset: 0,
             },
 
             current_tick: Tick::initial(),
@@ -1134,6 +1194,8 @@ struct Player {
     pulling: Vec<DroppedItem>,
     speed: f32,
     render_distance: i32,
+    // this is used to rotate a structure's preview
+    structure_rotation_offset: u8,
 }
 
 
