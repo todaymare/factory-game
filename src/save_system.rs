@@ -178,12 +178,12 @@ impl Game {
                 StructureKind::Assembler => {
                     buf.clear();
                     write!(buf, "structure[{i}].recipe");
-                    let recipe_index = hm[&*buf].as_u32();
-                    let recipe = RECIPES[recipe_index as usize];
+                    let recipe = if let Some(recipe_index) = hm.get(&*buf).map(|x| x.as_u32()) {
+                        inventory = Some(crafting_recipe_inventory(recipe_index as usize));
+                        Some(RECIPES[recipe_index as usize])
+                    } else { None };
 
-                    inventory = Some(crafting_recipe_inventory(recipe_index as usize));
-
-                    StructureData::Assembler { recipe: Some(recipe) }
+                    StructureData::Assembler { recipe }
                 }
 
 

@@ -601,7 +601,12 @@ fn main() {
                     let rot = rot.x.atan2(rot.z);
                     let rot = rot + 90f32.to_radians();
 
-                    let model = Mat4::from_scale_rotation_translation(Vec3::splat(1.01), Quat::from_rotation_y(rot), mesh_pos.as_vec3());
+
+                    let scale = if matches!(kind, StructureKind::Belt | StructureKind::Splitter) {
+                        Vec3::new(1.0, 0.8, 1.0)
+                    } else { Vec3::ONE };
+
+                    let model = Mat4::from_scale_rotation_translation(scale * Vec3::splat(1.01), Quat::from_rotation_y(rot), mesh_pos.as_vec3());
                     mesh_shader.set_matrix4(c"model", model);
 
                     let colour = match can_place {
@@ -736,6 +741,46 @@ fn main() {
                 input.move_cursor(Vec2::NAN);
                 input.move_cursor(Vec2::NAN);
                 input.move_cursor(Vec2::NAN);
+            }
+
+
+            unsafe { 
+                gl::Clear(gl::DEPTH_BUFFER_BIT);
+            }
+
+
+            // render item in hand
+            if let Some(item) = game.player.inventory[game.player.hand_index()] {
+                let mut scale = Vec3::ONE;
+                let hand_offset = Vec3::new(1.0, -0.5, 1.0); // right, down, forward
+                if let ItemKind::Structure(structure) = item.kind {
+                    let blocks = structure.blocks(CardinalDirection::North);
+                    let mut min = IVec3::MAX;
+                    let mut max = IVec3::MIN;
+
+                    for &block in blocks {
+                        min = min.min(block);
+                        max = max.max(block);
+                    }
+
+                    let size = (max - min).abs() + IVec3::ONE;
+                    let size = size.as_vec3().max_element();
+                    scale /= size.abs() * 1.5;
+                }
+
+
+
+                let model = 
+                    Mat4::from_rotation_y(-game.camera.yaw)
+                    * Mat4::from_rotation_z(game.camera.pitch)
+                    * Mat4::from_translation(hand_offset)
+                    * Mat4::from_rotation_y(33f32.to_radians())
+                    * Mat4::from_scale(scale * 0.8);
+                mesh_shader.set_vec4(c"modulate", Vec4::ONE);
+                let mesh = renderer.meshes.get(item.kind);
+                //let model = Mat4::from_translation(game.camera.front * Vec3::new(2.0, 0.0, 1.0));
+                mesh_shader.set_matrix4(c"model", model);
+                mesh.draw();
             }
 
 

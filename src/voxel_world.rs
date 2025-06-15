@@ -238,7 +238,13 @@ impl VoxelWorld {
             let time = Instant::now();
             let mut byte_writer = ByteWriter::new();
 
-            byte_writer.write(*data.as_bytes());
+            let mut bytes = *data.as_bytes();
+            for byte in &mut bytes {
+                if *byte == Voxel::StructureBlock as u8 {
+                    *byte = Voxel::Air as u8;
+                }
+            }
+            byte_writer.write(bytes);
 
             let path = format!("saves/chunks/{pos}.chunk");
             fs::write(path, byte_writer.finish()).unwrap();
@@ -364,6 +370,7 @@ impl VoxelWorld {
                         let data = Arc::make_mut(&mut chunk.data);
 
                         *data = ChunkData::from_bytes(byte_reader.read().unwrap());
+
                         chunk.is_dirty = false;
                         chunk
                     },
@@ -606,70 +613,6 @@ impl VoxelWorld {
         while self.queued_chunk_saves > 0 { if self.save_chunk_receiver.try_recv().is_ok() { self.queued_chunk_saves -= 1} };
         info!("voxel-save-system: saved the world in {:?}", time.elapsed())
     }
-
-
-    /*
-    pub fn remesh_chunk(chunks: [Option<Arc<ChunkData>>; 7], vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>) -> bool {
-        // direction of the face
-        // the block offset to move in that direction
-        // which chunk data to use if the block in that direction isn't in here
-        const FACE_DIRECTIONS: [(Direction, (i32, i32, i32), u32); 6] = [
-            (Direction::Right,   (-1,  0,  0), 2),
-            (Direction::Left,    ( 1,  0,  0), 1),
-            (Direction::Up,      ( 0,  1,  0), 3),
-            (Direction::Down,    ( 0, -1,  0), 4),
-            (Direction::Forward, ( 0,  0,  1), 5),
-            (Direction::Back,    ( 0,  0, -1), 6),
-        ];
-
-        let chunk = chunks[0].as_ref().unwrap();
-
-        for z in 0..CHUNK_SIZE {
-            for y in 0..CHUNK_SIZE {
-                for x in 0..CHUNK_SIZE {
-                    let voxel = chunk.get_usize(x, y, z);
-
-                    if voxel.is_transparent() { continue }
-
-                    let voxel_pos = Vec3::new(x as f32, y as f32, z as f32);
-
-                    for (dir, (dx, dy, dz), nchunk) in FACE_DIRECTIONS.iter() {
-                        let nx = x as i32 + dx;
-                        let ny = y as i32 + dy;
-                        let nz = z as i32 + dz;
-
-                        let is_out_of_bounds = nx < 0 || nx >= CHUNK_SIZE as i32
-                                            || ny < 0 || ny >= CHUNK_SIZE as i32
-                                            || nz < 0 || nz >= CHUNK_SIZE as i32;
-
-                        let should_draw = if is_out_of_bounds {
-                            let nchunk = &chunks[*nchunk as usize];
-                            if let Some(nchunk) = nchunk {
-                                let pos = IVec3::new(nx, ny, nz);
-                                let voxel = (pos + 32) % 32;
-                                let voxel = voxel.as_usizevec3();
-                                let voxel = nchunk.get_usize(voxel.x, voxel.y, voxel.z);
-                                voxel.is_transparent()
-                            } else {
-                                false
-                            }
-                        } else {
-                            chunk.get_usize(nx as usize, ny as usize, nz as usize).is_transparent()
-                        };
-
-                        if should_draw {
-                            mesh::draw_quad(vertices, indices,
-                                      mesh::Quad::from_direction(*dir, voxel_pos, voxel.colour()));
-                        }
-                    }
-                }
-            }
-        }
-
-        true
-    }*/
-
-
 
 
     pub fn greedy_mesh(chunks: [Arc<ChunkData>; 7], vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>) -> bool {

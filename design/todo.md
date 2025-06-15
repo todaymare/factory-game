@@ -3,12 +3,12 @@
 	- [x] mining and breaking
 		- [x] damaging blocks
 		- [x] blocks having hp
-	- [ ] world generation
+	- [x] world generation
     - [ ] version numbers on chunks
         - this is needed in the case of changing a chunk while it is being remeshed
 - [ ] machines:
-	- [ ] furnaces
-		- [ ] smelting logic
+	- [x] furnaces
+		- [x] smelting logic
 		- [ ] coal fuel support
 	- [ ] quarry
 		- [x] world destruction
@@ -19,33 +19,33 @@
 			- [ ] size (AxBxY) upgrade
 			- [ ] efficiency upgrade (decreases power usage)
 	- [x] assemblers
-- [ ] logistics
+- [x] logistics
 	- [x] inserters
 		- [x] moves item from input inventory to output inventory
 		- [x] filters
 	- [x] belts
-	- [ ] splitters
-		- [ ] split items 50/50
-		- [ ] filters
+	- [x] splitters
+		- [x] split items 50/50
+		- [x] filters
 - [x] inventory
 	- [x] backend
 	- [x] player inventory ui
 	- [x] hotbar
-- [ ] crafting
-	- [ ] assemblers
-	- [ ] manual crafting
-		- [ ] a shortcut to craft with missing items
+- [x] crafting
+	- [x] assemblers
+	- [x] manual crafting
+		- [x] a shortcut to craft with missing items
 		- [x] ui
-	- [ ] recipes
+	- [x] recipes
 - [x] save & load functionality
 	- [x] serialization of the voxel world
 	- [x] serialization of structures & inventory
 - [ ] qol
-	- [ ] a preview for all structures and blocks before placing them
-		- [ ] the preview
-		- [ ] turn green when placeable
-		- [ ] turn red when not placeable
-		- [ ] show the direction of the block
+	- [x] a preview for all structures and blocks before placing them
+		- [x] the preview
+		- [x] turn green when placeable
+		- [x] turn red when not placeable
+		- [x] show the direction of the block
 - [ ] debug tools
 	- [ ] console
 		- [x] /give (item) (amount)
