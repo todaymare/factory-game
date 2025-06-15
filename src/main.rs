@@ -4,6 +4,8 @@
 #![feature(path_add_extension)]
 #![feature(if_let_guard)]
 #![feature(generic_arg_infer)]
+#![feature(iter_array_chunks)]
+#![feature(seek_stream_len)]
 
 pub mod shader;
 pub mod mesh;
@@ -22,22 +24,22 @@ pub mod crafting;
 pub mod perlin;
 pub mod frustum;
 
-use std::{f32::consts::{PI, TAU}, fs, ops::{self}, time::Instant};
+use std::{f32::consts::{PI, TAU}, fs, hash::Hash, ops::{self}, time::Instant};
 
 use commands::{Command, CommandRegistry};
 use directions::CardinalDirection;
 use frustum::Frustum;
-use tracing::{warn, Level};
+use tracing::{info, trace, warn, Level};
 use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
 use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, split_world_pos, VoxelWorld};
-use glam::{DVec3, IVec3, Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
+use glam::{DVec3, IVec3, Mat4, USizeVec2, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{Key, MouseButton};
 use input::InputManager;
 use items::{DroppedItem, Item, ItemKind};
 use mesh::Mesh;
 use renderer::Renderer;
 use shader::{Shader, ShaderProgram};
-use sti::define_key;
+use sti::{define_key, hash::fxhash::FxHasher32};
 use structures::{strct::{Structure, StructureData, StructureKind}, Structures};
 
 define_key!(EntityId(u32));
@@ -53,9 +55,9 @@ const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-const RENDER_DISTANCE : i32 = 4;
+const RENDER_DISTANCE : i32 = 8;
 
-const DROPPED_ITEM_SCALE : f32 = 0.25;
+const DROPPED_ITEM_SCALE : f32 = 0.5;
 
 const TICKS_PER_SECOND : u32 = 60;
 const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32; 
@@ -65,6 +67,7 @@ fn main() {
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
         .init();
+
     let mut renderer = Renderer::new((1920/2, 1080/2));
 
     let mut ui_layer = UILayer::Gameplay { smoothed_dt: 0.0 };
@@ -72,7 +75,8 @@ fn main() {
 
 
     let mut input = InputManager::default();
-    let block_outline_mesh = Mesh::from_obj("assets/models/block_outline.obj");
+
+    let block_outline_mesh = Mesh::from_vmf("assets/models/block_outline.vmf");
 
 
     let fragment = Shader::new(&fs::read("shaders/mesh.fs").unwrap(), shader::ShaderType::Fragment).unwrap();
@@ -88,17 +92,17 @@ fn main() {
     renderer.window.set_cursor_mode(glfw::CursorMode::Disabled);
 
 
-    println!("loading");
+    info!("loading previous save-state");
     if !fs::exists("saves/").is_ok_and(|f| f == true) {
+        trace!("no previous save-state. creating files");
         let _ = fs::create_dir("saves/");
         let _ = fs::create_dir("saves/chunks/");
         game.save();
     }
 
-
     game.load();
 
-    println!("[info] starting game loop");
+    info!("starting game loop");
     let mut last_frame = 0.0;
     let mut time_since_last_simulation_step = 0.0;
     while !renderer.window.should_close() {
@@ -187,7 +191,7 @@ fn main() {
                 let raycast = game.world.raycast_voxel(game.camera.position,
                                                   game.camera.front,
                                                   PLAYER_REACH);
-                if let Some((pos, _)) = raycast {
+                if let Some((pos, n)) = raycast {
                     let voxel = game.world.get_voxel(pos);
                     if voxel.is_structure() {
                         let structure = game.world.structure_blocks.get(&pos).unwrap();
@@ -198,9 +202,9 @@ fn main() {
                         }
                         else {
                             for index in 0..structure.available_items_len() {
-                                let item = structure.try_take(index);
+                                let item = structure.try_take(index, u32::MAX);
                                 if let Some(item) = item {
-                                    let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5));
+                                    let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3());
                                     game.world.dropped_items.push(dropped_item);
                                     break;
                                 }
@@ -216,30 +220,29 @@ fn main() {
                 let raycast = game.world.raycast_voxel(game.camera.position,
                                                   game.camera.front,
                                                   PLAYER_REACH);
-                if let Some((pos, _)) = raycast {
+                if let Some((pos, n)) = raycast {
                     let voxel = game.world.get_voxel(pos);
-                    if voxel.is_structure() {
+                    let item = game.player.take_item(game.player.hand_index(), 1);
+                    if let Some(item) = item && voxel.is_structure() {
                         let structure = game.world.structure_blocks.get(&pos).unwrap();
                         let structure = game.structures.get_mut(*structure);
 
-                        let item = game.player.take_item(game.player.hand_index(), 1);
-
                         if let StructureData::Inserter { filter, .. } = &mut structure.data {
-                            *filter = item.map(|x| x.kind);
-                            if let Some(item) = item {
-                                game.player.add_item(item);
-                            }
+                            *filter = Some(item.kind);
+                            game.player.add_item(item);
                         }
 
-                        else if let Some(item) = item {
+                        else {
                             if structure.can_accept(item) {
                                 structure.give_item(item);
                             } else {
-                                let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5));
+                                let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3());
                                 game.world.dropped_items.push(dropped_item);
                             }
                         }
-
+                    } else if let Some(item) = item {
+                        let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3());
+                        game.world.dropped_items.push(dropped_item);
                     }
                 }
             }
@@ -289,18 +292,18 @@ fn main() {
 
 
             if input.is_key_just_pressed(Key::F6) {
-                println!("saving");
+                info!("saving game on-command");
                 let time = Instant::now();
                 game.save();
-                println!("saved in {}ms", time.elapsed().as_millis());
+                info!("saved in {:?}", time.elapsed());
             }
 
 
             if input.is_key_just_pressed(Key::F7) {
-                println!("loading");
+                info!("loading game on-command");
                 let time = Instant::now();
                 game.load();
-                println!("loaded save in {}ms", time.elapsed().as_millis());
+                info!("loaded save in {:?}", time.elapsed());
             }
 
 
@@ -529,9 +532,12 @@ fn main() {
                     let position = item.body.position - game.camera.position;
 
                     let scale = Vec3::splat(DROPPED_ITEM_SCALE);
-                    let rot = (game.current_tick - item.creation_tick).u32() as f32 / TICKS_PER_SECOND as f32;
+                    let mut hash = FxHasher32::new();
+                    item.creation_tick.0.hash(&mut hash);
+                    let offset = hash.hash % 1024;
+                    let rot = (((game.current_tick - item.creation_tick).u32()) as f32 + offset as f32) / TICKS_PER_SECOND as f32;
 
-                    renderer.draw_item(&mesh_shader, item.item.kind, position.as_vec3(), scale, rot);
+                    renderer.draw_item(&mesh_shader, item.item.kind, position.as_vec3(), scale, Vec3::new(0.0, rot, 0.0));
                 }
 
             }
@@ -553,10 +559,36 @@ fn main() {
                 if let Some((pos, _)) = raycast {
                     let voxel = game.world.get_voxel(pos);
                     let target_hardness = voxel.base_hardness();
-                    let pos = pos.as_dvec3() - game.camera.position;
+                    let mut mesh_pos = pos.as_dvec3();
+                    let mut dims = Vec3::ONE;
+
+                    'block: {
+                        let Some(strct) = game.world.structure_blocks.get(&pos)
+                        else { break 'block };
+
+                        let strct = game.structures.get(*strct);
+                        let blocks = strct.data.as_kind().blocks(strct.direction);
+
+                        let mut min = IVec3::MAX;
+                        let mut max = IVec3::MIN;
+                        let mut pos_min = IVec3::MAX;
+                        let mut pos_max = IVec3::MIN;
+
+                        let position = strct.zero_zero();
+                        for &offset in blocks {
+                            min = min.min(offset);
+                            max = max.max(offset);
+                            pos_min = pos_min.min(position + offset);
+                            pos_max = pos_max.max(position + offset);
+                        }
+
+                        dims = (max - min).abs().as_vec3() + Vec3::ONE;
+                        mesh_pos = (pos_min + pos_max).as_dvec3() * 0.5;
+                    };
  
-                    let model = Mat4::from_translation(pos.as_vec3() + Vec3::new(0.5, -0.005, 0.5));
-                    let model = model * Mat4::from_scale(Vec3::new(1.01, 1.01, 1.01));
+                    let mesh_pos = mesh_pos + DVec3::splat(0.5) - game.camera.position;
+                    let model = Mat4::from_translation(mesh_pos.as_vec3());
+                    let model = model * Mat4::from_scale(dims * Vec3::new(1.01, 1.01, 1.01));
                     mesh_shader.set_matrix4(c"model", model);
 
                     let modulate = if let Some(mining_progress) = game.player.mining_progress {
@@ -854,6 +886,11 @@ impl Game {
 
         let delta_time = DELTA_TICK;
 
+        if self.current_tick.u32() % (TICKS_PER_SECOND * 60) == 0 {
+            self.save();
+        }
+
+
         if self.current_tick.u32() % TICKS_PER_SECOND == 0 
             && self.world.unload_queue.is_empty() {
             let time = Instant::now();
@@ -870,7 +907,7 @@ impl Game {
                 }
             }
 
-            println!("the purge took {:?}", time.elapsed());
+            trace!("checking dead chunks took {:?}", time.elapsed());
         }
 
         if !self.craft_queue.is_empty() && self.player.can_give(self.craft_queue[0].0) {

@@ -3,7 +3,7 @@ use std::{ops::Bound, fmt::Write};
 use glam::{Vec2, Vec4};
 use glfw::{CursorMode, Key};
 
-use crate::{commands::Command, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer, Style}, structures::{inventory::{SlotKind, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::split_world_pos, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE};
+use crate::{commands::Command, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer, Style}, structures::{self, inventory::{SlotKind, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::split_world_pos, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND};
 
 pub enum UILayer {
     Inventory {
@@ -412,6 +412,7 @@ impl UILayer {
                     let colour_code = if fps > 55.0 { 'a' } else if fps > 25.0 { '6' } else { '4' };
 
                     let _ = writeln!(text, "§eFPS: §{colour_code}{fps}§r");
+                    let _ = writeln!(text, "§eTIME ELAPSED: §a{:.1}§r", game.current_tick.u32() as f64 / TICKS_PER_SECOND as f64);
                     let _ = writeln!(text, "§eTRIANGLE COUNT: §a{}§r", game.triangle_count);
                     let _ = writeln!(text, "§eRENDER WORLD TIME: §a{}ms§r", game.render_world_time);
                     let _ = writeln!(text, "§eRENDERED CHUNKS: §a{}§r", game.total_rendered_chunks);
@@ -490,6 +491,10 @@ impl UILayer {
                                 StructureData::Quarry { current_progress } => {
                                     let _ = writeln!(text, "Quarry:");
                                     let _ = writeln!(text, "§e    - CURRENT PROGRESS: §a{}", current_progress);
+                                    let y = *current_progress / 9;
+                                    let y = structure.zero_zero().y + -(y as i32) - 1;
+                                    let eff = structures::quarry_efficiency(y as _);
+                                    let _ = writeln!(text, "§e    - EFFICIENCY: §a{:.1}%", (1.0 / eff) * 100.0);
                                 },
 
                                 StructureData::Inserter { state, filter } => {
@@ -525,25 +530,6 @@ impl UILayer {
 
                                 StructureData::Belt { } => {
                                     let _ = writeln!(text, "Belt");
-                                    /*
-                                    let _ = writeln!(text, "§e  - INVENTORY:");
-                                    let _ = writeln!(text, "§e    - LEFT LANE:");
-                                    for item in inventory[0] {
-                                        if let Some(item) = item {
-                                            let _ = writeln!(text, "§e      - §b{item:?}");
-                                        } else {
-                                            let _ = writeln!(text, "§e      - §bEmpty");
-                                        }
-                                    }
-
-                                    let _ = writeln!(text, "§e    - RIGHT LANE:");
-                                    for item in inventory[1] {
-                                        if let Some(item) = item {
-                                            let _ = writeln!(text, "§e      - §b{item:?}");
-                                        } else {
-                                            let _ = writeln!(text, "§e      - §bEmpty");
-                                        }
-                                    }*/
                                 }
 
 
@@ -555,6 +541,7 @@ impl UILayer {
 
                                 StructureData::Assembler { recipe: crafter } => {
                                     let _ = writeln!(text, "Assembler");
+                                    let _ = writeln!(text, "§e  - RECIPE: §a{crafter:?}");
                                 }
 
                                 StructureData::Furnace { input, output } => {
@@ -880,7 +867,6 @@ impl RecipeCraft {
             amount -= diff;
             item.amount -= diff;
 
-            println!("{item:?}");
             if item.amount == 0 {
                 self.buffer.remove(i);
             } else {
@@ -1051,24 +1037,36 @@ fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
     if input.is_button_pressed(glfw::MouseButton::Button1) && input.is_key_pressed(Key::LeftShift) {
         if let Some(inv_item) = slot && let Some(other_inv) = &mut other_inv {
             for slot in other_inv.iter_mut() {
-                if let Some(item) = slot {
-                    if item.kind != inv_item.kind {
-                        continue;
-                    }
+                let Some(item) = slot
+                else { continue };
 
-                    let addition = inv_item.amount.min(item.kind.max_stack_size() - item.amount);
-                    inv_item.amount -= addition;
-                    item.amount += addition;
-                    if inv_item.amount != 0 {
-                        continue;
-                    }
-                } else if inv_item.amount != 0 {
+                if item.kind != inv_item.kind {
+                    continue;
+                }
+
+                let addition = inv_item.amount.min(item.kind.max_stack_size() - item.amount);
+                inv_item.amount -= addition;
+                item.amount += addition;
+                if inv_item.amount != 0 {
+                    continue;
+                }
+
+                let slot = &mut inventory[index];
+                *slot = None;
+                return;
+            }
+
+
+            for slot in other_inv.iter_mut() {
+                if slot.is_some() { continue }
+
+                if inv_item.amount != 0 {
                     *slot = Some(*inv_item);
                 }
 
                 let slot = &mut inventory[index];
                 *slot = None;
-                break;
+                return ;
             }
 
         }

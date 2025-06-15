@@ -3,17 +3,18 @@ pub mod work_queue;
 pub mod belts;
 pub mod inventory;
 
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::{f32::consts::TAU, hash::{DefaultHasher, Hash, Hasher}};
 
 use belts::{Belts, Node};
-use glam::{DVec3, IVec3, Mat4, Vec3};
+use glam::{DVec3, IVec3, Mat4, Quat, Vec3};
 use inventory::{SlotKind, StructureInventory};
 use rand::seq::IndexedRandom;
-use sti::define_key;
+use sti::{define_key, hash::fxhash::fxhash32};
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
+use tracing::warn;
 use work_queue::WorkQueue;
 
-use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::Item, renderer::Renderer, shader::ShaderProgram, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick, DROPPED_ITEM_SCALE};
+use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, quad, renderer::Renderer, shader::ShaderProgram, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick, DROPPED_ITEM_SCALE, TICKS_PER_SECOND};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
@@ -263,9 +264,10 @@ impl Structure {
     pub fn update(id: StructureId, structures: &mut Structures, world: &mut VoxelWorld) {
         let structure = structures.get_mut_without_wake_up(id);
         if structure.is_asleep {
-            println!("[warn] tried to update a function that is asleep");
+            warn!("tried to update a function that is asleep");
             return;
         }
+
         let dir = structure.direction;
         let zz = structure.zero_zero();
 
@@ -278,7 +280,7 @@ impl Structure {
 
                 let is_output_empty = output.is_none();
                 if !is_output_empty {
-                    println!("[warn] can't insert item into inventory. falling back asleep. this is a bug");
+                    warn!("can't insert item into inventory. falling back asleep. this is a bug");
 
                     structure.is_asleep = true;
                     return;
@@ -304,7 +306,6 @@ impl Structure {
                     let structure = structures.get_mut_without_wake_up(id);
                     let inventory = &mut structure.inventory.as_mut().unwrap();
                     let output = inventory.output_mut(0);
-                    println!("processing item {item:?}");
 
                     *output = Some(item);
                     structure.is_asleep = true;
@@ -355,7 +356,7 @@ impl Structure {
                             }
 
                             // yippie!
-                            structures.get_mut(*input_structure_id).try_take(index).unwrap();
+                            structures.get_mut(*input_structure_id).try_take(index, 1).unwrap();
 
                             final_state = InserterState::Placing(item);
                             break 'body;
@@ -390,7 +391,7 @@ impl Structure {
 
 
                         if !output_structure.can_accept(item) {
-                            println!("[warn] inserter's output changed it's mind :(");
+                            warn!("inserter's output changed it's mind :(");
                             structures.schedule_in(id, 10);
                             return;
                         }
@@ -520,13 +521,12 @@ impl Structure {
 
                     let mut hardness = voxel.base_hardness();
                     if pos.y < 0 { 
-                        hardness = (hardness as f32 * (1.0 + (pos.y as f32 * 0.01).powi(2))) as u32;
+                        hardness = (hardness as f32 * quarry_efficiency(pos.y as _)) as u32;
                     }
 
                     structures.schedule_in(id, hardness);
                     break;
                 }
-
             },
 
 
@@ -586,61 +586,40 @@ impl Structure {
 
 
 
-    pub fn render(&self, _: &Structures, camera: &Camera, renderer: &Renderer, shader: &ShaderProgram) {
+    pub fn render(&self, structures: &Structures, camera: &Camera, renderer: &Renderer, shader: &ShaderProgram) {
         let kind = self.data.as_kind();
 
-        let position = self.position - self.data.as_kind().origin(self.direction);
+        let position = self.zero_zero();
         let mesh = renderer.meshes.get(kind.item_kind());
 
         let blocks = self.data.as_kind().blocks(self.direction);
-        let mut min = IVec3::MAX;
-        let mut max = IVec3::MIN;
+        let mut pos_min = IVec3::MAX;
+        let mut pos_max = IVec3::MIN;
         for offset in blocks {
-            min = min.min(position + offset);
-            max = max.max(position + offset);
+            pos_min = pos_min.min(position + offset);
+            pos_max = pos_max.max(position + offset);
         }
 
-        let mesh_position = (min + max).as_dvec3() / 2.0 + DVec3::new(0.5, 0.0, 0.5);
+        let mesh_position = (pos_min + pos_max).as_dvec3() / 2.0 + DVec3::new(0.5, 0.5, 0.5);
         let mesh_position = (mesh_position - camera.position).as_vec3();
 
-        let rot = self.direction.as_ivec3().as_vec3();
-        let rot = rot.x.atan2(rot.z);
-        let rot = rot + 90f32.to_radians();
-        let model = Mat4::from_translation(mesh_position) * Mat4::from_rotation_y(rot);
-        shader.set_matrix4(c"model", model);
-        mesh.draw();
-
+        let mut dims = Vec3::ONE;
+        'm: {
         match &self.data {
-            StructureData::Chest { } => {
-                /*
-                for (i, slot) in inventory.iter().enumerate() {
-                    let Some(item) = slot
-                    else { continue };
-
-                    let mut hash = DefaultHasher::new();
-                    self.position.hash(&mut hash);
-                    i.hash(&mut hash);
-                    item.kind.hash(&mut hash);
-                    let pos = hash.finish() % 1000;
-                    let x = (pos % 81) as f32 / 81.0;
-                    let y = (pos % 96) as f32 / 96.0;
-                    let z = (pos % 27) as f32 / 27.0;
-                    let pos = mesh_position + Vec3::new(x, y, z) * 0.9 + Vec3::new(-0.45, 0.0, -0.45);
-
-                    renderer.draw_item(shader, item.kind, pos, Vec3::splat(0.1), 0.00);
-                }*/
-            },
-
-
             StructureData::Belt => {
+                dims.y *= 0.7;
                 let inventory = &self.inventory.as_ref().unwrap().slots;
 
-                let base = mesh_position + rotate_block_vector(self.direction, IVec3::new(-3, 3, 0)).as_vec3() / 4.0;
+                let base = mesh_position + rotate_block_vector(self.direction, IVec3::new(-24, 11, 0)).as_vec3() / 32.0;
+                let base = base + Vec3::new(0.0, 0.05, 0.0);
+
                 let mut left_base = base + rotate_block_vector(self.direction, IVec3::new(0, 0, -1)).as_vec3() * 0.3;
                 for item in &inventory[..2] {
                     left_base += rotate_block_vector(self.direction, IVec3::new(1, 0, 0)).as_vec3() * 0.5;
                     if let Some(item) = item {
-                        renderer.draw_item(shader, item.kind, left_base, Vec3::splat(DROPPED_ITEM_SCALE), 0.0);
+                        let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
+                                  else { 90f32.to_radians() };
+                        renderer.draw_item(shader, item.kind, left_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
                     }
                 }
 
@@ -648,12 +627,86 @@ impl Structure {
                 for item in &inventory[2..4] {
                     right_base += rotate_block_vector(self.direction, IVec3::new(1, 0, 0)).as_vec3() * 0.5;
                     if let Some(item) = item {
-                        renderer.draw_item(shader, item.kind, right_base, Vec3::splat(DROPPED_ITEM_SCALE), 0.0);
+                        let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
+                                  else { 90f32.to_radians() };
+                        renderer.draw_item(shader, item.kind, right_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
                     }
                 }
             }
+
+
+           StructureData::Splitter { .. } => {
+                dims.y *= 0.7;
+                let inventory = &self.inventory.as_ref().unwrap().slots;
+
+                let base = mesh_position + rotate_block_vector(self.direction, IVec3::new(-24, 11, 16)).as_vec3() / 32.0;
+                let base = base + Vec3::new(0.0, 0.05, 0.0);
+
+                let mut left_base = base + rotate_block_vector(self.direction, IVec3::new(0, 0, -1)).as_vec3() * 0.3;
+                for item in &inventory[..2] {
+                    left_base += rotate_block_vector(self.direction, IVec3::new(1, 0, 0)).as_vec3() * 0.5;
+                    if let Some(item) = item {
+                        let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
+                                  else { 90f32.to_radians() };
+                        renderer.draw_item(shader, item.kind, left_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
+                    }
+                }
+
+                let mut right_base = base + rotate_block_vector(self.direction, IVec3::new(0, 0, 1)).as_vec3() * 0.3;
+                for item in &inventory[2..4] {
+                    right_base += rotate_block_vector(self.direction, IVec3::new(1, 0, 0)).as_vec3() * 0.5;
+                    if let Some(item) = item {
+                        let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
+                                  else { 90f32.to_radians() };
+                        renderer.draw_item(shader, item.kind, right_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
+                    }
+                }
+
+                let base = mesh_position + rotate_block_vector(self.direction, IVec3::new(-24, 11, -16)).as_vec3() / 32.0;
+                let base = base + Vec3::new(0.0, 0.05, 0.0);
+
+                let mut left_base = base + rotate_block_vector(self.direction, IVec3::new(0, 0, -1)).as_vec3() * 0.3;
+                for item in &inventory[4..6] {
+                    left_base += rotate_block_vector(self.direction, IVec3::new(1, 0, 0)).as_vec3() * 0.5;
+                    if let Some(item) = item {
+                        let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
+                                  else { 90f32.to_radians() };
+                        renderer.draw_item(shader, item.kind, left_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
+                    }
+                }
+
+                let mut right_base = base + rotate_block_vector(self.direction, IVec3::new(0, 0, 1)).as_vec3() * 0.3;
+                for item in &inventory[6..8] {
+                    right_base += rotate_block_vector(self.direction, IVec3::new(1, 0, 0)).as_vec3() * 0.5;
+                    if let Some(item) = item {
+                        let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
+                                  else { 90f32.to_radians() };
+                        renderer.draw_item(shader, item.kind, right_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
+                    }
+                }
+            }
+
+
+            StructureData::Assembler { recipe }=> {
+                let Some(recipe) = recipe
+                else { break 'm };
+
+                let hash = fxhash32(&self.position) % 1024;
+                let t = (hash + structures.current_tick.u32()) as f32 / TICKS_PER_SECOND as f32;
+                let rotation = Vec3::new(t, t * 0.7, t * 1.3);
+
+                renderer.draw_item(shader, recipe.result.kind, mesh_position, Vec3::splat(1.2), rotation);
+            }
             _ => (),
         }
+        }
+
+        let rot = self.direction.as_ivec3().as_vec3();
+        let rot = rot.x.atan2(rot.z);
+        let rot = rot + 90f32.to_radians();
+        let model = Mat4::from_translation(mesh_position) * Mat4::from_scale(dims) * Mat4::from_rotation_y(rot);
+        shader.set_matrix4(c"model", model);
+        mesh.draw();
     }
 }
 
@@ -692,6 +745,12 @@ pub fn try_consume(inventory: &mut StructureInventory, recipe: Recipe) -> bool {
     }
 
     true
+}
+
+
+pub fn quarry_efficiency(y_pos: f32) -> f32 {
+    if y_pos > 0.0 { return 1.0 }
+    1.0 + (y_pos * 0.005).powi(2)
 }
 
 

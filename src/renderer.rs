@@ -3,11 +3,12 @@ pub mod textures;
 use std::{collections::HashMap, ffi::CString, fs, mem::offset_of, ptr::null_mut};
 
 use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
-use glam::{IVec2, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
+use glam::{IVec2, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
 use textures::{TextureAtlasBuilder, TextureAtlasManager, TextureId};
+use tracing::{error, warn};
 
-use crate::{items::{ItemKind, Assets}, shader::{Shader, ShaderProgram, ShaderType}};
+use crate::{directions::CardinalDirection, items::{Assets, ItemKind}, shader::{Shader, ShaderProgram, ShaderType}};
 
 
 const FONT_SIZE : u32 = 64;
@@ -63,7 +64,7 @@ pub struct Character {
 impl Renderer {
     pub fn new(window_size: (usize, usize)) -> Self {
 
-        let mut glfw = glfw::init(|error, str| println!("[error] glfw error {str}: {error}"))
+        let mut glfw = glfw::init(|error, str| error!("glfw error {str}: {error}"))
             .unwrap();
 
         glfw.window_hint(glfw::WindowHint::ContextVersion(3, 3));
@@ -82,7 +83,7 @@ impl Renderer {
                 let result = glfwGetProcAddress(cstr.as_ptr());
 
                 if result.is_null() {
-                    println!("[warn] failed to load gl function '{s}'");
+                    warn!("failed to load gl function '{s}'");
                 }
                 result
             });
@@ -102,16 +103,16 @@ impl Renderer {
 
         let mut ft = null_mut();
         if unsafe { freetype::freetype::FT_Init_FreeType(&mut ft) } != 0 {
-            panic!("[error] failed to init freetype library");
+            panic!("failed to init freetype library");
         }
 
 
         let mut face = null_mut();
         if unsafe { freetype::freetype::FT_New_Face(ft, c"font.ttf".as_ptr(), 0, &mut face) } != 0 {
-            panic!("[error] failed to load font");
+            panic!("failed to load font");
         }
 
-        dbg!(unsafe { FT_Set_Pixel_Sizes(face, FONT_SIZE, FONT_SIZE) });
+        unsafe { FT_Set_Pixel_Sizes(face, FONT_SIZE, FONT_SIZE) };
 
         let mut characters = HashMap::new();
         let mut texture_atlas = TextureAtlasBuilder::new(GpuTextureFormat::Red);
@@ -121,7 +122,7 @@ impl Renderer {
         let mut biggest_y_size : f32 = 0.0;
         for c in 0..128 {
             if unsafe { FT_Load_Char(face, c as u64, FT_LOAD_RENDER as _) } != 0 {
-                panic!("[error] failed to load glyph '{}'", char::from_u32(c).unwrap());
+                panic!("failed to load glyph '{}'", char::from_u32(c).unwrap());
             }
 
 
@@ -249,8 +250,8 @@ impl Renderer {
             gl::Enable(gl::DEPTH_TEST);
             gl::ClearColor(colour.x, colour.y, colour.z, colour.w);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-            gl::Enable(gl::CULL_FACE);
-            gl::CullFace(gl::BACK);
+            //gl::Enable(gl::CULL_FACE);
+            //gl::CullFace(gl::BACK);
 
             if self.is_wireframe {
                 gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
@@ -360,7 +361,7 @@ impl Renderer {
                         'r' => default_colour,
 
                         _ => {
-                            println!("[warn] invalid colour code '§{}', resetting to default colour", colour_code);
+                            warn!("invalid colour code '§{}', resetting to default colour", colour_code);
                             default_colour
                         },
                     };
@@ -453,12 +454,35 @@ impl Renderer {
     }
 
 
-    pub fn draw_item(&self, shader: &ShaderProgram, item_kind: ItemKind, pos: Vec3, scale: Vec3, rot: f32) {
-        let model = Mat4::from_scale_rotation_translation(scale, Quat::from_rotation_y(rot), pos);
+    pub fn draw_item_quat(&self, shader: &ShaderProgram, item_kind: ItemKind, pos: Vec3, mut scale: Vec3, rot: Quat) {
+        if let ItemKind::Structure(structure) = item_kind {
+            let blocks = structure.blocks(CardinalDirection::North);
+            let mut min = IVec3::MAX;
+            let mut max = IVec3::MIN;
+
+            for &block in blocks {
+                min = min.min(block);
+                max = max.max(block);
+            }
+
+            let size = (max - min).abs() + IVec3::ONE;
+            let size = size.as_vec3().max_element();
+            scale /= size.abs();
+        }
+
+
+        let model = Mat4::from_scale_rotation_translation(scale, rot, pos);
         shader.set_matrix4(c"model", model);
 
         self.meshes.get(item_kind).draw();
     }
+
+
+    pub fn draw_item(&self, shader: &ShaderProgram, item_kind: ItemKind, pos: Vec3, scale: Vec3, rot: Vec3) {
+        let rot = Quat::from_euler(glam::EulerRot::XYZ, rot.x, rot.y, rot.z);
+        self.draw_item_quat(shader, item_kind, pos, scale, rot);
+    }
+
 
 
     pub fn draw_item_icon(&mut self, item: ItemKind, pos: Vec2, dims: Vec2, modulate: Vec4) {

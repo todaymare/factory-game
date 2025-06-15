@@ -1,4 +1,5 @@
 use glam::Vec4;
+use tracing::warn;
 
 use crate::{items::ItemKind, TICKS_PER_SECOND};
 
@@ -44,23 +45,6 @@ impl Voxel {
 
             Voxel::StructureBlock => Vec4::ZERO.with_w(1.0),
             Voxel::Air => unreachable!(),
-        }
-    }
-
-
-    pub fn from_u8(u8: u8) -> Voxel {
-        match u8 {
-            0 => Self::Air,
-            1 => Self::Dirt,
-            2 => Self::Stone,
-            3 => Self::Copper,
-            4 => Self::Iron,
-            5 => Self::Coal,
-
-            _ => {
-                println!("invalid block id '{u8}'");
-                Self::Air
-            }
         }
     }
 

@@ -1,6 +1,7 @@
 use std::{ffi::CStr, ptr::null_mut};
 
 use glam::{Mat4, Vec3, Vec4};
+use tracing::info;
 
 
 pub struct Shader {
@@ -40,7 +41,7 @@ impl Shader {
     /// - OpenGL functions are loaded
     ///
     pub fn new(data: &[u8], shader_type: ShaderType) -> Result<Self, ShaderError> {
-        println!("[info] loading a {shader_type:?} shader");
+        info!("loading a {shader_type:?} shader");
         let id = {
             let shader = match shader_type {
                 ShaderType::Fragment => gl::FRAGMENT_SHADER,

@@ -151,6 +151,32 @@ impl Structure {
         match self.data {
             StructureData::Furnace { input, output } => {
                 if let Some(input) = input {
+                    input.kind == item.kind && input.amount < 5 && input.amount + item.amount <= input.kind.max_stack_size()
+                } else if let Some(output) = output {
+                    let curr_recipe = FURNACE_RECIPES.iter().find(|x| x.result.kind == output.kind).unwrap();
+                    let input = curr_recipe.requirements[0];
+                    input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
+                } else {
+                    FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == item.kind).is_some()
+                }
+            }
+
+
+            _ => {
+                let Some(inventory) = &self.inventory
+                else { return false };
+
+                inventory.can_accept(item)
+
+            }
+        }
+    }
+
+
+    pub fn can_accept_from_player(&self, item: Item) -> bool {
+        match self.data {
+            StructureData::Furnace { input, output } => {
+                if let Some(input) = input {
                     input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
                 } else if let Some(output) = output {
                     let curr_recipe = FURNACE_RECIPES.iter().find(|x| x.result.kind == output.kind).unwrap();
@@ -226,13 +252,14 @@ impl Structure {
     }
 
 
-    pub fn try_take(&mut self, index: usize) -> Option<Item> {
+    pub fn try_take(&mut self, index: usize, max: u32) -> Option<Item> {
         match &mut self.data {
             StructureData::Furnace { output, .. } => {
                 if let Some(output_item) = output {
-                    output_item.amount -= 1;
+                    let amount = max.min(output_item.amount);
+                    output_item.amount -= amount;
                     let mut item = *output_item;
-                    item.amount = 1;
+                    item.amount = amount;
 
                     if output_item.amount == 0 { *output = None };
 
@@ -247,7 +274,7 @@ impl Structure {
                 let Some(inventory) = &mut self.inventory
                 else { panic!("tried to take an item from a structure with no inventory") };
 
-                inventory.try_take(index)
+                inventory.try_take(index, max)
 
             }
             
@@ -396,14 +423,14 @@ impl StructureKind {
 
     pub fn mesh(self) -> Mesh {
         match self {
-            StructureKind::Quarry => Mesh::from_obj("assets/models/quarry.obj"),
-            StructureKind::Inserter => Mesh::from_obj("assets/models/inserter.obj"),
-            StructureKind::Chest => Mesh::from_obj("assets/models/block_outline.obj"),
-            StructureKind::Silo => Mesh::from_obj("assets/models/assembler.obj"),
-            StructureKind::Belt => Mesh::from_obj("assets/models/belt.obj"),
-            StructureKind::Splitter => Mesh::from_obj("assets/models/splitter.obj"),
-            StructureKind::Assembler => Mesh::from_obj("assets/models/assembler.obj"),
-            StructureKind::Furnace => Mesh::from_obj("assets/models/assembler.obj"),
+            StructureKind::Quarry => Mesh::from_vmf("assets/models/quarry.vmf"),
+            StructureKind::Inserter => Mesh::from_vmf("assets/models/inserter.vmf"),
+            StructureKind::Chest => Mesh::from_vmf("assets/models/chest.vmf"),
+            StructureKind::Silo => Mesh::from_vmf("assets/models/silo.vmf"),
+            StructureKind::Belt => Mesh::from_vmf("assets/models/belt.vmf"),
+            StructureKind::Splitter => Mesh::from_vmf("assets/models/splitter.vmf"),
+            StructureKind::Assembler => Mesh::from_vmf("assets/models/assembler.vmf"),
+            StructureKind::Furnace => Mesh::from_vmf("assets/models/furnace.vmf"),
         }
     }
 }

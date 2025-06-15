@@ -9,6 +9,7 @@ gl = "*"
 glfw = "*"
 sti = { git = "https://github.com/leddoo/sti" }
 save-format = { git = "https://github.com/rookieCookies/save-format" }
+voxel-mesher = { git = "https://github.com/rookieCookies/voxel-mesher" }
 freetype = "*"
 rand = "*"
 obj-rs = "*"

@@ -5,7 +5,7 @@ pub mod mesh;
 use std::{collections::{HashMap, HashSet}, fs::{self, File}, hint::spin_loop, io::Write, ops::Bound, sync::{mpsc, Arc}, time::{Duration, Instant}};
 
 use chunk::{ChunkData, MeshState, Noise};
-use glam::{DVec3, IVec3, Vec3, Vec4};
+use glam::{DVec3, IVec2, IVec3, U64Vec2, USizeVec2, USizeVec3, Vec3, Vec4};
 use libnoise::{Perlin, Simplex, Source};
 use mesh::{draw_quad, Vertex, VoxelMesh};
 use rand::seq::IndexedRandom;
@@ -151,7 +151,7 @@ impl VoxelWorld {
             let mut indices = vec![];
             let time = Instant::now();
             VoxelWorld::greedy_mesh(chunks, &mut vertices, &mut indices);
-            println!("mesh-generation: meshes in {:?}", time.elapsed());
+            trace!("mesh-generation: meshes in {:?}", time.elapsed());
             if let Err(_) = sender.send((pos, vertices, indices)) {
                 warn!("mesh-generation: job receiver terminated before all meshing jobs were done");
             }
@@ -221,11 +221,13 @@ impl VoxelWorld {
 
 
     pub fn save_chunk(&mut self, pos: IVec3) {
-        let chunk = self.chunks.get(&pos).unwrap().as_ref().unwrap();
+        let chunk = self.chunks.get_mut(&pos).unwrap().as_mut().unwrap();
         if !chunk.is_dirty {
-            info!("chunk-save-system: chunk at '{pos}' isn't dirty. skipping saving");
+            trace!("chunk-save-system: chunk at '{pos}' isn't dirty. skipping saving");
             return;
         }
+
+        chunk.is_dirty = false;
 
         self.queued_chunk_saves += 1;
 
@@ -305,7 +307,6 @@ impl VoxelWorld {
                 let Some(Some(chunk)) = self.chunks.get_mut(&pos)
                 else { continue };
                 chunk.mesh_state = MeshState::ShouldUpdate;
-                chunk.is_dirty = true;
             }
 
 
@@ -363,6 +364,7 @@ impl VoxelWorld {
                         let data = Arc::make_mut(&mut chunk.data);
 
                         *data = ChunkData::from_bytes(byte_reader.read().unwrap());
+                        chunk.is_dirty = false;
                         chunk
                     },
 
@@ -454,7 +456,7 @@ impl VoxelWorld {
 
 
             for index in 0..structure.available_items_len() {
-                while let Some(item) = structure.try_take(index) {
+                while let Some(item) = structure.try_take(index, u32::MAX) {
                     self.dropped_items.push(DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
                 }
             }
@@ -668,6 +670,8 @@ impl VoxelWorld {
     }*/
 
 
+
+
     pub fn greedy_mesh(chunks: [Arc<ChunkData>; 7], vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>) -> bool {
         let chunk = &chunks[0];
         // sweep over each axis
@@ -858,3 +862,6 @@ pub fn split_world_pos(pos: IVec3) -> (IVec3, IVec3) {
 
     (chunk_pos, chunk_local_pos)
 }
+
+
+

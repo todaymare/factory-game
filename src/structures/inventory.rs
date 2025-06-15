@@ -180,7 +180,7 @@ impl StructureInventory {
     }
 
 
-    pub fn try_take(&mut self, index: usize) -> Option<Item> {
+    pub fn try_take(&mut self, index: usize, max: u32) -> Option<Item> {
         let (i, _) = self.meta.iter()
             .enumerate()
             .filter(|x| matches!(x.1.kind, SlotKind::Output | SlotKind::Storage))
@@ -188,7 +188,18 @@ impl StructureInventory {
             .next()
             .unwrap();
 
-        self.slots[i].take()
+
+        let Some(slot) = &mut self.slots[i]
+        else { return None };
+
+        let amount = slot.amount.min(max);
+        let item = slot.with_amount(amount);
+        slot.amount -= amount;
+        if slot.amount == 0 {
+            self.slots[i] = None;
+        }
+
+        Some(item)
     }
 }
 

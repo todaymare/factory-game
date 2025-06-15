@@ -9,7 +9,6 @@ use crate::directions::Direction;
 ///! plane data with 4 vertices
 pub struct Quad {
     pub color: Vec4,
-    pub direction: Direction,
     pub corners: [Vec3; 4],
 }
 
@@ -60,7 +59,6 @@ impl Quad {
         Self {
             corners,
             color,
-            direction,
         }
     }
 }

@@ -1,10 +1,11 @@
 use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
-use glam::{DVec3, IVec2, Vec3, Vec4};
-use image::{codecs::png::PngDecoder, ImageDecoder};
+use glam::{DVec3, IVec2, IVec3, Vec3, Vec4};
+use image::{codecs::png::PngDecoder, EncodableLayout, ImageDecoder};
 use rand::random;
+use tracing::error;
 
-use crate::{directions::Direction, mesh::{draw_quad, Mesh}, quad::Quad, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::StructureKind, voxel_world::voxel::Voxel, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
+use crate::{directions::Direction, mesh::{self, Mesh}, quad::Quad, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::StructureKind, voxel_world::voxel::Voxel, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
 
 
 #[derive(Clone)]
@@ -141,39 +142,6 @@ impl ItemKind {
             _ => None,
         }
     }
-
-
-    ///
-    /// This function returns a Mesh of the item centred at (0, 0, 0) with
-    /// a unit size
-    ///
-    pub fn create_mesh(self) -> Mesh {
-        match self {
-            _ => {
-                let colour = match self {
-                    ItemKind::Voxel(vk) => vk.colour(),
-                    ItemKind::Structure(structure) => return structure.mesh(),
-                    ItemKind::CopperOre => Voxel::Copper.colour(),
-                    ItemKind::IronOre => Voxel::Iron.colour(),
-                    ItemKind::Coal => Voxel::Coal.colour(),
-                    _ => Vec4::ONE,
-                };
-
-                let mut verticies = vec![];
-                let mut indicies = vec![];
-
-                let pos = Vec3::new(-0.5, -0.5, -0.5);
-                draw_quad(&mut verticies, &mut indicies, Quad::from_direction(Direction::Up, pos, colour));
-                draw_quad(&mut verticies, &mut indicies, Quad::from_direction(Direction::Down, pos, colour));
-                draw_quad(&mut verticies, &mut indicies, Quad::from_direction(Direction::Left, pos, colour));
-                draw_quad(&mut verticies, &mut indicies, Quad::from_direction(Direction::Right, pos, colour));
-                draw_quad(&mut verticies, &mut indicies, Quad::from_direction(Direction::Forward, pos, colour));
-                draw_quad(&mut verticies, &mut indicies, Quad::from_direction(Direction::Back, pos, colour));
-
-                Mesh::new(&verticies, &indicies)
-            }
-        }
-    }
 }
 
 
@@ -201,10 +169,17 @@ impl Assets {
         let mut models = HashMap::with_capacity(ItemKind::ALL.len());
 
         let white_texture = texture_atlas.register(IVec2::new(1, 1), &[255, 255, 255, 255]);
+        let white_mesh = {
+            let data = &[u32::MAX];
+            let mut vertices = vec![];
+            let mut indices = vec![];
+
+            voxel_mesher::greedy_mesh(&*data, IVec3::new(1, 1, 1), &mut vertices, &mut indices, Vec3::ONE);
+            Mesh::new(&vertices, &indices)
+        };
 
         for &item in ItemKind::ALL {
-            models.insert(item, item.create_mesh());
-
+            // load texture
             let path = textures_dir.join(item.to_string()).with_added_extension("png");
 
             let texture = match File::open(&path) {
@@ -214,16 +189,47 @@ impl Assets {
                     let dims = asset.dimensions();
                     let dims = IVec2::new(dims.0 as _, dims.1 as _);
 
-                    let mut data = vec![0; asset.total_bytes() as _];
+                    let mut data = vec![0; asset.total_bytes() as usize];
                     asset.read_image(&mut data).unwrap();
 
-                    texture_atlas.register(dims, &data)
+                    let id = texture_atlas.register(dims, &data);
+
+                    if let ItemKind::Structure(kind) = item {
+                        models.insert(item, kind.mesh());
+                    } else {
+                        let mut vertices = vec![];
+                        let mut indices = vec![];
+                        let data = {
+                            let mut vec = Vec::with_capacity(data.len() / 4);
+                            for mut bytes in data.iter().copied().array_chunks::<4>() {
+                                bytes.reverse();
+                                vec.push(u32::from_ne_bytes(bytes));
+                            }
+
+                            vec.reverse();
+                            vec
+                        };
+
+                        voxel_mesher::greedy_mesh(&data, IVec3::new(dims.x, dims.y, 1), &mut vertices, &mut indices, 1.0/Vec3::new(dims.x as _, dims.y as _, 8.0));
+                        let mesh = Mesh::new(&vertices, &indices);
+                        models.insert(item, mesh);
+                    }
+
+                    id
                 }
 
-                Err(_) => white_texture,
+                Err(_) => {
+                    error!("unable to find a texture for '{}'", item.to_string());
+                    models.insert(item, white_mesh.clone());
+                    white_texture
+                },
             };
 
             textures.insert(item, texture);
+
+
+            // create mesh
+
         }
 
 

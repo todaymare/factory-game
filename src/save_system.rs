@@ -6,7 +6,7 @@ use save_format::{parse_str, Arena, Value};
 use sti::format_in;
 use tracing::warn;
 
-use crate::{crafting::{crafting_recipe_index, RECIPES}, directions::CardinalDirection, items::{DroppedItem, Item, ItemKind}, structures::strct::{InserterState, Structure, StructureData, StructureKind}, Game, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
+use crate::{crafting::{crafting_recipe_index, crafting_recipe_inventory, RECIPES}, directions::CardinalDirection, items::{DroppedItem, Item, ItemKind}, structures::{inventory::StructureInventory, strct::{InserterState, Structure, StructureData, StructureKind}}, Game, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
 
 impl Game {
     #[allow(unused_must_use)]
@@ -32,7 +32,6 @@ impl Game {
         loop {
             buf.clear();
             write!(buf, "world.dropped_items[{i}]");
-            println!("{i}");
 
             let Some(dropped_item) = parse_dropped_item(&hm, &mut buf)
             else { break; };
@@ -109,7 +108,7 @@ impl Game {
             };
 
 
-
+            let mut inventory = None;
             let data = match kind {
                 StructureKind::Quarry => {
                     buf.clear();
@@ -179,8 +178,10 @@ impl Game {
                 StructureKind::Assembler => {
                     buf.clear();
                     write!(buf, "structure[{i}].recipe");
-                    let recipe = hm[&*buf].as_u32();
-                    let recipe = RECIPES[recipe as usize];
+                    let recipe_index = hm[&*buf].as_u32();
+                    let recipe = RECIPES[recipe_index as usize];
+
+                    inventory = Some(crafting_recipe_inventory(recipe_index as usize));
 
                     StructureData::Assembler { recipe: Some(recipe) }
                 }
@@ -209,7 +210,9 @@ impl Game {
 
             let mut structure = Structure::from_kind(kind, origin, direction);
             structure.data = data;
-
+            if let Some(inv) = inventory {
+                structure.inventory = Some(StructureInventory::new(inv));
+            }
 
             if let Some(sinv) = &mut structure.inventory {
                 for inv_i in 0..sinv.slots.len() {

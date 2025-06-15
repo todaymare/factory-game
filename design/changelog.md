@@ -1,0 +1,12 @@
+june 8th 2025:
+- some changes on the design.md and todo.md file
+- added fog (duh)
+- new recipes!! splitter silo furnace assembler, i think those existed before but didnt have recipes yet. silo is new tho. i deicded to add that quickly cos i realized a chest isn't very automatable. a silo is a 3x3 structure with a 6*6 inventory. a chest is a 1x1 structure with a 3*3 inventory
+- frustum culling (fuck that dude i hate that so much but it's there now with 4 layers of stolen code)
+- added the silo yeah
+- added sky box colour!
+- changed to double precision
+- made ui come closer
+- added info about rendering to the debug ui like triangle count and rendered chunks and render time 
+- multi threaded chunk loading and remeshing
+- some other colour changes

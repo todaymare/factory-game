@@ -1,7 +1,10 @@
-use std::{collections::{hash_map::Entry, HashMap}, io::BufReader, mem::offset_of, panic, ptr::null_mut};
+use std::{collections::{hash_map::Entry, HashMap}, io::{BufReader, Read, Seek}, mem::offset_of, panic, ptr::null_mut};
 
-use glam::{Vec3, Vec4};
+use glam::{IVec3, U8Vec3, USizeVec2, USizeVec3, UVec3, UVec4, Vec3, Vec4};
 use obj::{raw::object::Polygon, Obj, ObjResult};
+use rand::{random_range, seq::IndexedRandom};
+use tracing::{info, warn};
+use voxel_mesher::VoxelMesh;
 
 use crate::{directions::Direction, quad::Quad};
 
@@ -9,11 +12,11 @@ use crate::{directions::Direction, quad::Quad};
 #[repr(C)]
 pub struct Vertex {
     position: Vec3,
-    colour: Vec4,
+    colour: u32,
 }
 
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Mesh {
     pub indices: u32,
     vbo: u32,
@@ -47,7 +50,13 @@ impl obj::FromRawVertex<u32> for Vertex {
                         let intensity = 0.6 + light.max(0.0) * 0.4; // ambient + directional
                         let colour = Vec3::splat(intensity);
                         let colour = colour * 0.9 + colour * normal * 0.1;
-                        let colour = Vec4::new(colour.x, colour.y, colour.z, 1.0);
+
+                        let r = (colour.x.clamp(0.0, 1.0) * 255.0).round() as u32;
+                        let g = (colour.y.clamp(0.0, 1.0) * 255.0).round() as u32;
+                        let b = (colour.z.clamp(0.0, 1.0) * 255.0).round() as u32;
+                        let a = (1.0 * 255.0f32).round() as u32;
+
+                        let colour = (r << 24) | (g << 16) | (b << 8) | a;
 
                         let vertex = Vertex {
                             position: Vec3::new(p.0, p.1, p.2),
@@ -97,7 +106,24 @@ impl obj::FromRawVertex<u32> for Vertex {
 
 
 impl Mesh {
-    pub fn new(verticies: &[Vertex], indicies: &[u32]) -> Self {
+    pub fn from_vmf(path: &str) -> Mesh {
+        if !path.ends_with(".vmf") {
+            warn!("mesh path should have the extension .vmf");
+        }
+
+        let Ok(mut file) = std::fs::File::open(path)
+        else { panic!("mesh: no such file as {path}") };
+        
+        let mut data = Vec::with_capacity(file.stream_len().unwrap_or(0) as _);
+        file.read_to_end(&mut data).unwrap();
+
+        let model = VoxelMesh::decode(&data).unwrap();
+        Mesh::new(&model.vertices, &model.indices)
+    }
+
+
+
+    pub fn new(verticies: &[voxel_mesher::Vertex], indicies: &[u32]) -> Self {
         let vao = unsafe { 
             let mut vao = 0;
             gl::GenVertexArrays(1, &mut vao);
@@ -133,21 +159,13 @@ impl Mesh {
             gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, size_of::<Vertex>() as _, offset_of!(Vertex, position) as _);
 
             gl::EnableVertexAttribArray(1);
-            gl::VertexAttribPointer(1, 4, gl::FLOAT, gl::FALSE, size_of::<Vertex>() as _, offset_of!(Vertex, colour) as _);
+            gl::VertexAttribIPointer(1, 1, gl::UNSIGNED_INT, size_of::<Vertex>() as _, offset_of!(Vertex, colour) as _);
 
             gl::BindVertexArray(0);
 
         }
 
         Self { vao, indices: indicies.len() as _, vbo, ebo }
-    }
-
-
-    pub fn from_obj(path: &str) -> Mesh {
-        let Ok(file) = std::fs::File::open(path)
-        else { panic!("no such file as {path}") };
-        let model : Obj<Vertex, u32> = obj::load_obj(BufReader::new(file)).unwrap();
-        Mesh::new(&model.vertices, &model.indices)
     }
 
 
@@ -174,22 +192,16 @@ impl Drop for Mesh {
 
 impl Vertex {
     pub fn new(pos: Vec3, colour: Vec4) -> Self {
+
+        let r = (colour.x.clamp(0.0, 1.0) * 255.0).round() as u32;
+        let g = (colour.y.clamp(0.0, 1.0) * 255.0).round() as u32;
+        let b = (colour.z.clamp(0.0, 1.0) * 255.0).round() as u32;
+        let a = (1.0 * 255.0f32).round() as u32;
+
+        let colour = (r << 24) | (g << 16) | (b << 8) | a;
+
+
         Self { position: pos, colour }
     }
 }
 
-
-pub fn draw_quad(verticies: &mut Vec<Vertex>, indicies: &mut Vec<u32>, quad: Quad) {
-    let k = verticies.len() as u32;
-    let mut i = 0;
-    for corner in quad.corners {
-        let mut colour = quad.color;
-        colour = colour * 0.9 + colour * (i as f32 * 0.1);
-        colour.w = quad.color.w;
-        verticies.push(Vertex::new(Vec3::new(corner[0] as f32, corner[1] as f32, corner[2] as f32), colour));
-        i += 1;
-    }
-
-
-    indicies.extend_from_slice(&[k, k+1, k+2, k+2, k+3, k]);
-}
