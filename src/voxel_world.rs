@@ -462,9 +462,11 @@ impl VoxelWorld {
             }
 
 
-            for index in 0..structure.available_items_len() {
-                while let Some(item) = structure.try_take(index, u32::MAX) {
-                    self.dropped_items.push(DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
+            if let Some(inv) = structure.inventory {
+                for item in &inv.slots {
+                    let Some(item) = item
+                    else { continue };
+                    self.dropped_items.push(DroppedItem::new(*item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
                 }
             }
 
@@ -472,6 +474,15 @@ impl VoxelWorld {
             match structure.data {
                 StructureData::Inserter { state: InserterState::Placing(item), .. } => {
                     self.dropped_items.push(DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
+                }
+
+                StructureData::Furnace { input, output } => {
+                    if let Some(item) = input {
+                        self.dropped_items.push(DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
+                    }
+                    if let Some(item) = output {
+                        self.dropped_items.push(DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
+                    }
                 }
                 _ => (),
             }

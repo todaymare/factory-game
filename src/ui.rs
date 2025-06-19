@@ -1,9 +1,9 @@
 use std::{ops::Bound, fmt::Write};
 
-use glam::{Vec2, Vec4};
+use glam::{DVec3, Vec2, Vec4};
 use glfw::{CursorMode, Key};
 
-use crate::{commands::Command, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer, Style}, structures::{self, inventory::{SlotKind, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::split_world_pos, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND};
+use crate::{commands::Command, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer, Style}, structures::{self, inventory::{SlotKind, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{split_world_pos, VoxelWorld}, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND};
 
 pub enum UILayer {
     Inventory {
@@ -281,7 +281,7 @@ impl UILayer {
                         let inventory = &mut structure.inventory.as_mut().unwrap().slots;
 
                         renderer.draw_rect(corner, external_view_size, Vec4::ONE);
-                        draw_inventory(renderer, &mut *inventory, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
+                        draw_inventory(renderer, &mut *inventory, game.player.body.position, &mut game.world, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
 
                         other_inv = Some(inventory.as_mut_slice());
                     },
@@ -301,7 +301,7 @@ impl UILayer {
                         let inventory = &mut structure.inventory.as_mut().unwrap().slots;
 
                         renderer.draw_rect(corner, external_view_size, Vec4::ONE);
-                        draw_inventory(renderer, inventory, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
+                        draw_inventory(renderer, inventory, game.player.body.position, &mut game.world, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
 
                         other_inv = Some(inventory.as_mut_slice());
                     },
@@ -398,7 +398,7 @@ impl UILayer {
                 corner.x -= player_inv_size.x * 0.5;
                 corner.x -= padding * 0.5;
 
-                draw_player_inventory(renderer, &mut game.player, &mut other_inv, input, holding_item, corner);
+                draw_player_inventory(renderer, &mut game.player, &mut game.world, &mut other_inv, input, holding_item, corner);
             }
 
             UILayer::Gameplay { smoothed_dt } => {
@@ -912,7 +912,7 @@ impl RecipeCraft {
 }
 
 
-fn draw_player_inventory(renderer: &mut Renderer, player: &mut Player, other_inv: &mut Option<&mut [Option<Item>]>, input: &InputManager, holding_item: &mut Option<Item>, corner: Vec2) {
+fn draw_player_inventory(renderer: &mut Renderer, player: &mut Player, world: &mut VoxelWorld, other_inv: &mut Option<&mut [Option<Item>]>, input: &InputManager, holding_item: &mut Option<Item>, corner: Vec2) {
     let rows = PLAYER_ROW_SIZE;
     let cols = PLAYER_HOTBAR_SIZE;
 
@@ -934,7 +934,7 @@ fn draw_player_inventory(renderer: &mut Renderer, player: &mut Player, other_inv
                          else { (Vec4::ONE * 0.2).with_w(1.0) }; 
 
 
-            draw_inventory_item(renderer, &mut player.inventory, other_inv, input, holding_item,
+            draw_inventory_item(renderer, &mut player.inventory, player.body.position, world, other_inv, input, holding_item,
                                 pos, slot_index, point, colour);
 
             pos += Vec2::new(slot_size+padding, 0.0);
@@ -975,6 +975,7 @@ fn draw_player_inventory(renderer: &mut Renderer, player: &mut Player, other_inv
 
 
 fn draw_inventory(renderer: &mut Renderer, inventory: &mut [Option<Item>],
+                  player_pos: DVec3, world: &mut VoxelWorld,
                   mut other_inv: Option<&mut [Option<Item>]>,
                   input: &InputManager, holding_item: &mut Option<Item>,
                   corner: Vec2, cols: usize, rows: usize) {
@@ -990,7 +991,7 @@ fn draw_inventory(renderer: &mut Renderer, inventory: &mut [Option<Item>],
             let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(SLOT_SIZE));
             let colour = (Vec4::ONE * 0.2).with_w(1.0); 
 
-            draw_inventory_item(renderer, inventory, &mut other_inv, input, holding_item,
+            draw_inventory_item(renderer, inventory, player_pos, world, &mut other_inv, input, holding_item,
                                 pos, slot_index, point, colour);
 
             pos += Vec2::new(slot_size+padding, 0.0);
@@ -1014,6 +1015,7 @@ fn draw_inventory(renderer: &mut Renderer, inventory: &mut [Option<Item>],
 
 
 fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
+                       player_pos: DVec3, world: &mut VoxelWorld,
                        mut other_inv: &mut Option<&mut [Option<Item>]>,
                        input: &InputManager, holding_item: &mut Option<Item>,
                        pos: Vec2, index: usize, mouse: Vec2, mut colour: Vec4) {
@@ -1108,6 +1110,21 @@ fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
         *slot = *holding_item;
         *holding_item = item;
         return;
+    } else if input.is_key_just_pressed(glfw::Key::Q)
+        && let Some(item) = slot {
+        let mut drop_item = *item;
+        if input.is_alt_pressed() {
+            drop_item.amount = 1;
+        }
+
+        item.amount -= drop_item.amount;
+        if item.amount == 0 {
+            *slot = None;
+        }
+
+        let dropped_item = DroppedItem::new(drop_item, player_pos);
+        world.dropped_items.push(dropped_item);
+
     }
 
 }

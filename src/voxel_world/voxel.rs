@@ -56,7 +56,7 @@ impl Voxel {
             Voxel::Copper => TICKS_PER_SECOND * 2 / 3,
             Voxel::Iron => TICKS_PER_SECOND * 2 / 3,
             Voxel::Coal => TICKS_PER_SECOND * 2 / 3,
-            Voxel::StructureBlock => TICKS_PER_SECOND * 2 / 3,
+            Voxel::StructureBlock => TICKS_PER_SECOND * 1 / 3,
 
             Voxel::Air => unreachable!(),
         }

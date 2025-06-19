@@ -50,7 +50,7 @@ const MOUSE_SENSITIVITY : f32 = 0.0016;
 const PLAYER_REACH : f32 = 5.0;
 const PLAYER_SPEED : f32 = 10.0;
 const PLAYER_PULL_DISTANCE : f32 = 3.5;
-const PLAYER_INTERACT_DELAY : f32 = 0.2;
+const PLAYER_INTERACT_DELAY : f32 = 0.125;
 const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
@@ -175,6 +175,13 @@ fn main() {
                 dir -= game.camera.front.cross(game.camera.up);
             }
 
+            if input.is_key_pressed(Key::C) {
+                game.camera.fov = 15f32.to_radians();
+            } else {
+                game.camera.fov = 80f32.to_radians();
+            }
+
+
             dir.y = 0.0;
             let dir = dir.normalize_or_zero();
             let mov = dir * game.player.speed;
@@ -217,13 +224,22 @@ fn main() {
 
 
             if let Some(item) = game.player.inventory[game.player.hand_index()]
-                && item.kind.as_structure().is_some() {
+                && matches!(item.kind, ItemKind::Voxel(_) | ItemKind::Structure(_)) {
                 if input.is_key_just_pressed(Key::R) {
-                    game.player.structure_rotation_offset += 1;
-                    game.player.structure_rotation_offset %= 4;
+                    game.player.preview_rotation_offset += 1;
+                    game.player.preview_rotation_offset %= 4;
                 }
+
+                if input.is_key_just_pressed(Key::Up) {
+                    game.player.preview_offset.y += 1;
+                }
+                if input.is_key_just_pressed(Key::Down) {
+                    game.player.preview_offset.y -= 1;
+                }
+
             } else {
-                game.player.structure_rotation_offset = 0;
+                game.player.preview_rotation_offset = 0;
+                    game.player.preview_offset = IVec3::ZERO;
 
             }
 
@@ -409,7 +425,7 @@ fn main() {
                                                                    PLAYER_REACH)
                 else { break 'input_block };
 
-                let place_position = pos + normal;
+                let place_position = pos + normal + game.player.preview_offset;
 
                 let voxel = game.world.get_voxel(place_position);
                 if !voxel.is_air() { break 'input_block }
@@ -423,13 +439,13 @@ fn main() {
                     *game.world.get_voxel_mut(place_position) = voxel;
 
                 } else if let Some(structure_kind) = item_in_hand.kind.as_structure() {
-                    let dir = game.camera.compass_direction().next_n(game.player.structure_rotation_offset);
+                    let dir = game.camera.compass_direction().next_n(game.player.preview_rotation_offset);
 
                     if !game.can_place_structure(structure_kind, place_position, dir) {
                         break 'input_block;
                     }
 
-                    let structure = Structure::from_kind(structure_kind, pos+normal, dir);
+                    let structure = Structure::from_kind(structure_kind, place_position, dir);
                     let _ = game.player.take_item(game.player.hand_index(), 1).unwrap();
                     let id = game.structures.add_structure(&mut game.world, structure);
 
@@ -572,19 +588,31 @@ fn main() {
                 else { break 'block };
 
                 let held_item = game.player.inventory[game.player.hand_index()];
-                if let Some(held_item) = held_item && let Some(kind) = held_item.kind.as_structure() {
-                    let dir = game.camera.compass_direction()
-                        .next_n(game.player.structure_rotation_offset);
+                if let Some(held_item) = held_item && matches!(held_item.kind, ItemKind::Voxel(_) | ItemKind::Structure(_)) {
+                    let pos = pos + game.player.preview_offset;
+                    let mut scale = Vec3::ONE;
 
-                    let blocks = kind.blocks(dir);
+                    let (origin, dir, blocks, mesh) = 
+                    if let Some(kind) = held_item.kind.as_structure() {
+                        let dir = game.camera.compass_direction()
+                                  .next_n(game.player.preview_rotation_offset);
+                        if matches!(kind, StructureKind::Belt | StructureKind::Splitter) {
+                            scale = Vec3::new(1.0, 0.8, 1.0);
+                        }
+
+                        (kind.origin(dir), dir, kind.blocks(dir), renderer.meshes.get(held_item.kind))
+                    }
+                    else {
+                        (IVec3::ZERO, CardinalDirection::North, [IVec3::ZERO].as_ref(), renderer.meshes.get(held_item.kind))
+                    };
 
                     let mut min = IVec3::MAX;
                     let mut max = IVec3::MIN;
                     let mut pos_min = IVec3::MAX;
                     let mut pos_max = IVec3::MIN;
-                    let can_place = game.can_place_structure(kind, pos+norm, dir);
+                    let can_place = true;
 
-                    let zero_zero = (pos + norm) - kind.origin(dir);
+                    let zero_zero = (pos + norm) - origin;
                     let position = zero_zero;
                     for &offset in blocks {
                         min = min.min(offset);
@@ -601,11 +629,6 @@ fn main() {
                     let rot = rot.x.atan2(rot.z);
                     let rot = rot + 90f32.to_radians();
 
-
-                    let scale = if matches!(kind, StructureKind::Belt | StructureKind::Splitter) {
-                        Vec3::new(1.0, 0.8, 1.0)
-                    } else { Vec3::ONE };
-
                     let model = Mat4::from_scale_rotation_translation(scale * Vec3::splat(1.01), Quat::from_rotation_y(rot), mesh_pos.as_vec3());
                     mesh_shader.set_matrix4(c"model", model);
 
@@ -614,7 +637,6 @@ fn main() {
                         false => Vec4::new(0.8, 0.5, 0.5, 0.8),
                     };
                     mesh_shader.set_vec4(c"modulate", colour);
-                    let mesh = renderer.meshes.get(ItemKind::Structure(kind));
                     mesh.draw();
                     let model = Mat4::from_scale_rotation_translation(dims * Vec3::splat(1.01), Quat::IDENTITY, mesh_pos.as_vec3() + Vec3::splat(0.005));
                     mesh_shader.set_matrix4(c"model", model);
@@ -856,7 +878,8 @@ impl Game {
                 pulling: Vec::new(),
                 speed: PLAYER_SPEED,
                 render_distance: RENDER_DISTANCE,
-                structure_rotation_offset: 0,
+                preview_rotation_offset: 0,
+                preview_offset: IVec3::ZERO,
             },
 
             current_tick: Tick::initial(),
@@ -1240,7 +1263,8 @@ struct Player {
     speed: f32,
     render_distance: i32,
     // this is used to rotate a structure's preview
-    structure_rotation_offset: u8,
+    preview_rotation_offset: u8,
+    preview_offset: IVec3,
 }
 
 
