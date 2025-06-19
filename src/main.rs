@@ -229,14 +229,6 @@ fn main() {
                     game.player.preview_rotation_offset += 1;
                     game.player.preview_rotation_offset %= 4;
                 }
-
-                if input.is_key_just_pressed(Key::Up) {
-                    game.player.preview_offset.y += 1;
-                }
-                if input.is_key_just_pressed(Key::Down) {
-                    game.player.preview_offset.y -= 1;
-                }
-
             } else {
                 game.player.preview_rotation_offset = 0;
                     game.player.preview_offset = IVec3::ZERO;
@@ -592,7 +584,7 @@ fn main() {
                     let pos = pos + game.player.preview_offset;
                     let mut scale = Vec3::ONE;
 
-                    let (origin, dir, blocks, mesh) = 
+                    let (origin, dir, blocks, colour, mesh) = 
                     if let Some(kind) = held_item.kind.as_structure() {
                         let dir = game.camera.compass_direction()
                                   .next_n(game.player.preview_rotation_offset);
@@ -600,17 +592,24 @@ fn main() {
                             scale = Vec3::new(1.0, 0.8, 1.0);
                         }
 
-                        (kind.origin(dir), dir, kind.blocks(dir), renderer.meshes.get(held_item.kind))
+                        let origin = kind.origin(dir);
+                        let can_place = game.can_place_structure(kind, pos+norm, dir);
+
+                        let colour = match can_place {
+                            true => Vec3::new(0.5, 0.8, 0.5),
+                            false => Vec3::new(0.8, 0.5, 0.5),
+                        };
+
+                        (origin, dir, kind.blocks(dir), colour, renderer.meshes.get(held_item.kind))
                     }
-                    else {
-                        (IVec3::ZERO, CardinalDirection::North, [IVec3::ZERO].as_ref(), renderer.meshes.get(held_item.kind))
-                    };
+                    else if let ItemKind::Voxel(voxel) = held_item.kind {
+                        (IVec3::ZERO, CardinalDirection::North, [IVec3::ZERO].as_ref(), voxel.colour().xyz(), &renderer.meshes.cube)
+                    } else { unreachable!() };
 
                     let mut min = IVec3::MAX;
                     let mut max = IVec3::MIN;
                     let mut pos_min = IVec3::MAX;
                     let mut pos_max = IVec3::MIN;
-                    let can_place = true;
 
                     let zero_zero = (pos + norm) - origin;
                     let position = zero_zero;
@@ -629,18 +628,17 @@ fn main() {
                     let rot = rot.x.atan2(rot.z);
                     let rot = rot + 90f32.to_radians();
 
-                    let model = Mat4::from_scale_rotation_translation(scale * Vec3::splat(1.01), Quat::from_rotation_y(rot), mesh_pos.as_vec3());
-                    mesh_shader.set_matrix4(c"model", model);
 
-                    let colour = match can_place {
-                        true => Vec4::new(0.5, 0.8, 0.5, 0.8),
-                        false => Vec4::new(0.8, 0.5, 0.5, 0.8),
-                    };
-                    mesh_shader.set_vec4(c"modulate", colour);
-                    mesh.draw();
-                    let model = Mat4::from_scale_rotation_translation(dims * Vec3::splat(1.01), Quat::IDENTITY, mesh_pos.as_vec3() + Vec3::splat(0.005));
+                    mesh_shader.set_vec4(c"modulate", Vec4::new(colour.x, colour.y, colour.z, 0.8));
+
+                    let model = Mat4::from_scale_rotation_translation(dims * Vec3::splat(1.01), Quat::IDENTITY, mesh_pos.as_vec3());
                     mesh_shader.set_matrix4(c"model", model);
                     block_outline_mesh.draw();
+
+                    let model = Mat4::from_scale_rotation_translation(scale * Vec3::splat(1.0), Quat::from_rotation_y(rot), mesh_pos.as_vec3());
+                    mesh_shader.set_matrix4(c"model", model);
+
+                    mesh.draw();
 
                     break 'block;
                 }

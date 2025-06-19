@@ -46,6 +46,7 @@ pub enum ItemKind {
 pub struct Assets {
     textures: HashMap<ItemKind, TextureId>,
     models: HashMap<ItemKind, Mesh>,
+    pub cube: Mesh,
 }
 
 
@@ -236,6 +237,7 @@ impl Assets {
         Self {
             models,
             textures,
+            cube: white_mesh,
         }
     }
 
