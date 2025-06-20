@@ -440,7 +440,7 @@ impl VoxelWorld {
 
         let item = if voxel.is_structure() {
             let structure_id = *self.structure_blocks.get(&pos).unwrap();
-            let mut structure = structures.remove(structure_id);
+            let structure = structures.remove(structure_id);
             let placement_origin = structure.position - structure.data.as_kind().origin(structure.direction);
             
             let blocks = structure.data.as_kind().blocks(structure.direction);

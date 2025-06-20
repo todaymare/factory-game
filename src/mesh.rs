@@ -176,16 +176,22 @@ impl Mesh {
             gl::BindVertexArray(0);
         }
     }
-}
 
 
-impl Drop for Mesh {
-    fn drop(&mut self) {
+    pub fn destroy(&mut self) {
+        self.vao = 0;
         unsafe {
             gl::DeleteVertexArrays(1, &self.vao);
             gl::DeleteBuffers(1, &self.vbo);
             gl::DeleteBuffers(1, &self.ebo);
         }
+    }
+}
+
+
+impl Drop for Mesh {
+    fn drop(&mut self) {
+        assert_eq!(self.vao, 0, "mesh wasn't properly destroyed");
     }
 }
 

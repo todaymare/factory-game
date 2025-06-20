@@ -29,9 +29,10 @@ use std::{f32::consts::{PI, TAU}, fs, hash::Hash, ops::{self}, time::Instant};
 use commands::{Command, CommandRegistry};
 use directions::CardinalDirection;
 use frustum::Frustum;
+use rand::{random, seq::IndexedRandom};
 use tracing::{info, trace, warn, Level};
 use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
-use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, split_world_pos, VoxelWorld};
+use voxel_world::{chunk::{MeshState, CHUNK_SIZE}, split_world_pos, voxel::Voxel, VoxelWorld};
 use glam::{DVec3, IVec3, Mat4, Quat, USizeVec2, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{Key, MouseButton};
 use input::InputManager;
@@ -105,6 +106,7 @@ fn main() {
     info!("starting game loop");
     let mut last_frame = 0.0;
     let mut time_since_last_simulation_step = 0.0;
+    let mut builders_ruler_mesh : Option<Mesh> = None;
     while !renderer.window.should_close() {
         let current_frame = renderer.glfw.get_time() as f64;
 
@@ -231,9 +233,13 @@ fn main() {
                 }
             } else {
                 game.player.preview_rotation_offset = 0;
-                    game.player.preview_offset = IVec3::ZERO;
-
             }
+
+            if let Some(item) = game.player.inventory[game.player.hand_index()]
+                && item.kind != ItemKind::BuildersRuler {
+                game.player.builders_ruler = None;
+            }
+
 
 
             if input.is_key_pressed(Key::X) {
@@ -417,13 +423,44 @@ fn main() {
                                                                    PLAYER_REACH)
                 else { break 'input_block };
 
-                let place_position = pos + normal + game.player.preview_offset;
+                let place_position = pos + normal;
 
                 let voxel = game.world.get_voxel(place_position);
                 if !voxel.is_air() { break 'input_block }
 
                 let Some(Some(item_in_hand)) = game.player.inventory.get(game.player.hand_index())
                 else { break 'input_block };
+
+                if item_in_hand.kind == ItemKind::BuildersRuler {
+                    if let Some(builders_ruler) = game.player.builders_ruler {
+                        let pos1 = builders_ruler;
+                        let pos2 = place_position;
+
+                        let min = pos1.min(pos2);
+                        let max = pos1.max(pos2);
+
+                        for x in min.x..=max.x {
+                            for y in min.y..=max.y {
+                                for z in min.z..=max.z {
+                                    let pos = IVec3::new(x, y, z);
+                                    if game.world.get_voxel(pos) != Voxel::Air { continue }
+
+                                    *game.world.get_voxel_mut(pos) = Voxel::Stone;
+
+                                }
+                            }
+                        }
+
+                        game.player.builders_ruler = None;
+
+                    } else {
+                        game.player.builders_ruler = Some(place_position);
+                    }
+
+
+                    game.player.interact_delay = PLAYER_INTERACT_DELAY * 3.0;
+                    break 'input_block;
+                }
 
                 if let Some(voxel) = item_in_hand.kind.as_voxel() {
                     let _ = game.player.take_item(game.player.hand_index(), 1).unwrap();
@@ -581,7 +618,7 @@ fn main() {
 
                 let held_item = game.player.inventory[game.player.hand_index()];
                 if let Some(held_item) = held_item && matches!(held_item.kind, ItemKind::Voxel(_) | ItemKind::Structure(_)) {
-                    let pos = pos + game.player.preview_offset;
+                    let pos = pos;
                     let mut scale = Vec3::ONE;
 
                     let (origin, dir, blocks, colour, mesh) = 
@@ -638,6 +675,78 @@ fn main() {
                     let model = Mat4::from_scale_rotation_translation(scale * Vec3::splat(1.0), Quat::from_rotation_y(rot), mesh_pos.as_vec3());
                     mesh_shader.set_matrix4(c"model", model);
 
+                    mesh.draw();
+
+                    break 'block;
+                }
+
+
+                if let Some(held_item) = held_item && held_item.kind == ItemKind::BuildersRuler {
+                    let place_pos = pos + norm;
+                    let mut mesh_pos = place_pos.as_dvec3() + DVec3::splat(0.5);
+                    let mut mesh = &renderer.meshes.cube;
+
+                    let block = game.player.builders_ruler.unwrap_or(place_pos);
+                    dbg!(block);
+                    let model = Mat4::from_translation(place_pos.as_vec3() + Vec3::splat(0.5) - game.camera.position.as_vec3());
+                    let model = model * Mat4::from_scale(Vec3::splat(1.0));
+                    mesh_shader.set_matrix4(c"model", model);
+                    mesh_shader.set_vec4(c"modulate", Vec4::new(0.0, 1.0, 0.8, 0.8));
+                    block_outline_mesh.draw();
+
+                    let model = Mat4::from_translation(block.as_vec3() + Vec3::splat(0.5) - game.camera.position.as_vec3());
+                    let model = model * Mat4::from_scale(Vec3::splat(1.0));
+                    mesh_shader.set_matrix4(c"model", model);
+                    mesh_shader.set_vec4(c"modulate", Vec4::new(1.0, 0.4, 0.8, 0.8));
+                    block_outline_mesh.draw();
+
+                    let dims = place_pos.as_vec3() - block.as_vec3();
+
+                    {
+                        let dims = dims.floor().as_ivec3();
+                        let absdims = dims.abs();
+                        let absdims = absdims + absdims.signum();
+                        let absdims = absdims.max(IVec3::ONE);
+                        dbg!(absdims);
+                        let mut arr = vec![0u32; (absdims.x*absdims.y*absdims.z) as usize];
+                        assert_eq!(arr.len(), (absdims.x*absdims.y*absdims.z) as usize);
+
+
+                        let mins = dims.min(IVec3::ZERO);
+                        let maxs = dims.max(IVec3::ZERO);
+                        for x in mins.x..=maxs.x {
+                            for y in mins.y..=maxs.y {
+                                for z in mins.z..=maxs.z {
+                                    let pos = block + IVec3::new(x, y, z);
+                                    let voxel = game.world.get_voxel(pos);
+                                    if voxel.is_air() {
+                                        let arr_pos = IVec3::new(x, y, z) + mins.abs();
+                                        arr[(arr_pos.z * absdims.y * absdims.x + arr_pos.y * absdims.x + arr_pos.x) as usize] = u32::MAX;
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut vertices = vec![];
+                        let mut indices = vec![];
+                        voxel_mesher::greedy_mesh(&arr, absdims.abs(), &mut vertices, &mut indices, Vec3::ONE);
+
+                        if let Some(builders_ruler_mesh) = &mut builders_ruler_mesh {
+                            builders_ruler_mesh.destroy();
+                        }
+
+                        builders_ruler_mesh = Some(Mesh::new(&vertices, &indices));
+                        mesh = builders_ruler_mesh.as_ref().unwrap();
+                    };
+
+
+                    mesh_pos = block.min(place_pos).as_dvec3() + dims.abs().as_dvec3() * 0.5 + DVec3::splat(0.5);
+
+                    let mesh_pos = mesh_pos - game.camera.position;
+                    let model = Mat4::from_translation(mesh_pos.as_vec3());
+                    let model = model;
+                    mesh_shader.set_matrix4(c"model", model);
+                    mesh_shader.set_vec4(c"modulate", Vec4::new(0.4, 0.4, 0.8, 0.8));
                     mesh.draw();
 
                     break 'block;
@@ -877,7 +986,8 @@ impl Game {
                 speed: PLAYER_SPEED,
                 render_distance: RENDER_DISTANCE,
                 preview_rotation_offset: 0,
-                preview_offset: IVec3::ZERO,
+
+                builders_ruler: None,
             },
 
             current_tick: Tick::initial(),
@@ -1262,7 +1372,9 @@ struct Player {
     render_distance: i32,
     // this is used to rotate a structure's preview
     preview_rotation_offset: u8,
-    preview_offset: IVec3,
+
+    // this is for builders ruler
+    builders_ruler: Option<IVec3>,
 }
 
 

@@ -53,6 +53,7 @@ impl Voxel {
         match self {
             Voxel::Dirt => TICKS_PER_SECOND / 3,
             Voxel::Stone => TICKS_PER_SECOND / 3,
+
             Voxel::Copper => TICKS_PER_SECOND * 2 / 3,
             Voxel::Iron => TICKS_PER_SECOND * 2 / 3,
             Voxel::Coal => TICKS_PER_SECOND * 2 / 3,

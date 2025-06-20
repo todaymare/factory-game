@@ -40,6 +40,8 @@ pub enum ItemKind {
     CopperWire,
     MechanicalComponent,
     ElectronicsKit,
+
+    BuildersRuler,
 }
 
 
@@ -90,6 +92,8 @@ impl ItemKind {
         ItemKind::Structure(StructureKind::Splitter),
         ItemKind::Structure(StructureKind::Assembler),
         ItemKind::Structure(StructureKind::Furnace),
+
+        ItemKind::BuildersRuler,
     ];
 
 
@@ -117,6 +121,8 @@ impl ItemKind {
             ItemKind::CopperWire => "copper_wire",
             ItemKind::MechanicalComponent => "mechanical_component",
             ItemKind::ElectronicsKit => "electronics_kit",
+
+            ItemKind::BuildersRuler => "builders_ruler",
 
             ItemKind::Voxel(_) => "invalid",
         }
