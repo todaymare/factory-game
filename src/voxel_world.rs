@@ -17,7 +17,7 @@ use voxel::Voxel;
 use crate::{directions::Direction, items::{DroppedItem, Item}, mesh::Mesh, perlin::PerlinNoise, quad::Quad, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::{Chunk, CHUNK_SIZE}, PhysicsBody};
 
 
-type MeshMPSC = (IVec3, Vec<Vertex>, Vec<u32>);
+type MeshMPSC = (IVec3, Vec<Vertex>, Vec<u32>, u32);
 type ChunkMPSC = (IVec3, Chunk);
 type SaveChunkMPSC = ();
 
@@ -124,21 +124,21 @@ impl VoxelWorld {
         }
 
         let chunk = self.chunks.get_mut(&pos).unwrap().as_mut().unwrap();
-        if chunk.mesh_state != MeshState::ShouldUpdate {
+        if chunk.version == chunk.current_mesh {
             trace!("failed to spawn a mesh job for chunk at '{pos}' because the mesh is fine");
             return;
         }
 
         if chunk.data.is_empty() {
             trace!("failed to spawn a mesh job for chunk at '{pos}' because it's empty");
-            chunk.mesh_state = MeshState::Okay;
+            chunk.current_mesh = chunk.version;
             return;
         }
 
-        chunk.mesh_state = MeshState::Updating;
-
         self.total_meshes += 1;
         self.queued_meshes += 1;
+        let version = chunk.version;
+        chunk.current_mesh = chunk.version;
 
         let chunks = core::array::from_fn(|i| {
             let pos = if i == 0 { pos }
@@ -155,7 +155,7 @@ impl VoxelWorld {
             let time = Instant::now();
             VoxelWorld::greedy_mesh(chunks, &mut vertices, &mut indices);
             trace!("mesh-generation: meshes in {:?}", time.elapsed());
-            if let Err(_) = sender.send((pos, vertices, indices)) {
+            if let Err(_) = sender.send((pos, vertices, indices, version)) {
                 warn!("mesh-generation: job receiver terminated before all meshing jobs were done");
             }
         });
@@ -171,7 +171,7 @@ impl VoxelWorld {
             self.spawn_mesh_job(*pos);
         }
 
-        while let Ok((pos, vertices, indices)) = self.mesh_reciever.try_recv() {
+        while let Ok((pos, vertices, indices, version)) = self.mesh_reciever.try_recv() {
             self.queued_meshes -= 1;
             let Some(Some(chunk)) = self.chunks.get_mut(&pos)
             else {
@@ -179,7 +179,10 @@ impl VoxelWorld {
                 continue;
             };
 
-            chunk.mesh_state = MeshState::Okay;
+            if version < chunk.current_mesh {
+                info!("outdated mesh");
+                continue;
+            }
 
             if vertices.is_empty() {
                 info!("discarded mesh of chunk '{pos}' because it was empty");
@@ -208,11 +211,6 @@ impl VoxelWorld {
 
             if chunk.persistent {
                 self.unload_queue.swap_remove(i);
-                continue;
-            }
-
-            if chunk.mesh_state == MeshState::Updating {
-                i += 1;
                 continue;
             }
 
@@ -277,12 +275,12 @@ impl VoxelWorld {
             let Some(Some(chunk)) = self.chunks.get_mut(&pos)
             else { continue };
 
-            chunk.mesh_state = MeshState::ShouldUpdate;
+            chunk.version += 1;
         }
 
 
         let chunk = self.chunks.get_mut(&pos).unwrap().as_mut().unwrap();
-        chunk.mesh_state = MeshState::ShouldUpdate;
+        chunk.version += 1;
         chunk.is_dirty = true;
 
         chunk
@@ -316,7 +314,7 @@ impl VoxelWorld {
                 let pos = pos + invalidate;
                 let Some(Some(chunk)) = self.chunks.get_mut(&pos)
                 else { continue };
-                chunk.mesh_state = MeshState::ShouldUpdate;
+                chunk.version += 1;
             }
 
 
@@ -400,7 +398,7 @@ impl VoxelWorld {
         let Some(chunk) = self.try_get(pos)
         else { return Some(&self.loading_chunk_mesh) };
 
-        if chunk.mesh_state == MeshState::ShouldUpdate {
+        if chunk.version != chunk.current_mesh {
             info!("queueing the chunk at '{pos}' for remeshing");
             self.remesh_queue.insert(pos);
         }

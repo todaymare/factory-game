@@ -1075,7 +1075,7 @@ impl Game {
 
             game.world.chunks.iter_mut().filter_map(|x| x.1.as_mut()).for_each(|x| {
                 x.mesh = None;
-                x.mesh_state = MeshState::ShouldUpdate;
+                x.version += 1;
             });
             Some(())
         });

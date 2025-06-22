@@ -18,7 +18,8 @@ pub struct Chunk {
     pub data: Arc<ChunkData>,
     pub is_dirty: bool,
     pub mesh: Option<VoxelMesh>,
-    pub mesh_state: MeshState,
+    pub current_mesh: u32,
+    pub version: u32,
     pub persistent: bool,
 }
 
@@ -26,7 +27,6 @@ pub struct Chunk {
 #[derive(Debug, Clone)]
 pub struct ChunkData {
     pub data: [Voxel; CHUNK_SIZE_P3],
-    pub is_empty: bool,
 }
 
 
@@ -122,8 +122,10 @@ impl Chunk {
             data: Arc::new(ChunkData::empty()),
             is_dirty: false,
             mesh: None,
-            mesh_state: MeshState::ShouldUpdate,
             persistent: false,
+            // we still want to remesh initially
+            version: 1,
+            current_mesh: 0,
         }
     }
 
@@ -230,8 +232,9 @@ impl Chunk {
             data: data.into(),
             is_dirty: true,
             mesh: None,
-            mesh_state: MeshState::ShouldUpdate,
+            current_mesh: 0,
             persistent: false,
+            version: 1,
         };
         chunk
     }
@@ -282,7 +285,6 @@ impl ChunkData {
     pub fn from_voxels(voxels: [Voxel; CHUNK_SIZE_P3]) -> Self {
         Self {
             data: voxels,
-            is_empty: true,
         }
     }
 
