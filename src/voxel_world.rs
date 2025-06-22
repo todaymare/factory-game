@@ -125,10 +125,13 @@ impl VoxelWorld {
 
         let chunk = self.chunks.get_mut(&pos).unwrap().as_mut().unwrap();
         if chunk.mesh_state != MeshState::ShouldUpdate {
+            trace!("failed to spawn a mesh job for chunk at '{pos}' because the mesh is fine");
             return;
         }
 
         if chunk.data.is_empty() {
+            trace!("failed to spawn a mesh job for chunk at '{pos}' because it's empty");
+            chunk.mesh_state = MeshState::Okay;
             return;
         }
 
@@ -179,6 +182,7 @@ impl VoxelWorld {
             chunk.mesh_state = MeshState::Okay;
 
             if vertices.is_empty() {
+                info!("discarded mesh of chunk '{pos}' because it was empty");
                 continue;
             }
 
@@ -397,6 +401,7 @@ impl VoxelWorld {
         else { return Some(&self.loading_chunk_mesh) };
 
         if chunk.mesh_state == MeshState::ShouldUpdate {
+            info!("queueing the chunk at '{pos}' for remeshing");
             self.remesh_queue.insert(pos);
         }
 

@@ -263,3 +263,11 @@ impl core::fmt::Debug for Item {
         write!(f, "{:?} x{}", self.kind, self.amount)
     }
 }
+
+
+impl Drop for Assets {
+    fn drop(&mut self) {
+        self.cube.destroy();
+        self.models.iter_mut().for_each(|x| x.1.destroy());
+    }
+}

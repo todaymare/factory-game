@@ -77,7 +77,7 @@ fn main() {
 
     let mut input = InputManager::default();
 
-    let block_outline_mesh = Mesh::from_vmf("assets/models/block_outline.vmf");
+    let mut block_outline_mesh = Mesh::from_vmf("assets/models/block_outline.vmf");
 
 
     let fragment = Shader::new(&fs::read("shaders/mesh.fs").unwrap(), shader::ShaderType::Fragment).unwrap();
@@ -550,6 +550,7 @@ fn main() {
                                 continue;
                             }
 
+
                             let pos = player_chunk + offset;
                             let min = (pos * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
                             let max = ((pos + IVec3::ONE) * CHUNK_SIZE as i32).as_dvec3() - game.camera.position;
@@ -672,7 +673,7 @@ fn main() {
                     mesh_shader.set_matrix4(c"model", model);
                     block_outline_mesh.draw();
 
-                    let model = Mat4::from_scale_rotation_translation(scale * Vec3::splat(1.0), Quat::from_rotation_y(rot), mesh_pos.as_vec3());
+                    let model = Mat4::from_scale_rotation_translation(scale * Vec3::splat(0.99), Quat::from_rotation_y(rot), mesh_pos.as_vec3());
                     mesh_shader.set_matrix4(c"model", model);
 
                     mesh.draw();
@@ -921,6 +922,7 @@ fn main() {
 
 
     game.save();
+    block_outline_mesh.destroy();
 }
 
 

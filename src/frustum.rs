@@ -9,7 +9,7 @@
 //  three layers of stolen code, yay!
 // four layers layers of stolen code, yay!
 
-use glam::{Vec3, Vec3A, vec3a, Vec4, vec4, Mat3A, Mat4};
+use glam::{vec3a, vec4, Mat3A, Mat4, Vec3, Vec3A, Vec4, Vec4Swizzles};
 
 #[repr(usize)]
 enum FrustumPlane {
@@ -83,17 +83,18 @@ impl Frustum {
   pub fn is_box_visible(&self, minp: Vec3, maxp: Vec3) -> bool {
     // check box outside/inside of frustum
     for plane in self.planes {
-      if (plane.dot(vec4(minp.x, minp.y, minp.z, 1.)) < 0.) &&
-         (plane.dot(vec4(maxp.x, minp.y, minp.z, 1.)) < 0.) &&
-         (plane.dot(vec4(minp.x, maxp.y, minp.z, 1.)) < 0.) &&
-         (plane.dot(vec4(maxp.x, maxp.y, minp.z, 1.)) < 0.) &&
-         (plane.dot(vec4(minp.x, minp.y, maxp.z, 1.)) < 0.) &&
-         (plane.dot(vec4(maxp.x, minp.y, maxp.z, 1.)) < 0.) &&
-         (plane.dot(vec4(minp.x, maxp.y, maxp.z, 1.)) < 0.) &&
-         (plane.dot(vec4(maxp.x, maxp.y, maxp.z, 1.)) < 0.)
-      {
-        return false
-      }
+        let n = plane.xyz(); // This is your normal
+
+        let p = Vec3::new(
+            if n.x >= 0. { maxp.x } else { minp.x },
+            if n.y >= 0. { maxp.y } else { minp.y },
+            if n.z >= 0. { maxp.z } else { minp.z },
+        );
+
+        let d = plane.dot(vec4(p.x, p.y, p.z, 1.0));
+        if d < 0.0 {
+            return false;
+        }
     }
 
     // check frustum outside/inside box
