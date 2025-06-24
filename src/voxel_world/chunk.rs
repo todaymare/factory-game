@@ -7,13 +7,13 @@ use sti::hash::fxhash::FxHasher64;
 
 use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_P3}, voxel_world::voxel::Voxel};
 
-use super::mesh::VoxelMesh;
+use super::mesh::ChunkMesh;
 
 #[derive(Debug)]
 pub struct Chunk {
     pub data: Arc<ChunkData>,
     pub is_dirty: bool,
-    pub mesh: Option<VoxelMesh>,
+    pub meshes: [Option<ChunkMesh>; 6],
     pub current_mesh: u32,
     pub version: u32,
     pub persistent: bool,
@@ -55,7 +55,6 @@ impl Noise {
         let z = pos.y + 10_000.0;
         let biome = self.biomes.sample([x * 0.0055, z * 0.0055]);
         let biome = (biome + 1.0) * 0.5;
-
         let giant_mountain_height = {
             let base_scale = 0.0003;
             let detail_scale = 0.02;
@@ -71,12 +70,11 @@ impl Noise {
             let base_scale = 0.003;
             let detail_scale = 0.02;
 
-            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 80.0 + 40.0;
+            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 40.0 + 40.0;
 
             let detail = self.simplex.sample([x * detail_scale + 1337.0, z * detail_scale + 420.0]) * 8.0;
             base + detail
         };
-
 
         let plateau_height = {
             let base_scale = 0.005;
@@ -117,7 +115,7 @@ impl Chunk {
         Chunk {
             data: Arc::new(ChunkData::empty()),
             is_dirty: false,
-            mesh: None,
+            meshes: [const { None }; 6],
             persistent: false,
             // we still want to remesh initially
             version: 1,
@@ -145,7 +143,7 @@ impl Chunk {
             }
         }
 
-        let skip = (pos.y * CHUNK_SIZE as i32) > max_height ;
+        let skip = (pos.y * CHUNK_SIZE as i32) > max_height;
     
         if !skip {
             for z in 0..CHUNK_SIZE {
@@ -169,7 +167,6 @@ impl Chunk {
                     }
                 }
             }
-
 
             let mut hasher = FxHasher64::new();
             pos.hash(&mut hasher);
@@ -227,7 +224,7 @@ impl Chunk {
         let chunk = Chunk {
             data: data.into(),
             is_dirty: true,
-            mesh: None,
+            meshes: [const { None }; 6],
             current_mesh: 0,
             persistent: false,
             version: 1,

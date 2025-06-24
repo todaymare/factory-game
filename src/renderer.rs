@@ -1,6 +1,6 @@
 pub mod textures;
 
-use std::{collections::HashMap, ffi::CString, fs, mem::offset_of, ptr::null_mut};
+use std::{cell::Cell, collections::HashMap, ffi::CString, fs, mem::offset_of, ptr::null_mut};
 
 use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
 use glam::{IVec2, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
@@ -8,7 +8,7 @@ use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent}
 use textures::{TextureAtlasBuilder, TextureAtlasManager, TextureId};
 use tracing::{error, warn};
 
-use crate::{directions::CardinalDirection, items::{Assets, ItemKind}, shader::{Shader, ShaderProgram, ShaderType}};
+use crate::{directions::CardinalDirection, items::{Assets, ItemKind}, mesh::Mesh, shader::{Shader, ShaderProgram, ShaderType}, voxel_world::mesh::ChunkMesh};
 
 
 const FONT_SIZE : u32 = 64;
@@ -40,6 +40,9 @@ pub struct Renderer {
     pub rects: Vec<DrawRect>,
 
     current_rect: ScreenRect,
+
+    pub draw_count: Cell<u32>,
+    pub triangle_count: Cell<u32>,
 }
 
 
@@ -239,6 +242,8 @@ impl Renderer {
             ui_scale: 1.0,
             rects: vec![],
             current_rect: ScreenRect::new(),
+            draw_count: Cell::new(0),
+            triangle_count: Cell::new(0),
         };
 
         this
@@ -246,12 +251,13 @@ impl Renderer {
 
 
     pub fn begin(&mut self, colour: Vec4) {
+
         unsafe {
             gl::Enable(gl::DEPTH_TEST);
             gl::ClearColor(colour.x, colour.y, colour.z, colour.w);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-            gl::Enable(gl::CULL_FACE);
-            gl::CullFace(gl::BACK);
+            //gl::Enable(gl::CULL_FACE);
+            //gl::CullFace(gl::BACK);
 
             if self.is_wireframe {
                 gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
@@ -266,6 +272,8 @@ impl Renderer {
         unsafe { gl::Clear(gl::DEPTH_BUFFER_BIT) };
 
         let mut z = 0.0;
+        let triangle_count = self.triangle_count.get_mut();
+        let draw_count = self.draw_count.get_mut();
         for rect in self.rects.iter() {
             let tex = rect.tex;
             let pos = rect.pos;
@@ -291,7 +299,7 @@ impl Renderer {
             buf.push(UIVertex::new(pos, Vec2::new(x0, y0), modulate, z));
             buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
 
-
+            *triangle_count += 6;
         }
         self.rects.clear();
 
@@ -314,6 +322,7 @@ impl Renderer {
             }
 
             buf.clear();
+            *draw_count += 1;
         }
 
         self.window.swap_buffers();
@@ -474,7 +483,8 @@ impl Renderer {
         let model = Mat4::from_scale_rotation_translation(scale, rot, pos);
         shader.set_matrix4(c"model", model);
 
-        self.meshes.get(item_kind).draw();
+        let mesh = self.meshes.get(item_kind);
+        self.draw_mesh(mesh);
     }
 
 
@@ -488,6 +498,32 @@ impl Renderer {
     pub fn draw_item_icon(&mut self, item: ItemKind, pos: Vec2, dims: Vec2, modulate: Vec4) {
         let texture = self.meshes.get_ico(item);
         self.draw_tex_rect(pos, dims, texture, modulate);
+    }
+
+
+    pub fn draw_mesh(&self, mesh: &Mesh) {
+        let this = &mesh;
+        unsafe {
+            gl::BindVertexArray(this.vao);
+            gl::DrawElements(gl::TRIANGLES, this.indices as _, gl::UNSIGNED_INT, null_mut());
+            gl::BindVertexArray(0);
+        }
+
+        self.triangle_count.set(self.triangle_count.get() + mesh.indices);
+        self.draw_count.set(self.draw_count.get() + 1);
+    }
+
+
+    pub fn draw_voxel_mesh(&self, mesh: &ChunkMesh) {
+        let this = &mesh;
+        unsafe {
+            gl::BindVertexArray(this.vao);
+            gl::DrawElements(gl::TRIANGLES, this.indices as _, gl::UNSIGNED_INT, null_mut());
+            gl::BindVertexArray(0);
+        }
+
+        self.triangle_count.set(self.triangle_count.get() + mesh.indices);
+        self.draw_count.set(self.draw_count.get() + 1);
     }
 
 

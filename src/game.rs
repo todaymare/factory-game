@@ -2,12 +2,12 @@ pub mod save_system;
 
 use std::time::Instant;
 
-use glam::{DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
+use glam::{usize, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{Key, MouseButton};
 use sti::hash::fxhash::{fxhash32, FxHasher32};
 use tracing::{info, trace, warn};
 
-use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE, COLOUR_DENY, COLOUR_PASS, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::CardinalDirection, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, mesh::Mesh, renderer::Renderer, shader::{Shader, ShaderProgram, ShaderType}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{self, InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, PhysicsBody, Player, Tick, DELTA_TICK, DROPPED_ITEM_SCALE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND};
+use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE, COLOUR_DENY, COLOUR_PASS, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::{CardinalDirection, Direction}, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, mesh::Mesh, renderer::Renderer, shader::{Shader, ShaderProgram, ShaderType}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{self, InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, PhysicsBody, Player, Tick, DELTA_TICK, DROPPED_ITEM_SCALE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND};
 
 pub struct Game {
     pub world: VoxelWorld,
@@ -20,6 +20,7 @@ pub struct Game {
     pub craft_queue: Vec<(Item, u32)>,
     pub craft_progress: u32,
     pub triangle_count: u32,
+    pub draw_call_count: u32,
     pub render_world_time: u32,
     pub total_rendered_chunks: u32,
     pub lock_frustum: Option<Frustum>,
@@ -64,6 +65,7 @@ impl Game {
         let mut this = Game {
             triangle_count: 0,
             total_rendered_chunks: 0,
+            draw_call_count: 0,
             render_world_time: 0,
             lock_frustum: None,
             sky_colour: Vec4::new(116.0, 217.0, 249.0, 255.0) / Vec4::splat(255.0),
@@ -141,15 +143,6 @@ impl Game {
         });
 
 
-
-        this.command_registry.register("clear_save", |game, _| {
-            *game = Game::new();
-            let _ = std::fs::remove_dir_all("saves/chunks");
-            let _ = std::fs::create_dir("saves/chunks");
-            Some(())
-        });
-
-
         this.command_registry.register("give", |game, cmd| {
             let item = cmd.arg(0)?.as_str();
             let &kind = ItemKind::ALL.iter().find(|x| x.to_string() == item)?;
@@ -200,7 +193,7 @@ impl Game {
         this.command_registry.register("remesh", |game, _| {
 
             game.world.chunks.values_mut().filter_map(|x| x.as_mut()).for_each(|x| {
-                x.mesh = None;
+                x.meshes.iter_mut().for_each(|x| *x = None);
                 x.version += 1;
             });
             Some(())
@@ -809,6 +802,7 @@ impl Game {
 
             let (player_chunk, _) = split_world_pos(self.player.body.position.as_ivec3());
 
+            let mut chunks = 0;
             for y in -rd..rd {
                 for z in -rd..rd {
                     for x in -rd..rd {
@@ -830,23 +824,38 @@ impl Game {
                             continue;
                         }
 
-                        let Some(mesh) = self.world.try_get_mesh(chunk_pos)
+                        let Some(meshes) = self.world.try_get_mesh(chunk_pos)
                         else { continue };
 
-                        if mesh.indices == 0 {
-                            warn!("an empty mesh was generated");
-                            continue;
+                        let dir_from_camera = offset.as_vec3().normalize();
+
+                        for (i, mesh) in meshes.iter().enumerate() {
+                            let Some(mesh) = mesh
+                            else { continue };
+
+                            if mesh.indices == 0 {
+                                warn!("an empty mesh was generated");
+                                continue;
+                            }
+
+                            
+                            let normal = Direction::NORMALS[i];
+                            if dir_from_camera.dot(normal) > 0.0 {
+                                continue
+                            }
+
+                            let offset = chunk_pos * IVec3::splat(CHUNK_SIZE as i32);
+                            let offset = offset.as_dvec3() - camera;
+                            let model = Mat4::from_translation(offset.as_vec3());
+
+                            self.shader_world.set_matrix4(c"model", model);
+
+                            self.renderer.draw_voxel_mesh(mesh);
                         }
-
-                        let offset = chunk_pos * IVec3::splat(CHUNK_SIZE as i32);
-                        let offset = offset.as_dvec3() - camera;
-                        let model = Mat4::from_translation(offset.as_vec3());
-                        self.shader_world.set_matrix4(c"model", model);
-
-                        mesh.draw();
                     }
                 }
             }
+
         }
 
         // render meshes

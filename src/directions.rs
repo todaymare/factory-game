@@ -1,4 +1,4 @@
-use glam::IVec3;
+use glam::{IVec3, Vec3};
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum CardinalDirection {
@@ -62,6 +62,15 @@ pub enum Direction {
 
 
 impl Direction {
+    pub const NORMALS : &[Vec3] = &[
+        Vec3::new( 1.0,  0.0,  0.0),
+        Vec3::new( 0.0,  1.0,  0.0),
+        Vec3::new( 0.0,  0.0,  1.0),
+        Vec3::new(-1.0,  0.0,  0.0),
+        Vec3::new( 0.0, -1.0,  0.0),
+        Vec3::new( 0.0,  0.0, -1.0),
+        
+    ];
     pub fn get_opposite(self) -> Self {
         match self {
             Direction::Left => Direction::Right,

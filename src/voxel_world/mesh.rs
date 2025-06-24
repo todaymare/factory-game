@@ -11,15 +11,15 @@ pub struct Vertex {
 
 
 #[derive(Debug)]
-pub struct VoxelMesh {
+pub struct ChunkMesh {
     pub indices: u32,
-    vbo: u32,
-    vao: u32,
-    ebo: u32,
+    pub vbo: u32,
+    pub vao: u32,
+    pub ebo: u32,
 }
 
 
-impl VoxelMesh {
+impl ChunkMesh {
     pub fn new(verticies: &[Vertex], indicies: &[u32]) -> Self {
         let vao = unsafe { 
             let mut vao = 0;
@@ -76,7 +76,7 @@ impl VoxelMesh {
 }
 
 
-impl Drop for VoxelMesh {
+impl Drop for ChunkMesh {
     fn drop(&mut self) {
         unsafe {
             gl::DeleteVertexArrays(1, &self.vao);

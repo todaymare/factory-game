@@ -419,7 +419,11 @@ impl UILayer {
 
                     let _ = writeln!(text, "§eFPS: §{colour_code}{fps}§r");
                     let _ = writeln!(text, "§eTIME ELAPSED: §a{:.1}§r", game.current_tick.u32() as f64 / TICKS_PER_SECOND as f64);
-                    let _ = writeln!(text, "§eTRIANGLE COUNT: §a{}§r", game.triangle_count);
+                    let _ = writeln!(text, "§eDRAW CALLCOUNT: §a{}§r", game.renderer.draw_count.get());
+                    let _ = writeln!(text, "§eTRIANGLE COUNT: §a{}§r", game.renderer.triangle_count.get());
+                    game.renderer.triangle_count.set(0);
+                    game.renderer.draw_count.set(0);
+
                     let _ = writeln!(text, "§eRENDER WORLD TIME: §a{}ms§r", game.render_world_time);
                     let _ = writeln!(text, "§eRENDERED CHUNKS: §a{}§r", game.total_rendered_chunks);
 

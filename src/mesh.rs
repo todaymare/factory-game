@@ -15,9 +15,9 @@ pub struct Vertex {
 #[derive(Clone, Debug)]
 pub struct Mesh {
     pub indices: u32,
-    vbo: u32,
-    vao: u32,
-    ebo: u32,
+    pub vbo: u32,
+    pub vao: u32,
+    pub ebo: u32,
 }
 
 

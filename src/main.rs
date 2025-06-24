@@ -25,6 +25,7 @@ pub mod perlin;
 pub mod frustum;
 pub mod game;
 pub mod constants;
+pub mod buddy_allocator;
 
 use std::{f32::consts::{PI, TAU}, fs, hash::Hash, ops::{self}, time::Instant};
 
@@ -68,7 +69,7 @@ const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32;
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
+        .with_max_level(Level::ERROR)
         .init();
 
     let mut game = Game::new();
@@ -374,10 +375,10 @@ impl Camera {
         let sector = (angle / (PI/2.0)).round() as i32 % 4;
 
         match sector {
-            0 => CardinalDirection::South,
-            1 => CardinalDirection::West,
-            2 => CardinalDirection::North,
-            3 => CardinalDirection::East,
+            3 => CardinalDirection::South,
+            0 => CardinalDirection::West,
+            1 => CardinalDirection::North,
+            2 => CardinalDirection::East,
             _ => unreachable!(),
         }
     }

@@ -6,15 +6,17 @@ use std::{collections::{HashMap, HashSet}, fs::{self}, ops::Bound, sync::{mpsc, 
 
 use chunk::{ChunkData, Noise};
 use glam::{DVec3, IVec3, Vec3, Vec4};
-use mesh::{draw_quad, Vertex, VoxelMesh};
+use mesh::{draw_quad, Vertex, ChunkMesh};
+use rand::seq::IndexedRandom;
 use save_format::byte::{ByteReader, ByteWriter};
-use tracing::{info, trace, warn};
+use tracing::{error, info, trace, warn};
 use voxel::Voxel;
+use voxel_mesher::VoxelMesh;
 
 use crate::{constants::CHUNK_SIZE, items::{DroppedItem, Item}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
 
 
-type MeshMPSC = (IVec3, Vec<Vertex>, Vec<u32>, u32);
+type MeshMPSC = (IVec3, [(Vec<Vertex>, Vec<u32>); 6], u32);
 type ChunkMPSC = (IVec3, Chunk);
 type SaveChunkMPSC = ();
 
@@ -44,7 +46,8 @@ pub struct VoxelWorld {
     total_meshes: u32,
     total_chunks: u32,
 
-    pub loading_chunk_mesh: VoxelMesh,
+
+    indicies: Vec<u32>,
 }
 
 
@@ -68,18 +71,6 @@ impl VoxelWorld {
         let data = Arc::make_mut(&mut full_chunk.data);
         data.data.iter_mut().for_each(|x| *x = Voxel::Stone);
 
-        let mut vertices = vec![];
-        let mut indices = vec![];
-
-        let arr = core::array::from_fn(|i| if i == 0 { full_chunk.data.clone() } else { Chunk::empty_chunk().data.clone() });
-        Self::greedy_mesh(arr, &mut vertices, &mut indices);
-
-        for vertex in &mut vertices {
-            vertex.set_colour(Vec4::new(1.0, 0.0, 0.0, 1.0));
-        }
-
-        let mesh = VoxelMesh::new(&vertices, &indices);
-
         Self {
             total_meshes: 0,
             total_chunks: 0,
@@ -101,7 +92,7 @@ impl VoxelWorld {
             queued_chunks: 0,
             queued_chunk_saves: 0,
 
-            loading_chunk_mesh: mesh,
+            indicies: vec![],
         }
 
     }
@@ -145,12 +136,10 @@ impl VoxelWorld {
         let sender = self.mesh_sender.clone();
 
         rayon::spawn(move || {
-            let mut vertices = vec![];
-            let mut indices = vec![];
             let time = Instant::now();
-            VoxelWorld::greedy_mesh(chunks, &mut vertices, &mut indices);
+            let result = VoxelWorld::greedy_mesh(chunks);
             trace!("mesh-generation: meshes in {:?}", time.elapsed());
-            if let Err(_) = sender.send((pos, vertices, indices, version)) {
+            if let Err(_) = sender.send((pos, result, version)) {
                 warn!("mesh-generation: job receiver terminated before all meshing jobs were done");
             }
         });
@@ -166,7 +155,7 @@ impl VoxelWorld {
             self.spawn_mesh_job(*pos);
         }
 
-        while let Ok((pos, vertices, indices, version)) = self.mesh_reciever.try_recv() {
+        while let Ok((pos, result, version)) = self.mesh_reciever.try_recv() {
             self.queued_meshes -= 1;
             let Some(Some(chunk)) = self.chunks.get_mut(&pos)
             else {
@@ -179,13 +168,19 @@ impl VoxelWorld {
                 continue;
             }
 
-            if vertices.is_empty() {
-                info!("discarded mesh of chunk '{pos}' because it was empty");
-                continue;
+            for (i, (vertices, indices)) in result.iter().enumerate() {
+                self.indicies.push(indices.len() as u32);
+
+                if vertices.is_empty() {
+                    chunk.meshes[i] = None;
+                    info!("discarded mesh of chunk '{pos}' because it was empty");
+                    continue;
+                }
+
+                let mesh = ChunkMesh::new(&vertices, &indices);
+                chunk.meshes[i] = Some(mesh);
             }
 
-            let mesh = VoxelMesh::new(&vertices, &indices);
-            chunk.mesh = Some(mesh);
         }
 
         if self.queued_meshes == 0 && self.queued_chunks == 0 {
@@ -283,16 +278,13 @@ impl VoxelWorld {
 
 
     pub fn ensure_chunk_exists(&mut self, pos: IVec3) {
-        // this will queue the job worst-case
-        if self.try_get(pos).is_some() { return }
-
-        // then we process until there's nothing left
-        // by which point we should be good to go
-        while self.chunks[&pos].is_none() {
-            self.process_chunks();
+        if let Some(chunk) = self.chunks.get(&pos)
+            && chunk.is_some() {
+            return;
         }
 
-        debug_assert!(self.try_get(pos).is_some());
+        let chunk = Self::chunk_creation_job(pos, &self.noise);
+        self.chunks.insert(pos, Some(chunk));
     }
 
 
@@ -360,23 +352,7 @@ impl VoxelWorld {
             let perlin = self.noise.clone();
             self.queued_chunks += 1;
             rayon::spawn(move || {
-                let path = format!("saves/chunks/{pos}.chunk");
-                let chunk = match fs::read(&path) {
-                    Ok(ref v) if let Some(mut byte_reader) = ByteReader::new(&v) => {
-                        let mut chunk = Chunk::empty_chunk();
-                        let data = Arc::make_mut(&mut chunk.data);
-
-                        *data = ChunkData::from_bytes(byte_reader.read().unwrap());
-
-                        chunk.is_dirty = false;
-                        chunk
-                    },
-
-
-                    _ => {
-                        Chunk::generate(pos, &perlin)
-                    }
-                };
+                let chunk = Self::chunk_creation_job(pos, &perlin);
 
                 if let Err(_) = sender.send((pos, chunk)) {
                     warn!("chunk-generation-system: job receiver terminated before all meshing jobs were done");
@@ -389,9 +365,32 @@ impl VoxelWorld {
     }
 
 
-    pub fn try_get_mesh(&mut self, pos: IVec3) -> Option<&VoxelMesh> {
-        let Some(chunk) = self.try_get(pos)
-        else { return Some(&self.loading_chunk_mesh) };
+    pub fn chunk_creation_job(pos: IVec3, noise: &Noise) -> Chunk {
+        let path = format!("saves/chunks/{pos}.chunk");
+        let chunk = match fs::read(&path) {
+            Ok(ref v) if let Some(mut byte_reader) = ByteReader::new(&v) => {
+                let mut chunk = Chunk::empty_chunk();
+                let data = Arc::make_mut(&mut chunk.data);
+
+                *data = ChunkData::from_bytes(byte_reader.read().unwrap());
+
+                chunk.is_dirty = false;
+                chunk
+            },
+
+
+            _ => {
+                Chunk::generate(pos, noise)
+            }
+        };
+
+        chunk
+
+    }
+
+
+    pub fn try_get_mesh(&mut self, pos: IVec3) -> Option<&[Option<ChunkMesh>; 6]> {
+        let chunk = self.try_get(pos)?;
 
         if chunk.version != chunk.current_mesh {
             info!("queueing the chunk at '{pos}' for remeshing");
@@ -399,7 +398,7 @@ impl VoxelWorld {
         }
 
         let chunk = self.get_chunk(pos);
-        chunk.mesh.as_ref()
+        Some(&chunk.meshes)
     }
 
 
@@ -624,191 +623,220 @@ impl VoxelWorld {
             self.save_chunk(pos);
         }
 
+
         while self.queued_chunk_saves > 0 { if self.save_chunk_receiver.try_recv().is_ok() { self.queued_chunk_saves -= 1} };
-        info!("voxel-save-system: saved the world in {:?}", time.elapsed())
+        info!("voxel-save-system: saved the world in {:?}", time.elapsed());
+
+        error!("average indicies: {}", self.indicies.iter().sum::<u32>() as usize / self.indicies.len());
     }
 
 
-    pub fn greedy_mesh(chunks: [Arc<ChunkData>; 7], vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>) -> bool {
+
+    pub fn greedy_mesh(chunks: [Arc<ChunkData>; 7]) -> [(Vec<Vertex>, Vec<u32>); 6]{
+        let [west, east] = Self::greedy_mesh_dir(&chunks, 0);
+        let [up, down] = Self::greedy_mesh_dir(&chunks, 1);
+        let [north, south] = Self::greedy_mesh_dir(&chunks, 2);
+        [west, up, north, east, down, south]
+    }
+
+
+    pub fn greedy_mesh_dir(chunks: &[Arc<ChunkData>; 7],
+                           d: usize,) -> [(Vec<Vertex>, Vec<u32>); 2] {
+
+        let mut forward_vertices: Vec<Vertex> = vec![];
+        let mut forward_indices: Vec<u32> = vec![];
+        let mut backward_vertices: Vec<Vertex> = vec![];
+        let mut backward_indices: Vec<u32> = vec![];
+
         let chunk = &chunks[0];
-        // sweep over each axis
 
-        for d in 0..3 {
-            let u = (d + 1) % 3;
-            let v = (d + 2) % 3;
-            let mut x = IVec3::ZERO;
+        let u = (d + 1) % 3;
+        let v = (d + 2) % 3;
+        let mut x = IVec3::ZERO;
 
-            let mut block_mask = [(Voxel::Air, false); CHUNK_SIZE*CHUNK_SIZE];
+        let mut block_mask = [(Voxel::Air, false); CHUNK_SIZE*CHUNK_SIZE];
 
-            
-            let curr_nchunk = match d {
-                0 => 2,
-                1 => 4,
-                2 => 6,
-                _ => unreachable!(),
-            };
-            
+        
+        let curr_nchunk = match d {
+            0 => 2,
+            1 => 4,
+            2 => 6,
+            _ => unreachable!(),
+        };
+        
 
-            let cmp_nchunk = match d {
-                0 => 1,
-                1 => 3,
-                2 => 5,
+        let cmp_nchunk = match d {
+            0 => 1,
+            1 => 3,
+            2 => 5,
 
-                _ => unreachable!(),
-            };
+            _ => unreachable!(),
+        };
 
-            x[d] = -1;
-            while x[d] < CHUNK_SIZE as i32 {
-                let mut n = 0;
-                x[v] = 0;
+        x[d] = -1;
+        while x[d] < CHUNK_SIZE as i32 {
+            let mut n = 0;
+            x[v] = 0;
 
-                while x[v] < CHUNK_SIZE as i32 {
-                    x[u] = 0;
+            while x[v] < CHUNK_SIZE as i32 {
+                x[u] = 0;
 
-                    while x[u] < CHUNK_SIZE as i32 {
+                while x[u] < CHUNK_SIZE as i32 {
 
-                        let block_current = {
-                            let r = x;
-                            let is_out_of_bounds =    r.x < 0
-                                                   || r.y < 0
-                                                   || r.z < 0;
+                    let block_current = {
+                        let r = x;
+                        let is_out_of_bounds =    r.x < 0
+                                               || r.y < 0
+                                               || r.z < 0;
 
-                            if is_out_of_bounds {
-                                let nchunk = &chunks[curr_nchunk];
-                                let pos = r;
-                                let voxel = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
-                                nchunk.get(voxel)
-                            } else {
-                                chunk.get(r)
-                            }
-                        };
+                        if is_out_of_bounds {
+                            let nchunk = &chunks[curr_nchunk];
+                            let pos = r;
+                            let voxel = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
+                            nchunk.get(voxel)
+                        } else {
+                            chunk.get(r)
+                        }
+                    };
 
-                        let block_compare = {
-                            let mut r = x;
-                            r[d] += 1;
-                            let is_out_of_bounds =    r.x == CHUNK_SIZE as i32
-                                                   || r.y == CHUNK_SIZE as i32
-                                                   || r.z == CHUNK_SIZE as i32;
+                    let block_compare = {
+                        let mut r = x;
+                        r[d] += 1;
+                        let is_out_of_bounds =    r.x == CHUNK_SIZE as i32
+                                               || r.y == CHUNK_SIZE as i32
+                                               || r.z == CHUNK_SIZE as i32;
 
-                            if is_out_of_bounds {
-                                let nchunk = &chunks[cmp_nchunk];
-                                let pos = r;
-                                let voxel = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
-                                nchunk.get(voxel)
-                            } else {
-                                chunk.get(r)
-                            }
-                        };
+                        if is_out_of_bounds {
+                            let nchunk = &chunks[cmp_nchunk];
+                            let pos = r;
+                            let voxel = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
+                            nchunk.get(voxel)
+                        } else {
+                            chunk.get(r)
+                        }
+                    };
 
-                        // the mask is set to true if there is a visible face
-                        // between two blocks, i.e. both aren't empty and both aren't blocks
-                        block_mask[n] = match (block_current.is_transparent(), block_compare.is_transparent()) {
-                            (true, false) => (block_compare, true),
-                            (false, true) => (block_current, false),
-                            (_, _) => (Voxel::Air, false),
-                        };
-                        n += 1;
+                    // the mask is set to true if there is a visible face
+                    // between two blocks, i.e. both aren't empty and both aren't blocks
+                    block_mask[n] = match (block_current.is_transparent(), block_compare.is_transparent()) {
+                        (true, false) => (block_compare, true),
+                        (false, true) => (block_current, false),
+                        (_, _) => (Voxel::Air, false),
+                    };
+                    n += 1;
 
-                        x[u] += 1;
-                    }
-
-                    x[v] += 1;
+                    x[u] += 1;
                 }
 
-
-                x[d] += 1;
-
-
-                let mut n = 0;
-                for j in 0..CHUNK_SIZE {
-                    let mut i = 0;
-                    while i < CHUNK_SIZE {
-                        if block_mask[n].0 == Voxel::Air {
-                            i += 1;
-                            n += 1;
-                            continue;
-                        }
-
-                        let (kind, neg_d) = block_mask[n];
-
-                        
-                        // Compute the width of this quad and store it in w                        
-                        //   This is done by searching along the current axis until mask[n + w] is false
-                        let mut w = 1;
-                        while i + w < CHUNK_SIZE && block_mask[n + w] == (kind, neg_d) { w += 1; }
+                x[v] += 1;
+            }
 
 
-                        // Compute the height of this quad and store it in h                        
-                        //   This is done by checking if every block next to this row (range 0 to w) is also part of the mask.
-                        //   For example, if w is 5 we currently have a quad of dimensions 1 x 5. To reduce triangle count,
-                        //   greedy meshing will attempt to expand this quad out to CHUNK_SIZE x 5, but will stop if it reaches a hole in the mask
-                        
-                        let mut done = false;
-                        let mut h = 1;
-                        while j + h < CHUNK_SIZE {
-                            for k in 0..w {
-                                // if there's a hole in the mask, exit
-                                if block_mask[n + k + h * CHUNK_SIZE] != (kind, neg_d) {
-                                    done = true;
-                                    break;
-                                }
+            x[d] += 1;
+
+
+            let mut n = 0;
+            for j in 0..CHUNK_SIZE {
+                let mut i = 0;
+                while i < CHUNK_SIZE {
+                    if block_mask[n].0 == Voxel::Air {
+                        i += 1;
+                        n += 1;
+                        continue;
+                    }
+
+                    let (kind, neg_d) = block_mask[n];
+
+                    
+                    // Compute the width of this quad and store it in w                        
+                    //   This is done by searching along the current axis until mask[n + w] is false
+                    let mut w = 1;
+                    while i + w < CHUNK_SIZE && block_mask[n + w] == (kind, neg_d) { w += 1; }
+
+
+                    // Compute the height of this quad and store it in h                        
+                    //   This is done by checking if every block next to this row (range 0 to w) is also part of the mask.
+                    //   For example, if w is 5 we currently have a quad of dimensions 1 x 5. To reduce triangle count,
+                    //   greedy meshing will attempt to expand this quad out to CHUNK_SIZE x 5, but will stop if it reaches a hole in the mask
+                    
+                    let mut done = false;
+                    let mut h = 1;
+                    while j + h < CHUNK_SIZE {
+                        for k in 0..w {
+                            // if there's a hole in the mask, exit
+                            if block_mask[n + k + h * CHUNK_SIZE] != (kind, neg_d) {
+                                done = true;
+                                break;
                             }
-
-
-                            if done { break }
-
-                            h += 1;
                         }
 
 
-                        x[u] = i as _;
-                        x[v] = j as _;
+                        if done { break }
 
-                        // du and dv determine the size and orientation of this face
-                        let mut du = IVec3::ZERO;
-                        du[u] = w as _;
+                        h += 1;
+                    }
 
-                        let mut dv = IVec3::ZERO;
-                        dv[v] = h as _;
 
+                    x[u] = i as _;
+                    x[v] = j as _;
+
+                    // du and dv determine the size and orientation of this face
+                    let mut du = IVec3::ZERO;
+                    du[u] = w as _;
+
+                    let mut dv = IVec3::ZERO;
+                    dv[v] = h as _;
+
+                    if neg_d {
                         let quad =  mesh::Quad {
                                     //color: if neg_d { Vec4::new(1.0, 0.0, 0.0, 1.0) }
                                     //       else { Vec4::new(0.0, 1.0, 0.0, 1.0) },
                                     color: kind.colour(),
-                                    corners: if !neg_d {[
-                                        x.as_vec3(),
-                                        (x+du).as_vec3(),
-                                        (x+du+dv).as_vec3(),
-                                        (x+dv).as_vec3(),
-                                    ]} else {[
+                                    corners: [
                                         (x+dv).as_vec3(),
                                         (x+du+dv).as_vec3(),
                                         (x+du).as_vec3(),
                                         x.as_vec3(),
-                                    ]
-                                    },
-                                    normal: d as u8 + neg_d as u8 * 3,
+                                    ],
+                                    normal: d as u8 + 3,
                                 };
 
-                        draw_quad(vertices, indices, quad);
+                        draw_quad(&mut backward_vertices, &mut backward_indices, quad);
+                    } else {
+                        let quad =  mesh::Quad {
+                                    //color: if neg_d { Vec4::new(1.0, 0.0, 0.0, 1.0) }
+                                    //       else { Vec4::new(0.0, 1.0, 0.0, 1.0) },
+                                    color: kind.colour(),
+                                    corners: [
+                                        x.as_vec3(),
+                                        (x+du).as_vec3(),
+                                        (x+du+dv).as_vec3(),
+                                        (x+dv).as_vec3(),
+                                    ],
+                                    normal: d as u8,
+                                };
 
-
-                        // clear this part of the mask so we don't add duplicates
-                        for l in 0..h  {
-                            for k in 0..w {
-                                block_mask[n+k+l*CHUNK_SIZE].0 = Voxel::Air;
-                            }
-                        }
-
-                        // increment counters and continue
-                        i += w;
-                        n += w;
+                        draw_quad(&mut forward_vertices, &mut forward_indices, quad);
                     }
-                }
 
+                    // clear this part of the mask so we don't add duplicates
+                    for l in 0..h  {
+                        for k in 0..w {
+                            block_mask[n+k+l*CHUNK_SIZE].0 = Voxel::Air;
+                        }
+                    }
+
+                    // increment counters and continue
+                    i += w;
+                    n += w;
+                }
             }
+
         }
-        true
+        [
+            (forward_vertices, forward_indices),
+            (backward_vertices, backward_indices),
+        ]
     }
 }
 

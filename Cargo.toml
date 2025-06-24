@@ -12,7 +12,6 @@ save-format = { git = "https://github.com/rookieCookies/save-format" }
 voxel-mesher = { git = "https://github.com/rookieCookies/voxel-mesher" }
 freetype = "*"
 rand = "*"
-obj-rs = "*"
 
 image = "*"
 
@@ -28,3 +27,4 @@ debug = 1
 [features]
 dhat-heap = []    # if you are doing heap profiling
 dhat-ad-hoc = []  # if you are doing ad hoc profiling
+
