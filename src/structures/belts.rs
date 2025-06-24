@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Write};
 
-use glam::{IVec3, Vec3};
+use glam::IVec3;
 use sti::{define_key, key::Key, vec::KVec};
 
 use crate::{hsl_to_hex, structures::strct::{rotate_block_vector, StructureKind}, voxel_world::VoxelWorld};

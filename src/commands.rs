@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::Game;
+use crate::game::Game;
 
 pub struct CommandRegistry {
     commands: HashMap<String, fn(&mut Game, &Command) -> Option<()>>,

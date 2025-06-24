@@ -1,8 +1,7 @@
-use std::{collections::HashMap, fs, io::BufWriter};
+use std::collections::HashMap;
 
 use glam::{IVec2, Vec4};
-use image::{codecs::png::PngEncoder, ColorType, EncodableLayout, ImageEncoder};
-use sti::{define_key, format, vec::KVec};
+use sti::{define_key, vec::KVec};
 
 use crate::shader::ShaderProgram;
 

@@ -3,7 +3,7 @@ use std::{ops::Bound, fmt::Write};
 use glam::{DVec3, Vec2, Vec4};
 use glfw::{CursorMode, Key};
 
-use crate::{commands::Command, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer, Style}, structures::{self, inventory::{SlotKind, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{split_world_pos, VoxelWorld}, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND};
+use crate::{commands::Command, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{SlotKind, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{split_world_pos, VoxelWorld}, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND};
 
 pub enum UILayer {
     Inventory {
@@ -20,6 +20,7 @@ pub enum UILayer {
         offset: u32,
     },
     Gameplay { smoothed_dt: f32 },
+    None,
 }
 
 
@@ -47,6 +48,7 @@ impl UILayer {
             UILayer::Gameplay { .. } => CursorMode::Disabled,
             UILayer::Inventory { .. } => CursorMode::Normal,
             UILayer::Console { .. } => CursorMode::Normal,
+            UILayer::None => CursorMode::Normal,
         }
     }
 
@@ -56,6 +58,7 @@ impl UILayer {
             UILayer::Gameplay { .. } => false,
             UILayer::Inventory { .. } => true,
             UILayer::Console { .. } => true,
+            UILayer::None => false,
         }
     }
 
@@ -64,7 +67,7 @@ impl UILayer {
         match self {
             UILayer::Inventory { holding_item, .. } => {
                 if let Some(holding_item) = holding_item {
-                    game.world.dropped_items.push(DroppedItem::new(*holding_item, game.player.body.position));
+                    game.world.drop_item(*holding_item, game.player.body.position);
                 }
 
                 *self = UILayer::Gameplay { smoothed_dt: dt };
@@ -77,20 +80,23 @@ impl UILayer {
 
 
             UILayer::Gameplay { .. } => (),
+
+
+            UILayer::None => (),
         }
     }
 
 
-    pub fn render(&mut self, game: &mut Game, input: &InputManager, renderer: &mut Renderer, dt: f32) {
+    pub fn render(&mut self, game: &mut Game, input: &InputManager, dt: f32) {
         match self {
             UILayer::Console { text, backspace_cooldown, timer, cursor, just_opened, offset } => {
                 const TEXT_SIZE : f32 = 0.5;
-                let window = renderer.window_size();
-                let text_box = Vec2::new(window.x * 0.6, renderer.biggest_y_size * 0.6);
+                let window = game.renderer.window_size();
+                let text_box = Vec2::new(window.x * 0.6, game.renderer.biggest_y_size * 0.6);
                 let box_pos = Vec2::new(0.0, window.y - text_box.y * 0.95);
-                renderer.draw_rect(box_pos, text_box, Vec4::new(0.1, 0.1, 0.1, 0.5));
+                game.renderer.draw_rect(box_pos, text_box, Vec4::new(0.1, 0.1, 0.1, 0.5));
                 let text_pos = Vec2::new(box_pos.x, box_pos.y);
-                renderer.draw_text(&text, text_pos, TEXT_SIZE, Vec4::ONE);
+                game.renderer.draw_text(&text, text_pos, TEXT_SIZE, Vec4::ONE);
 
                 for key in input.current_chars() {
                     if !key.is_ascii() {
@@ -149,7 +155,7 @@ impl UILayer {
                     }
                 } 
                 else if input.should_paste() {
-                    if let Some(cb) = renderer.window.get_clipboard_string() {
+                    if let Some(cb) = game.renderer.window.get_clipboard_string() {
                         while *timer <= 0.0 {
                             *backspace_cooldown = (*backspace_cooldown * 0.8).max(0.03);
                             *timer += *backspace_cooldown;
@@ -209,8 +215,8 @@ impl UILayer {
                     *timer = *backspace_cooldown;
                 }
 
-                let cursor_pos = Vec2::new(text_pos.x + renderer.text_size(&text[0..*cursor as usize], TEXT_SIZE).x, text_pos.y + renderer.biggest_y_size * 0.075);
-                renderer.draw_rect(cursor_pos, Vec2::new(renderer.biggest_y_size * 0.05, renderer.biggest_y_size * 0.45), Vec4::ONE);
+                let cursor_pos = Vec2::new(text_pos.x + game.renderer.text_size(&text[0..*cursor as usize], TEXT_SIZE).x, text_pos.y + game.renderer.biggest_y_size * 0.075);
+                game.renderer.draw_rect(cursor_pos, Vec2::new(game.renderer.biggest_y_size * 0.05, game.renderer.biggest_y_size * 0.45), Vec4::ONE);
 
                 if input.is_key_pressed(Key::Up) {
                     while *timer <= 0.0 {
@@ -244,7 +250,7 @@ impl UILayer {
 
 
             UILayer::Inventory { just_opened, holding_item, inventory_mode } => {
-                let window = renderer.window_size();
+                let window = game.renderer.window_size();
                 if input.is_key_just_pressed(Key::E) && !*just_opened {
                     self.close(game, dt);
                     return;
@@ -253,8 +259,8 @@ impl UILayer {
                 }
 
 
-                renderer.draw_rect(Vec2::ZERO, window, Vec4::new(0.1, 0.1, 0.1, 0.5));
-                let window = renderer.window_size();
+                game.renderer.draw_rect(Vec2::ZERO, window, Vec4::new(0.1, 0.1, 0.1, 0.5));
+                let window = game.renderer.window_size();
 
                 let rows = PLAYER_ROW_SIZE;
                 let cols = PLAYER_HOTBAR_SIZE;
@@ -280,8 +286,8 @@ impl UILayer {
                         let structure = game.structures.get_mut(*structure);
                         let inventory = &mut structure.inventory.as_mut().unwrap().slots;
 
-                        renderer.draw_rect(corner, external_view_size, Vec4::ONE);
-                        draw_inventory(renderer, &mut *inventory, game.player.body.position, &mut game.world, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
+                        game.renderer.draw_rect(corner, external_view_size, Vec4::ONE);
+                        draw_inventory(&mut game.renderer, &mut *inventory, game.player.body.position, &mut game.world, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
 
                         other_inv = Some(inventory.as_mut_slice());
                     },
@@ -300,8 +306,8 @@ impl UILayer {
                         let structure = game.structures.get_mut(*structure);
                         let inventory = &mut structure.inventory.as_mut().unwrap().slots;
 
-                        renderer.draw_rect(corner, external_view_size, Vec4::ONE);
-                        draw_inventory(renderer, inventory, game.player.body.position, &mut game.world, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
+                        game.renderer.draw_rect(corner, external_view_size, Vec4::ONE);
+                        draw_inventory(&mut game.renderer, inventory, game.player.body.position, &mut game.world, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
 
                         other_inv = Some(inventory.as_mut_slice());
                     },
@@ -317,10 +323,10 @@ impl UILayer {
 
                         let size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
 
-                        renderer.draw_rect(corner, size, Vec4::ONE);
+                        game.renderer.draw_rect(corner, size, Vec4::ONE);
 
                         let mut base = corner + padding * 0.5;
-                        let point = renderer.to_point(input.mouse_position());
+                        let point = game.renderer.to_point(input.mouse_position());
                         for col in 0..cols {
                             let mut pos = base;
                             for row in 0..rows {
@@ -335,9 +341,9 @@ impl UILayer {
                                     colour += Vec4::splat(0.4);
                                 }
                                
-                                renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
-                                renderer.draw_item_icon(curr_recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
-                                renderer.draw_text(format!("{}", curr_recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
+                                game.renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
+                                game.renderer.draw_item_icon(curr_recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
+                                game.renderer.draw_text(format!("{}", curr_recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
 
 
                                 if is_mouse_intersecting && input.is_button_just_pressed(glfw::MouseButton::Button1) {
@@ -389,7 +395,7 @@ impl UILayer {
                         corner.x += player_inv_size.x * 0.5;
                         corner.x += padding * 0.5;
 
-                        draw_recipes(renderer, game, input, holding_item, corner);
+                        draw_recipes(game, input, holding_item, corner);
                     },
                 }
                 }
@@ -398,7 +404,7 @@ impl UILayer {
                 corner.x -= player_inv_size.x * 0.5;
                 corner.x -= padding * 0.5;
 
-                draw_player_inventory(renderer, &mut game.player, &mut game.world, &mut other_inv, input, holding_item, corner);
+                draw_player_inventory(&mut game.renderer, &mut game.player, &mut game.world, &mut other_inv, input, holding_item, corner);
             }
 
             UILayer::Gameplay { smoothed_dt } => {
@@ -636,16 +642,19 @@ impl UILayer {
 
                     }
 
-                    renderer.draw_text(&text, Vec2::ZERO, 0.4, Vec4::ONE);
+                    game.renderer.draw_text(&text, Vec2::ZERO, 0.4, Vec4::ONE);
                 }
             },
+
+
+            UILayer::None => unreachable!(),
         }
     }
 }
 
 
 
-fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, _: &mut Option<Item>, corner: Vec2) {
+fn draw_recipes(game: &mut Game, input: &InputManager, _: &mut Option<Item>, corner: Vec2) {
     let rows = PLAYER_HOTBAR_SIZE;
     let cols = PLAYER_ROW_SIZE;
 
@@ -654,10 +663,10 @@ fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, 
 
     let size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
 
-    renderer.draw_rect(corner, size, Vec4::ONE);
+    game.renderer.draw_rect(corner, size, Vec4::ONE);
 
     let mut base = corner + padding * 0.5;
-    let point = renderer.to_point(input.mouse_position());
+    let point = game.renderer.to_point(input.mouse_position());
     for col in 0..cols {
         let mut pos = base;
         for row in 0..rows {
@@ -699,14 +708,14 @@ fn draw_recipes(renderer: &mut Renderer, game: &mut Game, input: &InputManager, 
                 colour += Vec4::splat(0.4);
             }
            
-            renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
-            renderer.draw_item_icon(recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
-            renderer.draw_text(format!("{}", recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
+            game.renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
+            game.renderer.draw_item_icon(recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
+            game.renderer.draw_text(format!("{}", recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
 
 
             if is_mouse_intersecting {
                 let size = Vec2::new(recipe.requirements.len() as f32, 1.0) * (padding + slot_size);
-                renderer.with_z(1.0, |renderer| {
+                game.renderer.with_z(1.0, |renderer| {
                 renderer.draw_rect(point, size, Vec4::new(0.2, 0.2, 0.2, 1.0));
                 let mut base = point + padding*0.5;
                 for item in recipe.requirements.iter() {

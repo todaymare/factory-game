@@ -1,8 +1,8 @@
 use glam::IVec3;
 
-use crate::{crafting::{Recipe, FURNACE_RECIPES, RECIPES}, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh, ui::InventoryMode};
+use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh};
 
-use super::{inventory::{SlotKind, SlotMeta, StructureInventory}};
+use super::inventory::{SlotKind, SlotMeta, StructureInventory};
 
 #[derive(Debug)]
 pub struct Structure {

@@ -109,7 +109,6 @@ impl InputManager {
 
 
     pub fn should_paste(&self) -> bool {
-        #[cfg(target_os="macos")]
         {
             (self.is_key_pressed(Key::LeftSuper) || self.is_key_pressed(Key::RightSuper))
             && self.is_key_pressed(Key::V)
@@ -117,7 +116,6 @@ impl InputManager {
     }
 
     pub fn should_paste_now(&self) -> bool {
-        #[cfg(target_os="macos")]
         {
             (self.is_key_pressed(Key::LeftSuper) || self.is_key_pressed(Key::RightSuper))
             && self.is_key_just_pressed(Key::V)
@@ -126,7 +124,6 @@ impl InputManager {
 
 
     pub fn should_delete_word(&self) -> bool {
-        #[cfg(target_os="macos")]
         {
             (self.is_key_pressed(Key::LeftAlt) || self.is_key_pressed(Key::RightAlt))
             && self.is_key_pressed(Key::Backspace)
@@ -134,7 +131,6 @@ impl InputManager {
     }
 
     pub fn should_delete_word_now(&self) -> bool {
-        #[cfg(target_os="macos")]
         {
             (self.is_key_pressed(Key::LeftAlt) || self.is_key_pressed(Key::RightAlt))
             && self.is_key_just_pressed(Key::Backspace)
@@ -143,7 +139,6 @@ impl InputManager {
 
 
     pub fn should_delete_line(&self) -> bool {
-        #[cfg(target_os="macos")]
         {
             (self.is_key_pressed(Key::LeftSuper) || self.is_key_pressed(Key::RightSuper))
             && self.is_key_just_pressed(Key::Backspace)

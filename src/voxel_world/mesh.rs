@@ -1,9 +1,6 @@
 use std::{mem::offset_of, ptr::null_mut};
 
 use glam::{UVec3, UVec4, Vec3, Vec4};
-use obj::{raw::object::Polygon, Obj, ObjResult};
-
-use crate::{directions::Direction};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]

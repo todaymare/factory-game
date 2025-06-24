@@ -3,26 +3,21 @@ pub mod work_queue;
 pub mod belts;
 pub mod inventory;
 
-use std::{f32::consts::TAU, hash::{DefaultHasher, Hash, Hasher}};
 
-use belts::{Belts, Node};
-use glam::{DVec3, IVec3, Mat4, Quat, Vec3};
-use inventory::{SlotKind, StructureInventory};
-use rand::seq::IndexedRandom;
+use glam::{DVec3, IVec3, Mat4, Vec3};
+use inventory::StructureInventory;
 use sti::{define_key, hash::fxhash::fxhash32};
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use tracing::warn;
 use work_queue::WorkQueue;
 
-use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, quad, renderer::Renderer, shader::ShaderProgram, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick, DROPPED_ITEM_SCALE, TICKS_PER_SECOND};
+use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, renderer::Renderer, shader::ShaderProgram, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick, DROPPED_ITEM_SCALE, TICKS_PER_SECOND};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
 
-
 #[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub struct StructureId(pub KeyGen<StructureGen, StructureKey>);
-
 
 
 pub struct Structures {

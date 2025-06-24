@@ -1,12 +1,8 @@
-use std::{collections::{hash_map::Entry, HashMap}, io::{BufReader, Read, Seek}, mem::offset_of, panic, ptr::null_mut};
+use std::{io::{Read, Seek}, mem::offset_of, ptr::null_mut};
 
-use glam::{IVec3, U8Vec3, USizeVec2, USizeVec3, UVec3, UVec4, Vec3, Vec4};
-use obj::{raw::object::Polygon, Obj, ObjResult};
-use rand::{random_range, seq::IndexedRandom};
-use tracing::{info, warn};
+use glam::{Vec3, Vec4};
+use tracing::warn;
 use voxel_mesher::VoxelMesh;
-
-use crate::{directions::Direction, quad::Quad};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -22,86 +18,6 @@ pub struct Mesh {
     vbo: u32,
     vao: u32,
     ebo: u32,
-}
-
-
-impl obj::FromRawVertex<u32> for Vertex {
-    fn process(
-        positions: Vec<(f32, f32, f32, f32)>,
-        normals: Vec<(f32, f32, f32)>,
-        _: Vec<(f32, f32, f32)>,
-        polygons: Vec<obj::raw::object::Polygon>,
-    ) -> obj::ObjResult<(Vec<Self>, Vec<u32>)> {
-        let mut vb = Vec::with_capacity(polygons.len() * 3);
-        let mut ib = Vec::with_capacity(polygons.len() * 3);
-        {
-            let mut cache = HashMap::new();
-            let mut map = |pi: usize, ni: usize| -> ObjResult<()> {
-                // Look up cache
-                let index = match cache.entry((pi, ni)) {
-                    // Cache miss -> make new, store it on cache
-                    Entry::Vacant(entry) => {
-                        let p = positions[pi];
-                        let n = normals[ni];
-                        let normal = Vec3::from_array(n.into());
-
-                        let light_dir = Vec3::new(0.5, 1.0, 0.5).normalize();
-                        let light = n.0 * light_dir.x + n.1 * light_dir.y + n.2 * light_dir.z; // dot product
-                        let intensity = 0.6 + light.max(0.0) * 0.4; // ambient + directional
-                        let colour = Vec3::splat(intensity);
-                        let colour = colour * 0.9 + colour * normal * 0.1;
-
-                        let r = (colour.x.clamp(0.0, 1.0) * 255.0).round() as u32;
-                        let g = (colour.y.clamp(0.0, 1.0) * 255.0).round() as u32;
-                        let b = (colour.z.clamp(0.0, 1.0) * 255.0).round() as u32;
-                        let a = (1.0 * 255.0f32).round() as u32;
-
-                        let colour = (r << 24) | (g << 16) | (b << 8) | a;
-
-                        let vertex = Vertex {
-                            position: Vec3::new(p.0, p.1, p.2),
-                            //normal,
-                            colour,
-                        };
-                        let index = match u32::try_from(vb.len()) {
-                            Ok(val) => val,
-                            Err(e) => panic!("{:?}", e),
-                        };
-                        vb.push(vertex);
-                        entry.insert(index);
-                        index
-                    }
-                    // Cache hit -> use it
-                    Entry::Occupied(entry) => *entry.get(),
-                };
-                ib.push(index);
-                Ok(())
-            };
-
-            for polygon in polygons {
-                match polygon {
-                    Polygon::P(_) | Polygon::PT(_) => panic!(
-                        "Tried to extract normal data which are not contained in the model"
-                    ),
-                    Polygon::PN(ref vec) if vec.len() == 3 => {
-                        for &(pi, ni) in vec {
-                            map(pi, ni)?;
-                        }
-                    }
-                    Polygon::PTN(ref vec) if vec.len() == 3 => {
-                        for &(pi, _, ni) in vec {
-                            map(pi, ni)?;
-                        }
-                    }
-                    _ => panic!(
-                        "Model should be triangulated first to be loaded properly"
-                    ),
-                }
-            }
-        }
-        vb.shrink_to_fit();
-        Ok((vb, ib))
-    }
 }
 
 

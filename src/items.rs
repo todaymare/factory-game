@@ -1,12 +1,11 @@
 use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
-use glam::{DVec3, IVec2, IVec3, Vec3, Vec4};
-use image::{codecs::png::PngDecoder, EncodableLayout, ImageDecoder};
+use glam::{DVec3, IVec2, IVec3, Vec3};
+use image::{codecs::png::PngDecoder, ImageDecoder};
 use rand::random;
 use tracing::error;
 
-use crate::{directions::Direction, mesh::{self, Mesh}, quad::Quad, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::StructureKind, voxel_world::voxel::Voxel, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
-
+use crate::{mesh::Mesh, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::StructureKind, voxel_world::voxel::Voxel, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
 
 #[derive(Clone)]
 pub struct DroppedItem {

@@ -2,19 +2,16 @@ pub mod chunk;
 pub mod voxel;
 pub mod mesh;
 
-use std::{collections::{HashMap, HashSet}, fs::{self, File}, hint::spin_loop, io::Write, ops::Bound, sync::{mpsc, Arc}, time::{Duration, Instant}};
+use std::{collections::{HashMap, HashSet}, fs::{self}, ops::Bound, sync::{mpsc, Arc}, time::Instant};
 
-use chunk::{ChunkData, MeshState, Noise};
-use glam::{DVec3, IVec2, IVec3, U64Vec2, USizeVec2, USizeVec3, Vec3, Vec4};
-use libnoise::{Perlin, Simplex, Source};
+use chunk::{ChunkData, Noise};
+use glam::{DVec3, IVec3, Vec3, Vec4};
 use mesh::{draw_quad, Vertex, VoxelMesh};
-use rand::seq::IndexedRandom;
-use rayon::{current_num_threads, iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator}};
 use save_format::byte::{ByteReader, ByteWriter};
-use tracing::{error, info, trace, warn};
+use tracing::{info, trace, warn};
 use voxel::Voxel;
 
-use crate::{directions::Direction, items::{DroppedItem, Item}, mesh::Mesh, perlin::PerlinNoise, quad::Quad, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::{Chunk, CHUNK_SIZE}, PhysicsBody};
+use crate::{constants::CHUNK_SIZE, items::{DroppedItem, Item}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
 
 
 type MeshMPSC = (IVec3, Vec<Vertex>, Vec<u32>, u32);
@@ -48,8 +45,6 @@ pub struct VoxelWorld {
     total_chunks: u32,
 
     pub loading_chunk_mesh: VoxelMesh,
-    timings: Vec<Duration>,
-
 }
 
 
@@ -88,7 +83,7 @@ impl VoxelWorld {
         Self {
             total_meshes: 0,
             total_chunks: 0,
-            timings: vec![],
+
             chunks: HashMap::new(),
             structure_blocks: sti::hash::HashMap::new(),
             dropped_items: vec![],
@@ -435,6 +430,11 @@ impl VoxelWorld {
             item
         }
 
+    }
+
+
+    pub fn drop_item(&mut self, item: Item, pos: DVec3) {
+        self.dropped_items.push(DroppedItem::new(item, pos));
     }
 
 

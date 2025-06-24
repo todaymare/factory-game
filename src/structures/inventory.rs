@@ -1,7 +1,3 @@
-use std::{thread::available_parallelism, usize};
-
-use tracing_subscriber::filter;
-
 use crate::items::{Item, ItemKind};
 
 #[derive(Debug)]
