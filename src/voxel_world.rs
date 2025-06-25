@@ -22,7 +22,7 @@ type SaveChunkMPSC = ();
 
 
 pub struct VoxelWorld {
-    pub chunks: HashMap<IVec3, Option<Chunk>>,
+    pub chunks: sti::hash::HashMap<IVec3, Option<Chunk>>,
     pub structure_blocks: sti::hash::HashMap<IVec3, StructureId>,
     pub dropped_items: Vec<DroppedItem>,
     remesh_queue: HashSet<IVec3>,
@@ -75,7 +75,7 @@ impl VoxelWorld {
             total_meshes: 0,
             total_chunks: 0,
 
-            chunks: HashMap::new(),
+            chunks: sti::hash::HashMap::new(),
             structure_blocks: sti::hash::HashMap::new(),
             dropped_items: vec![],
             remesh_queue: HashSet::new(),
@@ -103,7 +103,7 @@ impl VoxelWorld {
             let chunk_pos = if i == 0 { pos }
                       else { pos + SURROUNDING_OFFSETS[i-1] };
 
-            if self.try_get(chunk_pos).is_none() {
+            if self.try_get_chunk(chunk_pos).is_none() {
                 self.remesh_queue.insert(pos);
                 return;
             }
@@ -252,14 +252,11 @@ impl VoxelWorld {
 
 
     pub fn get_chunk(&mut self, pos: IVec3) -> &Chunk {
-        self.ensure_chunk_exists(pos);
-        self.chunks.get(&pos).unwrap().as_ref().unwrap()
+        &*self.ensure_chunk_exists(pos)
     }
 
 
     pub fn get_chunk_mut(&mut self, pos: IVec3) -> &mut Chunk {
-        self.ensure_chunk_exists(pos);
-
         for invalidate in SURROUNDING_OFFSETS {
             let pos = pos + invalidate;
             let Some(Some(chunk)) = self.chunks.get_mut(&pos)
@@ -269,7 +266,7 @@ impl VoxelWorld {
         }
 
 
-        let chunk = self.chunks.get_mut(&pos).unwrap().as_mut().unwrap();
+        let chunk = self.ensure_chunk_exists(pos);
         chunk.version += 1;
         chunk.is_dirty = true;
 
@@ -277,14 +274,41 @@ impl VoxelWorld {
     }
 
 
-    pub fn ensure_chunk_exists(&mut self, pos: IVec3) {
-        if let Some(chunk) = self.chunks.get(&pos)
-            && chunk.is_some() {
-            return;
+    pub fn try_get_chunk(&mut self, pos: IVec3) -> Option<&Chunk> {
+        let hash = self.chunks.hash(&pos);
+        let (present, slot) = self.chunks.lookup_for_insert(&pos, hash);
+        if !present {
+            self.chunks.insert_at(slot, hash, pos, None);
+            self.total_chunks += 1;
+            self.chunks.insert(pos, None);
+
+            let sender = self.chunk_sender.clone();
+            let perlin = self.noise.clone();
+            self.queued_chunks += 1;
+            rayon::spawn(move || {
+                let chunk = Self::chunk_creation_job(pos, &perlin);
+
+                if let Err(_) = sender.send((pos, chunk)) {
+                    warn!("chunk-generation-system: job receiver terminated before all meshing jobs were done");
+                }
+            });
+
+            return None;
+        }
+        return self.chunks.slot(slot).1.as_ref();
+    }
+
+
+    pub fn ensure_chunk_exists(&mut self, pos: IVec3) -> &mut Chunk {
+        let hash = self.chunks.hash(&pos);
+        let (present, slot) = self.chunks.lookup_for_insert(&pos, hash);
+
+        if !present || self.chunks.slot(slot).1.is_none() {
+            let chunk = Self::chunk_creation_job(pos, &self.noise);
+            self.chunks.insert_at(slot, hash, pos, Some(chunk));
         }
 
-        let chunk = Self::chunk_creation_job(pos, &self.noise);
-        self.chunks.insert(pos, Some(chunk));
+        return self.chunks.slot_mut(slot).1.as_mut().unwrap();
     }
 
 
@@ -326,44 +350,6 @@ impl VoxelWorld {
     }
 
 
-    pub fn get(&mut self, pos: IVec3) -> Option<&Chunk> {
-        if !self.chunks.contains_key(&pos) {
-            self.chunks.insert(pos, None);
-
-            let sender = self.chunk_sender.clone();
-            let perlin = self.noise.clone();
-            rayon::spawn(move || {
-                let chunk = Chunk::generate(pos, &perlin);
-                sender.send((pos, chunk)).unwrap();
-            });
-
-            return None;
-        }
-        self.chunks[&pos].as_ref()
-    }
-
-
-    pub fn try_get(&mut self, pos: IVec3) -> Option<&Chunk> {
-        if !self.chunks.contains_key(&pos) {
-            self.total_chunks += 1;
-            self.chunks.insert(pos, None);
-
-            let sender = self.chunk_sender.clone();
-            let perlin = self.noise.clone();
-            self.queued_chunks += 1;
-            rayon::spawn(move || {
-                let chunk = Self::chunk_creation_job(pos, &perlin);
-
-                if let Err(_) = sender.send((pos, chunk)) {
-                    warn!("chunk-generation-system: job receiver terminated before all meshing jobs were done");
-                }
-            });
-
-            return None;
-        }
-        self.chunks[&pos].as_ref()
-    }
-
 
     pub fn chunk_creation_job(pos: IVec3, noise: &Noise) -> Chunk {
         let path = format!("saves/chunks/{pos}.chunk");
@@ -390,7 +376,7 @@ impl VoxelWorld {
 
 
     pub fn try_get_mesh(&mut self, pos: IVec3) -> Option<&[Option<ChunkMesh>; 6]> {
-        let chunk = self.try_get(pos)?;
+        let chunk = self.try_get_chunk(pos)?;
 
         if chunk.version != chunk.current_mesh {
             info!("queueing the chunk at '{pos}' for remeshing");
@@ -613,7 +599,7 @@ impl VoxelWorld {
         // we just need the jobs to be over so we don't spam warnings
         while self.queued_meshes > 0 { if self.mesh_reciever.try_recv().is_ok() { self.queued_meshes -= 1} };
 
-        for pos in self.chunks.keys() {
+        for (pos, _) in self.chunks.iter() {
             self.unload_queue.push(*pos);
         }
 

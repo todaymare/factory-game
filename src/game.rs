@@ -192,7 +192,7 @@ impl Game {
 
         this.command_registry.register("remesh", |game, _| {
 
-            game.world.chunks.values_mut().filter_map(|x| x.as_mut()).for_each(|x| {
+            game.world.chunks.iter_mut().filter_map(|x| x.1.as_mut()).for_each(|x| {
                 x.meshes.iter_mut().for_each(|x| *x = None);
                 x.version += 1;
             });
@@ -651,7 +651,7 @@ impl Game {
             let mins = player_chunk - IVec3::splat(rd);
             let maxs = player_chunk + IVec3::splat(rd);
 
-            for pos in self.world.chunks.keys() {
+            for (pos, _) in self.world.chunks.iter() {
                 if pos.x < mins.x || pos.y < mins.y || pos.z < mins.z
                     || pos.x > maxs.x || pos.y > maxs.y || pos.z > maxs.z
                 {
