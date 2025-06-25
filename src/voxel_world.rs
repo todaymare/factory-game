@@ -613,7 +613,7 @@ impl VoxelWorld {
         while self.queued_chunk_saves > 0 { if self.save_chunk_receiver.try_recv().is_ok() { self.queued_chunk_saves -= 1} };
         info!("voxel-save-system: saved the world in {:?}", time.elapsed());
 
-        error!("average indicies: {}", self.indicies.iter().sum::<u32>() as usize / self.indicies.len());
+        //error!("average indicies: {}", self.indicies.iter().sum::<u32>() as usize / self.indicies.len());
     }
 
 

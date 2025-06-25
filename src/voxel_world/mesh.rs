@@ -9,6 +9,17 @@ pub struct Vertex {
     data2: u32,
 }
 
+const QUAD_VERTICES: &[f32] = &[
+    // positions     // colors
+    -1.0,  1.0,
+     1.0, -1.0,
+    -1.0, -1.0,
+
+    -1.0,  1.0,
+     1.0, -1.0,
+     1.0,  1.0,
+];
+
 
 #[derive(Debug)]
 pub struct ChunkMesh {

@@ -49,17 +49,19 @@ use structures::{strct::{Structure, StructureData, StructureKind}, Structures};
 define_key!(EntityId(u32));
 
 
-const MOUSE_SENSITIVITY : f32 = 0.0016;
+//const MOUSE_SENSITIVITY : f32 = 0.0016;
+const MOUSE_SENSITIVITY : f32 = 0.0;
 
 const PLAYER_REACH : f32 = 5.0;
-const PLAYER_SPEED : f32 = 10.0;
+//const PLAYER_SPEED : f32 = 10.0;
+const PLAYER_SPEED : f32 = 0.0;
 const PLAYER_PULL_DISTANCE : f32 = 3.5;
 const PLAYER_INTERACT_DELAY : f32 = 0.125;
 const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-const RENDER_DISTANCE : i32 = 8;
+const RENDER_DISTANCE : i32 = 32;
 
 const DROPPED_ITEM_SCALE : f32 = 0.5;
 
