@@ -582,6 +582,7 @@ impl Structure {
 
 
     pub fn render(&self, structures: &Structures, camera: &Camera, renderer: &Renderer, shader: &ShaderProgram) {
+        /*
         let kind = self.data.as_kind();
 
         let position = self.zero_zero();
@@ -702,6 +703,7 @@ impl Structure {
         let model = Mat4::from_translation(mesh_position) * Mat4::from_scale(dims) * Mat4::from_rotation_y(rot);
         shader.set_matrix4(c"model", model);
         mesh.draw();
+        */
     }
 }
 

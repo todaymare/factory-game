@@ -3,11 +3,11 @@ pub mod save_system;
 use std::time::Instant;
 
 use glam::{usize, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
-use glfw::{Key, MouseButton};
 use sti::hash::fxhash::{fxhash32, FxHasher32};
 use tracing::{info, trace, warn};
+use winit::{event::MouseButton, keyboard::KeyCode};
 
-use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE, COLOUR_DENY, COLOUR_PASS, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::{CardinalDirection, Direction}, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, mesh::Mesh, renderer::Renderer, shader::{Shader, ShaderProgram, ShaderType}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{self, InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, PhysicsBody, Player, Tick, DELTA_TICK, DROPPED_ITEM_SCALE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND};
+use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE, COLOUR_DENY, COLOUR_PASS, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::{CardinalDirection, Direction}, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, mesh::Mesh, renderer::{gpu_allocator::GPUAllocator, Renderer}, shader::{Shader, ShaderProgram, ShaderType}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{self, InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{mesh::ChunkVertex, split_world_pos, voxel::Voxel, VoxelWorld}, Camera, PhysicsBody, Player, Tick, DELTA_TICK, DROPPED_ITEM_SCALE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND};
 
 pub struct Game {
     pub world: VoxelWorld,
@@ -26,14 +26,13 @@ pub struct Game {
     pub lock_frustum: Option<Frustum>,
     pub sky_colour: Vec4,
     ui_layer: UILayer,
-    pub renderer: Renderer,
 
     pub settings: Settings,
 
-    block_outline_mesh: Mesh,
+    //block_outline_mesh: Mesh,
 
-    shader_mesh: ShaderProgram,
-    shader_world: ShaderProgram,
+    //shader_mesh: ShaderProgram,
+    //shader_world: ShaderProgram,
 }
 
 #[derive(Clone, Copy)]
@@ -48,19 +47,17 @@ pub struct Settings {
 impl Game {
     pub fn new() -> Game {
         // this also inits glfw + opengl
-        let renderer = Renderer::new((1920/2, 1080/2));
-
-        let fragment = Shader::new(&std::fs::read("shaders/mesh.fs").unwrap(), ShaderType::Fragment).unwrap();
-        let vertex = Shader::new(&std::fs::read("shaders/mesh.vs").unwrap(), ShaderType::Vertex).unwrap();
-        let shader_mesh = ShaderProgram::new(fragment, vertex).unwrap();
+        //let fragment = Shader::new(&std::fs::read("shaders/mesh.fs").unwrap(), ShaderType::Fragment).unwrap();
+        //let vertex = Shader::new(&std::fs::read("shaders/mesh.vs").unwrap(), ShaderType::Vertex).unwrap();
+        //let shader_mesh = ShaderProgram::new(fragment, vertex).unwrap();
 
 
-        let fragment = Shader::new(&std::fs::read("shaders/voxel.fs").unwrap(), ShaderType::Fragment).unwrap();
-        let vertex = Shader::new(&std::fs::read("shaders/voxel.vs").unwrap(), ShaderType::Vertex).unwrap();
-        let shader_world = ShaderProgram::new(fragment, vertex).unwrap();
+        //let fragment = Shader::new(&std::fs::read("shaders/voxel.fs").unwrap(), ShaderType::Fragment).unwrap();
+        //let vertex = Shader::new(&std::fs::read("shaders/voxel.vs").unwrap(), ShaderType::Vertex).unwrap();
+        //let shader_world = ShaderProgram::new(fragment, vertex).unwrap();
 
 
-        let block_outline_mesh = Mesh::from_vmf("assets/models/block_outline.vmf");
+        //let block_outline_mesh = Mesh::from_vmf("assets/models/block_outline.vmf");
 
         let mut this = Game {
             triangle_count: 0,
@@ -119,13 +116,6 @@ impl Game {
                 render_distance: RENDER_DISTANCE,
             },
 
-
-            block_outline_mesh,
-            shader_mesh,
-            shader_world,
-
-
-            renderer,
         };
 
 
@@ -265,7 +255,7 @@ impl Game {
 
 
             let dt = input.scroll_delta();
-            if input.is_key_pressed(Key::LeftControl) {
+            if input.is_key_pressed(KeyCode::ControlLeft) {
                 if dt.y > 0.0 && self.player.hotbar == PLAYER_ROW_SIZE-1 { self.player.hotbar = 0 }
                 else if dt.y > 0.0 { self.player.hotbar += 1 }
                 if dt.y < 0.0 && self.player.hotbar == 0 { self.player.hotbar = PLAYER_ROW_SIZE-1 }
@@ -281,7 +271,7 @@ impl Game {
 
         // handle keyboard input
         'input: {
-            if input.is_key_just_pressed(Key::Escape) {
+            if input.is_key_just_pressed(KeyCode::Escape) {
                 let mut ui_layer = core::mem::replace(&mut self.ui_layer, UILayer::None);
                 ui_layer.close(self, delta_time);
                 self.ui_layer = UILayer::Gameplay { smoothed_dt: delta_time };
@@ -291,20 +281,24 @@ impl Game {
                 break 'input;
             }
 
+            if input.is_key_pressed(KeyCode::KeyJ) {
+                self.player.body.position.y += 5.0;
+            }
+
             let mut dir = Vec3::ZERO;
-            if input.is_key_pressed(Key::W) {
+            if input.is_key_pressed(KeyCode::KeyW) {
                 dir += self.camera.front;
-            } else if input.is_key_pressed(Key::S) {
+            } else if input.is_key_pressed(KeyCode::KeyS) {
                 dir -= self.camera.front;
             }
 
-            if input.is_key_pressed(Key::D) {
+            if input.is_key_pressed(KeyCode::KeyD) {
                 dir += self.camera.front.cross(self.camera.up);
-            } else if input.is_key_pressed(Key::A) {
+            } else if input.is_key_pressed(KeyCode::KeyA) {
                 dir -= self.camera.front.cross(self.camera.up);
             }
 
-            if input.is_key_pressed(Key::C) {
+            if input.is_key_pressed(KeyCode::KeyC) {
                 self.camera.fov = 15f32.to_radians();
             } else {
                 self.camera.fov = 80f32.to_radians();
@@ -318,12 +312,12 @@ impl Game {
             self.player.body.velocity.z = mov.z;
 
 
-            if input.is_key_pressed(Key::Space) {
+            if input.is_key_pressed(KeyCode::Space) {
                 self.player.body.velocity.y = 5.0;
             }
 
 
-            if input.is_key_pressed(Key::Q) {
+            if input.is_key_pressed(KeyCode::KeyQ) {
                 let raycast = self.world.raycast_voxel(self.camera.position,
                                                   self.camera.front,
                                                   PLAYER_REACH);
@@ -354,7 +348,7 @@ impl Game {
 
             if let Some(item) = self.player.inventory[self.player.hand_index()]
                 && matches!(item.kind, ItemKind::Voxel(_) | ItemKind::Structure(_)) {
-                if input.is_key_just_pressed(Key::R) {
+                if input.is_key_just_pressed(KeyCode::KeyR) {
                     self.player.preview_rotation_offset += 1;
                     self.player.preview_rotation_offset %= 4;
                 }
@@ -369,7 +363,7 @@ impl Game {
 
 
 
-            if input.is_key_pressed(Key::X) {
+            if input.is_key_pressed(KeyCode::KeyX) {
                 let raycast = self.world.raycast_voxel(self.camera.position,
                                                   self.camera.front,
                                                   PLAYER_REACH);
@@ -401,7 +395,7 @@ impl Game {
             }
 
 
-            'i: { if input.is_key_just_pressed(Key::E) {
+            'i: { if input.is_key_just_pressed(KeyCode::KeyE) {
                 if matches!(self.ui_layer, UILayer::Inventory { .. }) {
                     break 'i;
                 } 
@@ -430,19 +424,14 @@ impl Game {
             } }
 
 
-            if input.is_key_just_pressed(Key::G) {
+            if input.is_key_just_pressed(KeyCode::KeyG) {
                 info!("generating a belt graph at 'sccs.dot'");
                 let belts = self.structures.belts(&self.world);
                 std::fs::write("sccs.dot", belts.scc_graph()).unwrap();
             }
 
 
-            if input.is_key_just_pressed(Key::P) {
-                self.renderer.is_wireframe = !self.renderer.is_wireframe;
-            }
-
-
-            if input.is_key_just_pressed(Key::Enter) {
+            if input.is_key_just_pressed(KeyCode::Enter) {
                 if !matches!(self.ui_layer, UILayer::Console { .. }) {
                     self.ui_layer = UILayer::Console {
                         text: String::new(),
@@ -456,7 +445,7 @@ impl Game {
             }
 
 
-            if input.is_key_just_pressed(Key::F6) {
+            if input.is_key_just_pressed(KeyCode::F6) {
                 info!("saving self on-command");
                 let time = Instant::now();
                 self.save();
@@ -464,7 +453,7 @@ impl Game {
             }
 
 
-            if input.is_key_just_pressed(Key::F7) {
+            if input.is_key_just_pressed(KeyCode::F7) {
                 info!("loading self on-command");
                 let time = Instant::now();
                 self.load();
@@ -473,14 +462,14 @@ impl Game {
 
 
 
-            if input.is_key_pressed(Key::LeftControl) {
+            if input.is_key_pressed(KeyCode::ControlLeft) {
                 let mut offset = None;
-                if input.is_key_just_pressed(Key::Num1) { offset = Some(0) }
-                if input.is_key_just_pressed(Key::Num2) { offset = Some(1) }
-                if input.is_key_just_pressed(Key::Num3) { offset = Some(2) }
-                if input.is_key_just_pressed(Key::Num4) { offset = Some(3) }
-                if input.is_key_just_pressed(Key::Num5) { offset = Some(4) }
-                if input.is_key_just_pressed(Key::Num6) { offset = Some(5) }
+                if input.is_key_just_pressed(KeyCode::Numpad1) { offset = Some(0) }
+                if input.is_key_just_pressed(KeyCode::Numpad2) { offset = Some(1) }
+                if input.is_key_just_pressed(KeyCode::Numpad3) { offset = Some(2) }
+                if input.is_key_just_pressed(KeyCode::Numpad4) { offset = Some(3) }
+                if input.is_key_just_pressed(KeyCode::Numpad5) { offset = Some(4) }
+                if input.is_key_just_pressed(KeyCode::Numpad6) { offset = Some(5) }
 
                 if let Some(offset) = offset {
                     self.player.hotbar = offset;
@@ -504,7 +493,7 @@ impl Game {
 
 
             'input_block: {
-                if !input.is_button_pressed(MouseButton::Button1) {
+                if !input.is_button_pressed(MouseButton::Left) {
                     self.player.mining_progress = None;
                     break 'input_block;
                 }
@@ -544,7 +533,7 @@ impl Game {
 
 
             'input_block: {
-                if input.is_button_just_pressed(MouseButton::Button2) {
+                if input.is_button_just_pressed(MouseButton::Right) {
                     self.player.interact_delay = 0.0;
                 }
 
@@ -552,7 +541,7 @@ impl Game {
                     break 'input_block;
                 }
 
-                if !input.is_button_pressed(MouseButton::Button2) {
+                if !input.is_button_pressed(MouseButton::Right) {
                     break 'input_block;
                 }
 
@@ -764,11 +753,12 @@ impl Game {
     }
 
 
-    pub fn update_world(&mut self) {
-        self.world.process();
+    pub fn update_world(&mut self, voxel_allocator: &mut GPUAllocator<ChunkVertex>, index_allocator: &mut GPUAllocator<u32>) {
+        self.world.process(voxel_allocator, index_allocator);
     }
 
 
+    /*
     pub fn render(&mut self, input: &mut InputManager, dt: f32) {
         self.renderer.ui_scale = self.settings.ui_scale;
         self.renderer.begin(self.sky_colour);
@@ -1227,13 +1217,13 @@ impl Game {
 
 
         self.renderer.end();
-    }
+    }*/
 }
 
 
 
 impl Drop for Game {
     fn drop(&mut self) {
-        self.block_outline_mesh.destroy();
+        //self.block_outline_mesh.destroy();
     }
 }

@@ -125,5 +125,17 @@ impl Vertex {
 
         Self { position: pos, colour }
     }
+
+
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRS: &[wgpu::VertexAttribute] =
+            &wgpu::vertex_attr_array![0 => Float32x3, 1 => Uint32];
+
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: ATTRS,
+        }
+    }
 }
 

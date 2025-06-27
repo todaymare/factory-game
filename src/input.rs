@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 
 use glam::Vec2;
-use glfw::{Key, MouseButton};
+use winit::{event::MouseButton, keyboard::{KeyCode, PhysicalKey}};
 
 #[derive(Debug, Default)]
 pub struct InputManager {
-    down_keys: HashSet<Key>,
+    down_keys: HashSet<PhysicalKey>,
     down_buttons: HashSet<MouseButton>,
-    just_pressed_key: Vec<Key>,
+    just_pressed_key: Vec<PhysicalKey>,
     just_pressed_button: Vec<MouseButton>,
     current_chars: Vec<char>,
 
@@ -40,13 +40,13 @@ impl InputManager {
     }
 
 
-    pub fn set_pressed_key(&mut self, key: Key) {
+    pub fn set_pressed_key(&mut self, key: PhysicalKey) {
         self.down_keys.insert(key);
         self.just_pressed_key.push(key);
     }
 
 
-    pub fn set_unpressed_key(&mut self, key: Key) {
+    pub fn set_unpressed_key(&mut self, key: PhysicalKey) {
         self.down_keys.remove(&key);
     }
 
@@ -78,12 +78,14 @@ impl InputManager {
     pub fn scroll_delta(&self) -> Vec2 { self.scroll_dt }
 
 
-    pub fn is_key_pressed(&self, key: Key) -> bool {
+    pub fn is_key_pressed(&self, key: KeyCode) -> bool {
+        let key = PhysicalKey::Code(key);
         self.down_keys.contains(&key)
     }
 
 
-    pub fn is_key_just_pressed(&self, key: Key) -> bool {
+    pub fn is_key_just_pressed(&self, key: KeyCode) -> bool {
+        let key = PhysicalKey::Code(key);
         self.just_pressed_key.iter().find(|x| **x == key).is_some()
     }
 
@@ -99,49 +101,49 @@ impl InputManager {
 
 
     pub fn is_super_pressed(&self) -> bool {
-        self.is_key_pressed(Key::LeftSuper) || self.is_key_pressed(Key::RightSuper)
+        self.is_key_pressed(KeyCode::SuperLeft) || self.is_key_pressed(KeyCode::SuperRight)
     }
 
 
     pub fn is_alt_pressed(&self) -> bool {
-        self.is_key_pressed(Key::LeftAlt) || self.is_key_pressed(Key::RightAlt)
+        self.is_key_pressed(KeyCode::AltLeft) || self.is_key_pressed(KeyCode::AltRight)
     }
 
 
     pub fn should_paste(&self) -> bool {
         {
-            (self.is_key_pressed(Key::LeftSuper) || self.is_key_pressed(Key::RightSuper))
-            && self.is_key_pressed(Key::V)
+            (self.is_key_pressed(KeyCode::SuperLeft) || self.is_key_pressed(KeyCode::SuperRight))
+            && self.is_key_pressed(KeyCode::KeyV)
         }
     }
 
     pub fn should_paste_now(&self) -> bool {
         {
-            (self.is_key_pressed(Key::LeftSuper) || self.is_key_pressed(Key::RightSuper))
-            && self.is_key_just_pressed(Key::V)
+            (self.is_key_pressed(KeyCode::SuperLeft) || self.is_key_pressed(KeyCode::SuperRight))
+            && self.is_key_just_pressed(KeyCode::KeyV)
         }
     }
 
 
     pub fn should_delete_word(&self) -> bool {
         {
-            (self.is_key_pressed(Key::LeftAlt) || self.is_key_pressed(Key::RightAlt))
-            && self.is_key_pressed(Key::Backspace)
+            (self.is_key_pressed(KeyCode::AltLeft) || self.is_key_pressed(KeyCode::AltRight))
+            && self.is_key_pressed(KeyCode::Backspace)
         }
     }
 
     pub fn should_delete_word_now(&self) -> bool {
         {
-            (self.is_key_pressed(Key::LeftAlt) || self.is_key_pressed(Key::RightAlt))
-            && self.is_key_just_pressed(Key::Backspace)
+            (self.is_key_pressed(KeyCode::AltLeft) || self.is_key_pressed(KeyCode::AltRight))
+            && self.is_key_just_pressed(KeyCode::Backspace)
         }
     }
 
 
     pub fn should_delete_line(&self) -> bool {
         {
-            (self.is_key_pressed(Key::LeftSuper) || self.is_key_pressed(Key::RightSuper))
-            && self.is_key_just_pressed(Key::Backspace)
+            (self.is_key_pressed(KeyCode::SuperLeft) || self.is_key_pressed(KeyCode::SuperRight))
+            && self.is_key_just_pressed(KeyCode::Backspace)
         }
     }
 

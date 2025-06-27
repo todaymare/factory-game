@@ -2,7 +2,7 @@ use rand::random;
 
 #[derive(Clone, PartialEq)]
 pub struct BuddyAllocator {
-    arrays: Vec<Vec<usize>>,
+    pub arrays: Vec<Vec<usize>>,
 }
 
 
@@ -89,7 +89,7 @@ impl core::fmt::Debug for BuddyAllocator {
         let mut s = f.debug_struct("GPUAllocator");
         for i in 0..self.arrays.len() {
             let arr = &self.arrays[i];
-            s.field(&format!("{} bytes", 2u32.pow(i as u32)), arr);
+            s.field(&format!("{} elements", 2u32.pow(i as u32)), arr);
         }
         s.finish()
         
@@ -124,6 +124,26 @@ mod tests {
         }
 
         assert_eq!(alloc, base_alloc);
+    }
+
+
+    #[test]
+    fn test_buddy_allocator_alloc_free() {
+        let mut allocator = BuddyAllocator::new(1024 * 1024);
+
+        let idx1 = allocator.alloc(128).expect("Failed to allocate 128 bytes");
+        let idx2 = allocator.alloc(256).expect("Failed to allocate 256 bytes");
+
+        assert_ne!(idx1, idx2);
+
+        allocator.free(idx1, 128);
+        allocator.free(idx2, 256);
+
+        let idx3 = allocator.alloc(384).expect("Failed to allocate 384 bytes after free");
+
+        assert!(idx3 <= idx1.min(idx2));
+
+        allocator.free(idx3, 384);
     }
 }
 

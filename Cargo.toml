@@ -4,9 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-glam = { version = "*", features = ["rand", "serde"] }
-gl = "*"
+glam = { version = "*", features = ["rand", "bytemuck"] }
+wgpu = "*"
+wgpu-profiler = "*"
+winit = "*"
+bytemuck = "*"
+pollster = "*"
+
 glfw = "*"
+gl = "*"
+
 sti = { git = "https://github.com/leddoo/sti" }
 save-format = { git = "https://github.com/rookieCookies/save-format" }
 voxel-mesher = { git = "https://github.com/rookieCookies/voxel-mesher" }

@@ -1,14 +1,24 @@
 pub mod textures;
+pub mod uniform;
+pub mod ssbo;
+pub mod gpu_allocator;
 
 use std::{cell::Cell, collections::HashMap, ffi::CString, fs, mem::offset_of, ptr::null_mut};
 
+use bytemuck::{Pod, Zeroable};
 use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
 use glam::{IVec2, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
+use gpu_allocator::GPUAllocator;
+use ssbo::SSBO;
+use sti::static_assert_eq;
 use textures::{TextureAtlasBuilder, TextureAtlasManager, TextureId};
 use tracing::{error, warn};
+use uniform::Uniform;
+use wgpu::{util::StagingBelt, wgc::id::markers::StagingBuffer, BufferUsages, BufferUses, TextureUsages, *};
+use winit::{event_loop::EventLoop, window::Window};
 
-use crate::{directions::CardinalDirection, items::{Assets, ItemKind}, mesh::Mesh, shader::{Shader, ShaderProgram, ShaderType}, voxel_world::mesh::ChunkMesh};
+use crate::{directions::CardinalDirection, items::{Assets, ItemKind}, mesh::{Mesh, Vertex}, shader::{Shader, ShaderProgram, ShaderType}, voxel_world::mesh::{ChunkMesh, ChunkVertex}};
 
 
 const FONT_SIZE : u32 = 64;
@@ -20,6 +30,7 @@ const FONT_SIZE : u32 = 64;
 // whichever comes first
 
 pub struct Renderer {
+    /*
     pub glfw: glfw::Glfw,
     pub window: PWindow,
     pub window_events: GlfwReceiver<(f64, WindowEvent)>,
@@ -35,7 +46,18 @@ pub struct Renderer {
 
     pub atlases: TextureAtlasManager,
 
-    pub meshes: Assets,
+    pub meshes: Assets,*/
+
+
+    pub surface: wgpu::Surface<'static>,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub config: wgpu::SurfaceConfiguration,
+    //pub mesh_pipeline: wgpu::RenderPipeline,
+    pub voxel_pipeline: VoxelPipeline,
+    pub staging_buffer: StagingBelt,
+
+
     pub ui_scale: f32,
     pub rects: Vec<DrawRect>,
 
@@ -64,9 +86,250 @@ pub struct Character {
 }
 
 
-impl Renderer {
-    pub fn new(window_size: (usize, usize)) -> Self {
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct MeshShaderUniform {
+    model: Mat4,
+    modulate: Vec4,
+}
 
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct VoxelShaderUniform {
+    pub view: Mat4,
+    pub projection: Mat4,
+    pub modulate: Vec4,
+    pub camera_pos: Vec3,
+    pub pad_00: f32,
+    pub fog_color: Vec3,
+    pub pad_01: f32,
+    pub fog_density: f32,
+    pub fog_start: f32,
+    pub fog_end: f32,
+    pub pad_02: f32,
+}
+
+static_assert_eq!(size_of::<VoxelShaderUniform>(), 192);
+
+
+pub struct VoxelPipeline {
+    pub pipeline: RenderPipeline,
+    pub frame_uniform: Uniform<VoxelShaderUniform>,
+    pub model_uniform: SSBO<Vec4>,
+    pub depth_buffer: DepthBuffer,
+
+    pub vertex_buf: GPUAllocator<ChunkVertex>,
+    pub index_buf: GPUAllocator<u32>,
+}
+
+
+impl Renderer {
+    pub async fn new(window: &'static Window) -> Self {
+
+        let size = window.inner_size();
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+
+        let surface = instance.create_surface(window).unwrap();
+
+        let adapter = instance.request_adapter(
+            &wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            }
+        ).await.unwrap();
+
+        let (device, queue) = adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::POLYGON_MODE_LINE
+                                    | wgpu::Features::TEXTURE_BINDING_ARRAY
+                                    | wgpu::Features::STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING
+                                    | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
+                                    | wgpu::Features::PUSH_CONSTANTS
+                                    | wgpu::Features::TIMESTAMP_QUERY,
+                required_limits: {
+                    let mut limits = wgpu::Limits::downlevel_defaults();
+                    limits.max_buffer_size = 17179869184;
+                    limits
+                },
+                label: Some("main device"),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off
+            },
+        ).await.unwrap();
+
+        let surface_capabilities = surface.get_capabilities(&adapter);
+
+        let surface_format = surface_capabilities.formats.iter()
+            .find(|f| f.is_srgb())
+            .copied()
+            .unwrap_or(surface_capabilities.formats[0]);
+
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: size.width,
+            height: size.height,
+            present_mode: wgpu::PresentMode::Immediate,
+            alpha_mode: surface_capabilities.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+
+        surface.configure(&device, &config);
+
+/*
+        let mesh_pipeline = {
+            let mesh_shader_uniform = Uniform::<MeshShaderUniform>::new("mesh-shader-uniform", &device, 0, 1, ShaderStages::VERTEX_FRAGMENT);
+
+            let shader = device.create_shader_module(
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("mesh-shader"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/mesh.wgsl").into()),
+                }
+            );
+
+
+            let rpl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("mesh-render-pipeline-layout"),
+                bind_group_layouts: &[camera_uniform.bind_group_layout(), mesh_shader_uniform.bind_group_layout()],
+                push_constant_ranges: &[],
+            });
+
+
+            let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("mesh-render-pipeline"),
+                layout: Some(&rpl),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"), // 1.
+                    buffers: &[Vertex::desc()], // 2.
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState { // 3.
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState { // 4.
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw, // 2.
+                    cull_mode: Some(wgpu::Face::Back),
+                    // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    // Requires Features::DEPTH_CLIP_CONTROL
+                    unclipped_depth: false,
+                    // Requires Features::CONSERVATIVE_RASTERIZATION
+                    conservative: false,
+                },
+                depth_stencil: None, // 1.
+                multisample: wgpu::MultisampleState {
+                    count: 1, // 2.
+                    mask: !0, // 3.
+                    alpha_to_coverage_enabled: false, // 4.
+                },
+                multiview: None, // 5.
+                cache: None, // 6.
+            });
+
+
+            render_pipeline
+        };*/
+
+
+
+        let voxel_pipeline = {
+            let voxel_shader_uniform = Uniform::<VoxelShaderUniform>::new("voxel-shader-frame-uniform", &device, 0, ShaderStages::VERTEX_FRAGMENT);
+            let ssbo = SSBO::new(&device, BufferUsages::COPY_DST | BufferUsages::STORAGE, &[Vec4::default(); 10240]);
+
+            let shader = device.create_shader_module(
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("voxel-shader"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/voxel.wgsl").into()),
+                }
+            );
+
+
+            let rpl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("voxel-render-pipeline-layout"),
+                bind_group_layouts: &[voxel_shader_uniform.bind_group_layout(), ssbo.layout()],
+                push_constant_ranges: &[],
+            });
+
+
+            let depth_texture = DepthBuffer::new(&device, config.width, config.height); 
+
+
+            let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("voxel-render-pipeline"),
+                layout: Some(&rpl),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"), // 1.
+                    buffers: &[ChunkVertex::desc()], // 2.
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState { // 3.
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState { // 4.
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw, // 2.
+                    cull_mode: Some(wgpu::Face::Back),
+                    // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                    polygon_mode: wgpu::PolygonMode::Line,
+                    // Requires Features::DEPTH_CLIP_CONTROL
+                    unclipped_depth: false,
+                    // Requires Features::CONSERVATIVE_RASTERIZATION
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1, // 2.
+                    mask: !0, // 3.
+                    alpha_to_coverage_enabled: false, // 4.
+                },
+                multiview: None, // 5.
+                cache: None, // 6.
+            });
+
+
+            VoxelPipeline {
+                pipeline: render_pipeline,
+                frame_uniform: voxel_shader_uniform,
+                model_uniform: ssbo,
+                depth_buffer: depth_texture,
+                vertex_buf: GPUAllocator::new(&device, 10),
+                index_buf: GPUAllocator::new(&device, 10),
+            }
+        };
+
+        /*
         let mut glfw = glfw::init(|error, str| error!("glfw error {str}: {error}"))
             .unwrap();
 
@@ -226,8 +489,9 @@ impl Renderer {
         atlases.register(font_ta, text_shader);
 
         glfw.set_swap_interval(glfw::SwapInterval::None);
-
+*/
         let this = Self {
+            /*
             glfw,
             window,
             window_events,
@@ -235,15 +499,23 @@ impl Renderer {
             quad_vbo,
             white,
             characters,
-            is_wireframe: false,
             biggest_y_size,
             meshes: assets,
             atlases,
+            */
+
             ui_scale: 1.0,
             rects: vec![],
             current_rect: ScreenRect::new(),
             draw_count: Cell::new(0),
             triangle_count: Cell::new(0),
+            surface,
+            device,
+            queue,
+            config,
+            //mesh_pipeline,
+            voxel_pipeline,
+            staging_buffer: StagingBelt::new(10240),
         };
 
         this
@@ -252,6 +524,7 @@ impl Renderer {
 
     pub fn begin(&mut self, colour: Vec4) {
 
+        /*
         unsafe {
             gl::Enable(gl::DEPTH_TEST);
             gl::ClearColor(colour.x, colour.y, colour.z, colour.w);
@@ -264,11 +537,12 @@ impl Renderer {
             } else {
                 gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
             }
-        }
+        }*/
     }
 
 
     pub fn end(&mut self) {
+        /*
         unsafe { gl::Clear(gl::DEPTH_BUFFER_BIT) };
 
         let mut z = 0.0;
@@ -326,10 +600,11 @@ impl Renderer {
         }
 
         self.window.swap_buffers();
-        self.glfw.poll_events();
+        self.glfw.poll_events();*/
     }
 
 
+    /*
     pub fn to_point(&self, pos: Vec2) -> Vec2 {
         pos / self.ui_scale
     }
@@ -544,7 +819,7 @@ impl Renderer {
         }
 
         Vec2::new(x_size, y_size)
-    }
+    }*/
 }
 
 
@@ -712,5 +987,35 @@ impl Style {
     pub fn fallback_pos(mut self, pos: Vec2) -> Self {
         self.fallback_pos = pos;
         self
+    }
+}
+
+
+pub struct DepthBuffer {
+    pub view: wgpu::TextureView,
+    pub format: wgpu::TextureFormat,
+}
+
+impl DepthBuffer {
+    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        let format = wgpu::TextureFormat::Depth32Float;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        Self { view, format }
     }
 }

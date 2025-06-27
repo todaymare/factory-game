@@ -2,6 +2,7 @@ use std::{ops::Bound, fmt::Write};
 
 use glam::{DVec3, Vec2, Vec4};
 use glfw::{CursorMode, Key};
+use winit::keyboard::KeyCode;
 
 use crate::{commands::Command, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{SlotKind, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{split_world_pos, VoxelWorld}, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND};
 
@@ -32,8 +33,8 @@ pub enum InventoryMode {
 }
 
 
-pub const HOTBAR_KEYS : &[Key] = &[Key::Num1, Key::Num2, Key::Num3,
-                               Key::Num4, Key::Num5];
+pub const HOTBAR_KEYS : &[KeyCode] = &[KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3,
+                               KeyCode::Digit4, KeyCode::Digit5];
 const SLOT_SIZE : f32 = 64.0;
 
 
@@ -88,6 +89,7 @@ impl UILayer {
 
 
     pub fn render(&mut self, game: &mut Game, input: &InputManager, dt: f32) {
+        /*
         match self {
             UILayer::Console { text, backspace_cooldown, timer, cursor, just_opened, offset } => {
                 const TEXT_SIZE : f32 = 0.5;
@@ -652,12 +654,13 @@ impl UILayer {
 
 
             UILayer::None => unreachable!(),
-        }
+        }*/
     }
 }
 
 
 
+/*
 fn draw_recipes(game: &mut Game, input: &InputManager, _: &mut Option<Item>, corner: Vec2) {
     let rows = PLAYER_HOTBAR_SIZE;
     let cols = PLAYER_ROW_SIZE;
@@ -1140,4 +1143,4 @@ fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
 
     }
 
-}
+}*/
