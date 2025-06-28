@@ -241,11 +241,12 @@ impl ApplicationHandler for App {
 
                     let mut quad_count = 0;
                     let mut mesh_count = 0;
+                    let mut chunk_count = 0;
 
                     let now = Instant::now();
-                    for y in -rd..rd {
-                        for z in -rd..rd {
-                            for x in -rd..rd {
+                    for y in -rd..=rd {
+                        for z in -rd..=rd {
+                            for x in -rd..=rd {
                                 let offset = IVec3::new(x, y, z);
 
                                 if offset.length_squared() > (rd*rd) {
@@ -265,6 +266,7 @@ impl ApplicationHandler for App {
                                     continue;
                                 }
 
+                                chunk_count += 1;
                                 let Some(meshes) = game.world.try_get_mesh(chunk_pos)
                                 else { continue };
 
@@ -368,7 +370,7 @@ impl ApplicationHandler for App {
                     renderer.queue.submit(std::iter::once(encoder.finish()));
                     renderer.staging_buffer.recall();
 
-                    println!("quad count: {quad_count}, mesh count {mesh_count}");
+                    println!("quad count: {quad_count}, mesh count {mesh_count}, chunk count {chunk_count}");
                 }
 
                 let render_time = now.elapsed();

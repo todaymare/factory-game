@@ -407,14 +407,37 @@ impl VoxelWorld {
 
 
     pub fn try_get_mesh(&mut self, pos: IVec3) -> Option<&[Option<ChunkMesh>; 6]> {
-        let chunk = self.try_get_chunk(pos)?;
+        let chunk = {
+            let hash = self.chunks.hash(&pos);
+            let (present, slot) = self.chunks.lookup_for_insert(&pos, hash);
+
+            if !present {
+                self.chunks.insert_at(slot, hash, pos, None);
+                self.total_chunks += 1;
+
+                let sender = self.chunk_sender.clone();
+                let perlin = self.noise.clone();
+
+                self.queued_chunks += 1;
+                rayon::spawn(move || {
+                    let chunk = Self::chunk_creation_job(pos, &perlin);
+
+                    if let Err(_) = sender.send((pos, chunk)) {
+                        warn!("chunk-generation-system: job receiver terminated before all meshing jobs were done");
+                    }
+                });
+
+                return None;
+            }
+
+            self.chunks.slot(slot).1.as_ref()
+        }?;
 
         if chunk.version != chunk.current_mesh {
             info!("queueing the chunk at '{pos}' for remeshing");
             self.remesh_queue.insert(pos, ());
         }
 
-        let chunk = self.get_chunk(pos);
         Some(&chunk.meshes)
     }
 
