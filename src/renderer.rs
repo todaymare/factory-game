@@ -2,6 +2,7 @@ pub mod textures;
 pub mod uniform;
 pub mod ssbo;
 pub mod gpu_allocator;
+pub mod utils;
 
 use std::{cell::Cell, collections::HashMap, ffi::CString, fs, mem::offset_of, ptr::null_mut};
 
@@ -11,14 +12,14 @@ use glam::{IVec2, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
 use gpu_allocator::GPUAllocator;
 use ssbo::{ResizableBuffer, SSBO};
-use sti::static_assert_eq;
+use sti::{define_key, static_assert_eq};
 use textures::{TextureAtlasBuilder, TextureAtlasManager, TextureId};
 use tracing::{error, warn};
 use uniform::Uniform;
-use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgc::id::markers::StagingBuffer, BufferUsages, BufferUses, TextureUsages, *};
+use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgc::id::markers::StagingBuffer, wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs}, BufferUsages, BufferUses, TextureUsages, *};
 use winit::{event_loop::EventLoop, window::Window};
 
-use crate::{directions::CardinalDirection, items::{Assets, ItemKind}, mesh::{Mesh, Vertex}, shader::{Shader, ShaderProgram, ShaderType}, voxel_world::mesh::{ChunkMesh, ChunkQuadInstance}, QUAD_INDICES, QUAD_VERTICES};
+use crate::{directions::CardinalDirection, free_list::FreeKVec, items::{Assets, ItemKind}, mesh::{Mesh, Vertex}, shader::{Shader, ShaderProgram, ShaderType}, voxel_world::mesh::{ChunkMesh, ChunkQuadInstance}, QUAD_INDICES, QUAD_VERTICES};
 
 
 const FONT_SIZE : u32 = 64;
@@ -113,13 +114,18 @@ pub struct VoxelShaderUniform {
 static_assert_eq!(size_of::<VoxelShaderUniform>(), 192);
 
 
+define_key!(pub ChunkIndex(u32));
+
+
 pub struct VoxelPipeline {
     pub pipeline: RenderPipeline,
     pub frame_uniform: Uniform<VoxelShaderUniform>,
     pub model_uniform: SSBO<Vec4>,
     pub depth_buffer: DepthBuffer,
 
+    pub chunk_offsets: FreeKVec<ChunkIndex, Vec4>,
     pub instances: GPUAllocator<ChunkQuadInstance>,
+    pub indirect_buf: ResizableBuffer<DrawIndexedIndirectArgs>,
     pub vertex_buf: Buffer,
     pub index_buf: Buffer,
 }
@@ -151,10 +157,11 @@ impl Renderer {
                                     | wgpu::Features::STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING
                                     | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
                                     | wgpu::Features::MULTI_DRAW_INDIRECT
+                                    | wgpu::Features::INDIRECT_FIRST_INSTANCE
                                     | wgpu::Features::TIMESTAMP_QUERY,
                 required_limits: {
                     let mut limits = wgpu::Limits::downlevel_defaults();
-                    limits.max_buffer_size = 17179869184;
+                    limits.max_buffer_size = 0x100000000;
                     limits
                 },
                 label: Some("main device"),
@@ -187,7 +194,7 @@ impl Renderer {
 
         let voxel_pipeline = {
             let voxel_shader_uniform = Uniform::<VoxelShaderUniform>::new("voxel-shader-frame-uniform", &device, 0, ShaderStages::VERTEX_FRAGMENT);
-            let ssbo = SSBO::new(&device, BufferUsages::COPY_DST | BufferUsages::STORAGE, 16 * 1024 * 400);
+            let ssbo = SSBO::new("voxel-shader-chunk-offsets-ssbo", &device, BufferUsages::COPY_DST | BufferUsages::COPY_SRC | BufferUsages::STORAGE, 16 * 1024 * 400);
 
             let shader = device.create_shader_module(
                 wgpu::ShaderModuleDescriptor {
@@ -282,12 +289,12 @@ impl Renderer {
                 });
 
 
-            /*
-            let mut indirect = ResizableBuffer::new(
+            let indirect = ResizableBuffer::new(
+                "voxel-shader-indirect-buffer",
                 &device,
-                BufferUsages::INDIRECT | BufferUsages::COPY_DST,
+                BufferUsages::INDIRECT | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
                 1024
-            );*/
+            );
 
 
             VoxelPipeline {
@@ -298,6 +305,8 @@ impl Renderer {
                 vertex_buf: vertex,
                 index_buf: indices,
                 instances: GPUAllocator::new(&device, 1),
+                indirect_buf: indirect,
+                chunk_offsets: FreeKVec::new(),
             }
         };
 

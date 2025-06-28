@@ -2,9 +2,10 @@ use std::{mem::offset_of, ptr::null_mut};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec3, UVec3, UVec4, Vec3, Vec4};
+use sti::key::Key;
 use wgpu::{util::{DeviceExt, StagingBelt}, ShaderStages};
 
-use crate::{buddy_allocator::BuddyAllocator, renderer::{gpu_allocator::{GPUAllocator, GpuPointer}, uniform::Uniform}};
+use crate::{buddy_allocator::BuddyAllocator, renderer::{gpu_allocator::{GPUAllocator, GpuPointer}, uniform::Uniform, ChunkIndex}};
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
 #[repr(C)]
@@ -13,14 +14,7 @@ pub struct ChunkQuadInstance {
     data2: u32,
     w: u32,
     h: u32,
-}
-
-
-#[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
-#[repr(C)]
-pub struct ChunkIndirectCall {
-    instance_start: u64,
-    instance_end: u64,
+    chunk_index: u32,
 }
 
 
@@ -28,6 +22,7 @@ pub struct ChunkIndirectCall {
 pub struct ChunkMesh {
     pub vertex: GpuPointer<ChunkQuadInstance>,
     pub index_count: u32,
+    pub chunk_mesh_data_index: ChunkIndex, 
 }
 
 
@@ -39,16 +34,19 @@ impl ChunkMesh {
         vertex_allocator: &mut GPUAllocator<ChunkQuadInstance>,
 
         vertices: &[ChunkQuadInstance], 
+        index: ChunkIndex,
    ) -> Self {
+        debug_assert!(vertices.iter().all(|x| x.chunk_index == index.usize() as u32));
+
         let vertex = vertex_allocator.allocate_slice(belt, encoder, device, vertices);
 
-        Self { vertex, index_count: vertices.len() as u32 }
+        Self { vertex, index_count: vertices.len() as u32, chunk_mesh_data_index: index }
     }
 }
 
 
 impl ChunkQuadInstance {
-    pub fn new(pos: IVec3, colour: Vec4, h: u32, l: u32, normal: u8) -> Self {
+    pub fn new(pos: IVec3, colour: Vec4, h: u32, l: u32, normal: u8, chunk_index: ChunkIndex) -> Self {
         let UVec3 { x, y, z } = pos.as_uvec3();
         let UVec4 { x: r, y: g, z: b, w: a } = (colour * 255.0).as_uvec4();
 
@@ -63,13 +61,13 @@ impl ChunkQuadInstance {
         let data1 = pos as u32;
         let data2 = colour as u32;
 
-        Self { data1, data2, w: l, h }
+        Self { data1, data2, w: l, h, chunk_index: chunk_index.usize() as u32 }
     }
 
 
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRS: &[wgpu::VertexAttribute] =
-            &wgpu::vertex_attr_array![1 => Uint32, 2 => Uint32, 3 => Uint32, 4 => Uint32];
+            &wgpu::vertex_attr_array![1 => Uint32, 2 => Uint32, 3 => Uint32, 4 => Uint32, 5 => Uint32];
 
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<ChunkQuadInstance>() as wgpu::BufferAddress,

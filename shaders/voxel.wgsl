@@ -8,6 +8,7 @@ struct InstanceIn {
     @location(2) colour : u32,
     @location(3) w      : u32,
     @location(4) h      : u32,
+    @location(5) offset : u32,
 };
 
 
@@ -75,7 +76,7 @@ fn unpack_voxel_color(colour: u32) -> vec4<f32> {
 
 
 @vertex
-fn vs_main(offset: VertexIn, input: InstanceIn, @builtin(instance_index) instance_index: u32) -> VertexOut {
+fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
     var output: VertexOut;
 
     let normal_index : u32 = input.pos & 7u;
@@ -116,7 +117,7 @@ fn vs_main(offset: VertexIn, input: InstanceIn, @builtin(instance_index) instanc
 
 
     let colour = unpack_voxel_color(input.colour);
-    let model = positions[instance_index];
+    let model = positions[input.offset];
     let world_pos = pos_vec + model.xyz + vec3<f32>(o);
 
     let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));
@@ -135,7 +136,7 @@ fn vs_main(offset: VertexIn, input: InstanceIn, @builtin(instance_index) instanc
 @fragment
 fn fs_main(in: FragmentIn) -> @location(0) vec4<f32> {
     let fog_factor = clamp((u.fog_end - in.v_distance) / (u.fog_end - u.fog_start), 0.0, 1.0);
-    return in.colour;
+    //return in.colour;
     //return vec4(model.xyz * 0.01, 1);
-    //return vec4(mix(u.fog_color, in.colour.xyz, fog_factor), in.colour.w);
+    return vec4(mix(u.fog_color, in.colour.xyz, fog_factor), in.colour.w);
 }

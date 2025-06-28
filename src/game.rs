@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use glam::{usize, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use sti::hash::fxhash::{fxhash32, FxHasher32};
-use tracing::{info, trace, warn};
+use tracing::{error, info, trace, warn};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE, COLOUR_DENY, COLOUR_PASS, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::{CardinalDirection, Direction}, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, mesh::Mesh, renderer::{gpu_allocator::GPUAllocator, Renderer}, shader::{Shader, ShaderProgram, ShaderType}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{self, InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{mesh::ChunkQuadInstance, split_world_pos, voxel::Voxel, VoxelWorld}, Camera, PhysicsBody, Player, Tick, DELTA_TICK, DROPPED_ITEM_SCALE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND};
@@ -76,7 +76,7 @@ impl Game {
                 up: Vec3::new(0.0, 1.0, 0.0),
                 pitch: 0.0,
                 yaw: 90.0f32.to_radians(),
-                fov: 80.0f32.to_radians(),
+                fov: 80.069f32.to_radians(),
                 aspect_ratio: 16.0/9.0,
                 near: 0.05,
                 far: 5_000.0,
@@ -648,7 +648,7 @@ impl Game {
                 }
             }
 
-            trace!("checking dead chunks took {:?}", time.elapsed());
+            error!("checking dead chunks took {:?}", time.elapsed());
         }
 
         if !self.craft_queue.is_empty() && self.player.can_give(self.craft_queue[0].0) {
@@ -750,11 +750,6 @@ impl Game {
 
 
         self.structures.process(&mut self.world);
-    }
-
-
-    pub fn update_world(&mut self, voxel_allocator: &mut GPUAllocator<ChunkQuadInstance>) {
-        self.world.process(voxel_allocator);
     }
 
 

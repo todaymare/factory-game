@@ -26,28 +26,24 @@ pub mod frustum;
 pub mod game;
 pub mod constants;
 pub mod buddy_allocator;
+pub mod free_list;
 
-use std::{f32::consts::{PI, TAU}, fs, hash::Hash, ops::{self}, time::Instant};
+use std::{f32::consts::{PI, TAU}, ops::{self}, time::Instant};
 
-use commands::{Command, CommandRegistry};
 use constants::CHUNK_SIZE;
 use directions::{CardinalDirection, Direction};
 use frustum::Frustum;
 use game::Game;
 use rand::seq::IndexedRandom;
-use tracing::{error, info, trace, warn, Level};
-use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
-use voxel_world::{mesh::ChunkQuadInstance, split_world_pos, voxel::{self, Voxel}, VoxelWorld};
-use glam::{DVec2, DVec3, IVec2, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
+use sti::define_key;
+use tracing::{error, warn, Level};
+use voxel_world::split_world_pos;
+use glam::{DVec2, DVec3, IVec3, Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
 use input::InputManager;
-use items::{DroppedItem, Item, ItemKind};
-use mesh::Mesh;
-use renderer::{gpu_allocator::GPUAllocator, DepthBuffer, Renderer, VoxelShaderUniform};
-use shader::{Shader, ShaderProgram};
-use sti::{define_key, hash::fxhash::FxHasher32};
-use structures::{strct::{Structure, StructureData, StructureKind}, Structures};
-use wgpu::util::RenderEncoder;
-use winit::{dpi::{LogicalPosition, PhysicalPosition, PhysicalSize}, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, platform::macos::EventLoopBuilderExtMacOS, window::{CursorGrabMode, Window, WindowButtons, WindowId}};
+use items::{DroppedItem, Item};
+use renderer::{utils::multi_draw_indexed_indirect, DepthBuffer, Renderer, VoxelShaderUniform};
+use wgpu::{wgc::{api::Metal, hal_api::HalApi}, wgt::DrawIndexedIndirectArgs};
+use winit::{event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, window::{CursorGrabMode, Window, WindowId}};
 use winit::application::ApplicationHandler;
 
 
@@ -58,14 +54,14 @@ define_key!(EntityId(u32));
 const MOUSE_SENSITIVITY : f32 = 0.0016;
 
 const PLAYER_REACH : f32 = 5.0;
-const PLAYER_SPEED : f32 = 10.0;
+const PLAYER_SPEED : f32 = 100.0;
 const PLAYER_PULL_DISTANCE : f32 = 3.5;
 const PLAYER_INTERACT_DELAY : f32 = 0.125;
 const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-const RENDER_DISTANCE : i32 = 24;
+const RENDER_DISTANCE : i32 = 48;
 
 const DROPPED_ITEM_SCALE : f32 = 0.5;
 
@@ -182,7 +178,7 @@ impl ApplicationHandler for App {
                     self.time_since_last_simulation -= game.settings.delta_tick;
                 }
 
-                game.update_world(&mut renderer.voxel_pipeline.instances);
+                game.world.process(&mut renderer.voxel_pipeline.instances, &mut renderer.voxel_pipeline.chunk_offsets);
 
 
                 let output = renderer.surface.get_current_texture().unwrap();
@@ -201,37 +197,15 @@ impl ApplicationHandler for App {
 
 
                 let simulation_time = now.elapsed();
+                
+                //
+                // render
                 let now = Instant::now();
 
                 let c = game.sky_colour.as_dvec4();
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("voxel-render-pass"),
-                    color_attachments: &[
-                        Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color { r: c.x, g: c.y, b: c.z, a: c.w }),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        }),
-                    ],
-
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &renderer.voxel_pipeline.depth_buffer.view, // from Step 1
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0), // farthest
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-
-                    ..Default::default()
-                });
-
                 let camera = game.camera.position;
                 let projection = game.camera.perspective_matrix();
-                let view = game.camera.view_matrix();
+                let cview = game.camera.view_matrix();
 
                 // render chunks
                 {
@@ -240,7 +214,7 @@ impl ApplicationHandler for App {
                     let fog_distance = (rd - 1) as f32;
 
                     let uniform = VoxelShaderUniform {
-                        view: view * Mat4::from_scale(Vec3::splat(0.5)),
+                        view: cview * Mat4::from_scale(Vec3::splat(0.5)),
                         projection,
                         modulate: Vec4::ONE,
                         camera_pos: camera.as_vec3(),
@@ -255,26 +229,20 @@ impl ApplicationHandler for App {
 
                     };
 
-                    pass.set_pipeline(&voxel_pipeline.pipeline);
-                    voxel_pipeline.frame_uniform.update(&renderer.queue, &uniform);
-                    voxel_pipeline.frame_uniform.use_uniform(&mut pass);
-                    pass.set_bind_group(1, voxel_pipeline.model_uniform.bind_group(), &[]);
 
-                    pass.set_vertex_buffer(0, voxel_pipeline.vertex_buf.slice(..));
-                    pass.set_vertex_buffer(1, voxel_pipeline.instances.ssbo.buffer.slice(..));
-                    pass.set_index_buffer(voxel_pipeline.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    let (player_chunk, _) = split_world_pos(game.player.body.position.as_ivec3());
+
+                    let mut indirect : Vec<DrawIndexedIndirectArgs> = vec![];
 
                     let frustum = match &game.lock_frustum {
                         Some(f) => f.clone(),
-                        None => Frustum::compute(projection, view),
+                        None => Frustum::compute(projection, cview),
                     };
 
-                            
-                    let (player_chunk, _) = split_world_pos(game.player.body.position.as_ivec3());
+                    let mut quad_count = 0;
+                    let mut mesh_count = 0;
 
-                    let mut offsets = Vec::new();
-                    offsets.resize(voxel_pipeline.instances.ssbo.len, Vec4::ZERO);
-
+                    let now = Instant::now();
                     for y in -rd..rd {
                         for z in -rd..rd {
                             for x in -rd..rd {
@@ -308,7 +276,6 @@ impl ApplicationHandler for App {
 
                                 let offset = offset.as_vec3();
 
-                                let mut did_draw = false;
                                 for (i, mesh) in meshes.iter().enumerate() {
                                     let Some(mesh) = mesh
                                     else { continue };
@@ -323,35 +290,85 @@ impl ApplicationHandler for App {
                                     if dir_from_camera.dot(normal) > 0.0 {
                                         continue
                                     }
+
                                     let vo = mesh.vertex.offset as u32;
                                     let vs = mesh.vertex.size as u32;
 
+                                    indirect.push(DrawIndexedIndirectArgs {
+                                        index_count: QUAD_INDICES.len() as _,
+                                        instance_count: vs,
+                                        first_index: 0,
+                                        base_vertex: 0,
+                                        first_instance: vo,
+                                    });
 
-                                    for i in vo..vo+vs {
-                                        offsets[i as usize] = Vec4::new(offset.x, offset.y, offset.z, 0.0);
-                                    }
+                                    quad_count += vs;
+                                    mesh_count += 1;
 
-                                    pass.draw_indexed(0..QUAD_INDICES.len() as u32,
-                                                      0, vo..vo+vs);
-                                    did_draw = true;
+                                    *voxel_pipeline.chunk_offsets.get_mut(mesh.chunk_mesh_data_index) = Vec4::new(offset.x, offset.y, offset.z, 0.0);
                                 }
-
-                                if !did_draw { offsets.pop(); }
                             }
                         }
                     }
+                    error!("{:?}", now.elapsed());
 
-                    drop(pass);
 
-                    if !offsets.is_empty() {
-                        voxel_pipeline.model_uniform.update(&mut renderer.staging_buffer, &mut encoder, &renderer.device, &offsets);
+                    
+                    if !indirect.is_empty() {
+                        voxel_pipeline.model_uniform.resize(&renderer.device, &mut encoder, voxel_pipeline.chunk_offsets.as_slice().len());
+                        voxel_pipeline.model_uniform.update(&mut renderer.staging_buffer, &mut encoder, &renderer.device, voxel_pipeline.chunk_offsets.as_slice());
+                        voxel_pipeline.indirect_buf.resize(&renderer.device, &mut encoder, indirect.len());
+                        voxel_pipeline.indirect_buf.write(&mut renderer.staging_buffer, &mut encoder, &renderer.device, 0, &indirect);
                     }
 
-                    println!("{:?}", game.camera);
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("voxel-render-pass"),
+                        color_attachments: &[
+                            Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color { r: c.x, g: c.y, b: c.z, a: c.w }),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            }),
+                        ],
+
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &voxel_pipeline.depth_buffer.view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+
+                        ..Default::default()
+                    });
+
+
+                    pass.set_pipeline(&voxel_pipeline.pipeline);
+                    voxel_pipeline.frame_uniform.update(&renderer.queue, &uniform);
+                    voxel_pipeline.frame_uniform.use_uniform(&mut pass);
+                    pass.set_bind_group(1, voxel_pipeline.model_uniform.bind_group(), &[]);
+
+                    multi_draw_indexed_indirect(
+                        &renderer.device,
+                        &mut pass,
+                        &voxel_pipeline.vertex_buf,
+                        &voxel_pipeline.instances.ssbo.buffer,
+                        &indirect,
+                        &voxel_pipeline.indirect_buf.buffer,
+                        &voxel_pipeline.index_buf, 
+                        wgpu::IndexFormat::Uint32
+                    );
+                    drop(pass);
+
                     renderer.staging_buffer.finish();
                     renderer.queue.submit(std::iter::once(encoder.finish()));
                     renderer.staging_buffer.recall();
 
+                    println!("quad count: {quad_count}, mesh count {mesh_count}");
                 }
 
                 let render_time = now.elapsed();
@@ -381,7 +398,7 @@ impl ApplicationHandler for App {
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
+        .with_max_level(Level::WARN)
         .init();
 
     let event_loop = EventLoop::builder().build().unwrap();

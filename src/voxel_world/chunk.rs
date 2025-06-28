@@ -3,9 +3,9 @@ use std::{hash::Hash, i32, simd::{cmp::SimdPartialEq, u8x64}, sync::Arc};
 use glam::{DVec2, IVec2, IVec3, Vec3Swizzles};
 use libnoise::{Generator, ImprovedPerlin, Simplex, Source};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
-use sti::hash::fxhash::FxHasher64;
+use sti::{hash::fxhash::FxHasher64, key::Key};
 
-use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_P3}, voxel_world::voxel::Voxel};
+use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_P3}, renderer::ChunkIndex, voxel_world::voxel::Voxel};
 
 use super::mesh::ChunkMesh;
 

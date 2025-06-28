@@ -15,6 +15,7 @@ pub struct SSBO<T> {
 
 pub struct ResizableBuffer<T> {
     pub buffer: wgpu::Buffer,
+    name: &'static str,
     pub len: usize,
     usage: wgpu::BufferUsages,
     marker: PhantomData<T>,
@@ -22,9 +23,9 @@ pub struct ResizableBuffer<T> {
 
 
 impl<T: Pod + std::fmt::Debug> ResizableBuffer<T> {
-    pub fn new(device: &wgpu::Device, usage: wgpu::BufferUsages, len: usize) -> Self {
+    pub fn new(name: &'static str, device: &wgpu::Device, usage: wgpu::BufferUsages, len: usize) -> Self {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("buffer"),
+            label: Some(name),
             size: (len * size_of::<T>()) as u64,
             usage,
             mapped_at_creation: false,
@@ -32,6 +33,7 @@ impl<T: Pod + std::fmt::Debug> ResizableBuffer<T> {
 
         Self {
             buffer,
+            name,
             len,
             marker: PhantomData,
             usage,
@@ -42,7 +44,7 @@ impl<T: Pod + std::fmt::Debug> ResizableBuffer<T> {
     pub fn resize(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, new_cap: usize) {
         if new_cap < self.len { return };
 
-        let new_buff = Self::new(device, self.usage, new_cap);
+        let new_buff = Self::new(self.name, device, self.usage, new_cap);
 
         encoder.copy_buffer_to_buffer(
             &self.buffer, 0,
@@ -69,7 +71,7 @@ impl<T: Pod + std::fmt::Debug> ResizableBuffer<T> {
 
 
 impl<T: Pod + std::fmt::Debug> SSBO<T> {
-    pub fn new(device: &wgpu::Device, usages: wgpu::BufferUsages, data_len: usize) -> Self {
+    pub fn new(name: &'static str, device: &wgpu::Device, usages: wgpu::BufferUsages, data_len: usize) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("GpuVec3Buffer Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -84,7 +86,7 @@ impl<T: Pod + std::fmt::Debug> SSBO<T> {
             }],
         });
 
-        let buffer = ResizableBuffer::new(device, usages, data_len);
+        let buffer = ResizableBuffer::new(name, device, usages, data_len);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ssbo-buffer"),
@@ -104,7 +106,7 @@ impl<T: Pod + std::fmt::Debug> SSBO<T> {
     }
 
 
-    pub fn resize_to_capacity(
+    pub fn resize(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,

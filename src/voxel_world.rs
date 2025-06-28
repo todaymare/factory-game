@@ -2,22 +2,20 @@ pub mod chunk;
 pub mod voxel;
 pub mod mesh;
 
-use std::{collections::{HashMap, HashSet}, fs::{self}, ops::Bound, sync::{mpsc, Arc}, time::Instant};
+use std::{fs::{self}, ops::Bound, sync::{mpsc, Arc}, time::Instant};
 
 use chunk::{ChunkData, Noise};
 use glam::{DVec3, IVec3, Vec3, Vec4};
 use mesh::{ChunkQuadInstance, ChunkMesh};
-use rand::seq::IndexedRandom;
 use save_format::byte::{ByteReader, ByteWriter};
-use tracing::{error, info, trace, warn};
+use tracing::{info, trace, warn};
 use voxel::Voxel;
-use voxel_mesher::VoxelMesh;
 use wgpu::util::StagingBelt;
 
-use crate::{constants::CHUNK_SIZE, items::{DroppedItem, Item}, renderer::gpu_allocator::GPUAllocator, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
+use crate::{constants::CHUNK_SIZE, free_list::FreeKVec, items::{DroppedItem, Item}, renderer::{gpu_allocator::GPUAllocator, ChunkIndex}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
 
 
-type MeshMPSC = (IVec3, [(Vec<ChunkQuadInstance>); 6], u32);
+type MeshMPSC = (IVec3, [ChunkIndex; 6], [(Vec<ChunkQuadInstance>); 6], u32);
 type ChunkMPSC = (IVec3, Chunk);
 type SaveChunkMPSC = ();
 
@@ -97,7 +95,7 @@ impl VoxelWorld {
     }
 
 
-    fn spawn_mesh_job(&mut self, pos: IVec3) {
+    fn spawn_mesh_job(&mut self, free_list: &mut FreeKVec<ChunkIndex, Vec4>, pos: IVec3) {
         for i in 0..7 {
             let chunk_pos = if i == 0 { pos }
                       else { pos + SURROUNDING_OFFSETS[i-1] };
@@ -125,6 +123,15 @@ impl VoxelWorld {
         let version = chunk.version;
         chunk.current_mesh = chunk.version;
 
+        let offsets = [
+            free_list.push(Vec4::ZERO),
+            free_list.push(Vec4::ZERO),
+            free_list.push(Vec4::ZERO),
+            free_list.push(Vec4::ZERO),
+            free_list.push(Vec4::ZERO),
+            free_list.push(Vec4::ZERO),
+        ];
+
         let chunks = core::array::from_fn(|i| {
             let pos = if i == 0 { pos }
                       else { pos + SURROUNDING_OFFSETS[i-1] };
@@ -136,9 +143,9 @@ impl VoxelWorld {
 
         rayon::spawn(move || {
             let time = Instant::now();
-            let result = VoxelWorld::greedy_mesh(chunks);
+            let result = VoxelWorld::greedy_mesh(offsets, chunks);
             trace!("mesh-generation: meshes in {:?}", time.elapsed());
-            if let Err(_) = sender.send((pos, result, version)) {
+            if let Err(_) = sender.send((pos, offsets, result, version)) {
                 warn!("mesh-generation: job receiver terminated before all meshing jobs were done");
             }
         });
@@ -154,7 +161,9 @@ impl VoxelWorld {
         vertex_allocator: &mut GPUAllocator<ChunkQuadInstance>,
     ) {
 
-        while let Ok((pos, result, version)) = self.mesh_reciever.try_recv() {
+        let now = Instant::now();
+        while now.elapsed().as_millis() < 1
+            && let Ok((pos, offsets, result, version)) = self.mesh_reciever.try_recv() {
             self.queued_meshes -= 1;
             let Some(Some(chunk)) = self.chunks.get_mut(&pos)
             else {
@@ -175,7 +184,7 @@ impl VoxelWorld {
                 }
 
                 self.vertex_count += vertices.len() as u32;
-                let mesh = ChunkMesh::new(belt, encoder, device, vertex_allocator, &vertices);
+                let mesh = ChunkMesh::new(belt, encoder, device, vertex_allocator, &vertices, offsets[i]);
                 chunk.meshes[i] = Some(mesh);
             }
 
@@ -184,11 +193,11 @@ impl VoxelWorld {
 
 
 
-    pub fn process(&mut self, voxel_allocator: &mut GPUAllocator<ChunkQuadInstance>) {
+    pub fn process(&mut self, voxel_allocator: &mut GPUAllocator<ChunkQuadInstance>, free_list: &mut FreeKVec<ChunkIndex, Vec4>) {
         let remesh_queue = core::mem::take(&mut self.remesh_queue);
 
         for (pos, _) in remesh_queue.iter() {
-            self.spawn_mesh_job(*pos);
+            self.spawn_mesh_job(free_list, *pos);
         }
 
         if self.queued_meshes == 0 && self.queued_chunks == 0 {
@@ -200,7 +209,10 @@ impl VoxelWorld {
         self.process_chunks();
 
         let mut i = 0;
-        while let Some(&pos) = self.unload_queue.get(i) {
+        let now = Instant::now();
+        while now.elapsed().as_millis() < 1
+            && let Some(&pos) = self.unload_queue.get(i) {
+
             let Some(slot) = self.chunks.get(&pos)
             else { i += 1; continue };
 
@@ -217,6 +229,7 @@ impl VoxelWorld {
                 else { continue };
 
                 voxel_allocator.free(mesh.vertex);
+                free_list.remove(mesh.chunk_mesh_data_index);
             }
 
             self.unload_queue.remove(i);
@@ -291,13 +304,14 @@ impl VoxelWorld {
     pub fn try_get_chunk(&mut self, pos: IVec3) -> Option<&Chunk> {
         let hash = self.chunks.hash(&pos);
         let (present, slot) = self.chunks.lookup_for_insert(&pos, hash);
+
         if !present {
             self.chunks.insert_at(slot, hash, pos, None);
             self.total_chunks += 1;
-            self.chunks.insert(pos, None);
 
             let sender = self.chunk_sender.clone();
             let perlin = self.noise.clone();
+
             self.queued_chunks += 1;
             rayon::spawn(move || {
                 let chunk = Self::chunk_creation_job(pos, &perlin);
@@ -309,6 +323,7 @@ impl VoxelWorld {
 
             return None;
         }
+
         return self.chunks.slot(slot).1.as_ref();
     }
 
@@ -327,7 +342,9 @@ impl VoxelWorld {
 
 
     pub fn process_chunks(&mut self) {
-        while let Ok((pos, chunk)) = self.chunk_reciever.try_recv() {
+        let now = Instant::now();
+        while now.elapsed().as_millis() < 1
+            && let Ok((pos, chunk)) = self.chunk_reciever.try_recv() {
             self.queued_chunks -= 1;
 
             let Some(slot) = self.chunks.get_mut(&pos)
@@ -630,16 +647,20 @@ impl VoxelWorld {
 
 
 
-    pub fn greedy_mesh(chunks: [Arc<ChunkData>; 7]) -> [Vec<ChunkQuadInstance>; 6]{
-        let [west, east] = Self::greedy_mesh_dir(&chunks, 0);
-        let [up, down] = Self::greedy_mesh_dir(&chunks, 1);
-        let [north, south] = Self::greedy_mesh_dir(&chunks, 2);
+    pub fn greedy_mesh(c: [ChunkIndex; 6], chunks: [Arc<ChunkData>; 7]) -> [Vec<ChunkQuadInstance>; 6]{
+        let [west, east] = Self::greedy_mesh_dir(c[0], c[3], &chunks, 0);
+        let [up, down] = Self::greedy_mesh_dir(c[1], c[4], &chunks, 1);
+        let [north, south] = Self::greedy_mesh_dir(c[2], c[5], &chunks, 2);
         [west, up, north, east, down, south]
     }
 
 
-    pub fn greedy_mesh_dir(chunks: &[Arc<ChunkData>; 7],
-                           d: usize,) -> [Vec<ChunkQuadInstance>; 2] {
+    pub fn greedy_mesh_dir(
+        front_chunk_index: ChunkIndex,
+        back_chunk_index: ChunkIndex,
+        chunks: &[Arc<ChunkData>; 7],
+        d: usize
+    ) -> [Vec<ChunkQuadInstance>; 2] {
 
         let mut forward_vertices: Vec<ChunkQuadInstance> = vec![];
         let mut backward_vertices: Vec<ChunkQuadInstance> = vec![];
@@ -784,9 +805,9 @@ impl VoxelWorld {
                     dv[v] = h as _;
 
                     if neg_d {
-                        backward_vertices.push(ChunkQuadInstance::new(x, kind.colour(), h as _, w as _, d as u8 + 3));
+                        backward_vertices.push(ChunkQuadInstance::new(x, kind.colour(), h as _, w as _, d as u8 + 3, back_chunk_index));
                     } else {
-                        forward_vertices.push(ChunkQuadInstance::new(x, kind.colour(), h as _, w as _, d as u8));
+                        forward_vertices.push(ChunkQuadInstance::new(x, kind.colour(), h as _, w as _, d as u8, front_chunk_index));
                     }
 /*
                     if neg_d {
