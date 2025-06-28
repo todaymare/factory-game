@@ -37,7 +37,7 @@ use game::Game;
 use rand::seq::IndexedRandom;
 use tracing::{error, info, trace, warn, Level};
 use ui::{InventoryMode, UILayer, HOTBAR_KEYS};
-use voxel_world::{mesh::ChunkVertex, split_world_pos, voxel::Voxel, VoxelWorld};
+use voxel_world::{mesh::ChunkQuadInstance, split_world_pos, voxel::{self, Voxel}, VoxelWorld};
 use glam::{DVec2, DVec3, IVec2, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use input::InputManager;
 use items::{DroppedItem, Item, ItemKind};
@@ -65,12 +65,24 @@ const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-const RENDER_DISTANCE : i32 = 48;
+const RENDER_DISTANCE : i32 = 24;
 
 const DROPPED_ITEM_SCALE : f32 = 0.5;
 
 const TICKS_PER_SECOND : u32 = 60;
 const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32; 
+
+
+const QUAD_VERTICES : &[i32] = &[
+     0,   0,  0,
+     1,   0,  0,
+     1,   0,  1,
+     0,   0,  1,
+];
+
+
+const QUAD_INDICES : &[u32] = &[0, 1, 2, 2, 3, 0];
+
 
 struct App {
     window: Option<Window>,
@@ -92,6 +104,7 @@ impl ApplicationHandler for App {
             .unwrap();
         let static_window = unsafe { core::mem::transmute::<&Window, &'static Window>(window) };
         self.renderer = Some(pollster::block_on(Renderer::new(static_window)));
+        self.game.load();
     }
 
 
@@ -169,7 +182,7 @@ impl ApplicationHandler for App {
                     self.time_since_last_simulation -= game.settings.delta_tick;
                 }
 
-                game.update_world(&mut renderer.voxel_pipeline.vertex_buf, &mut renderer.voxel_pipeline.index_buf);
+                game.update_world(&mut renderer.voxel_pipeline.instances);
 
 
                 let output = renderer.surface.get_current_texture().unwrap();
@@ -183,8 +196,7 @@ impl ApplicationHandler for App {
                     &renderer.device,
                     &mut encoder,
                     &mut renderer.staging_buffer,
-                    &mut renderer.voxel_pipeline.vertex_buf,
-                    &mut renderer.voxel_pipeline.index_buf
+                    &mut renderer.voxel_pipeline.instances,
                 );
 
 
@@ -228,7 +240,7 @@ impl ApplicationHandler for App {
                     let fog_distance = (rd - 1) as f32;
 
                     let uniform = VoxelShaderUniform {
-                        view,
+                        view: view * Mat4::from_scale(Vec3::splat(0.5)),
                         projection,
                         modulate: Vec4::ONE,
                         camera_pos: camera.as_vec3(),
@@ -248,8 +260,9 @@ impl ApplicationHandler for App {
                     voxel_pipeline.frame_uniform.use_uniform(&mut pass);
                     pass.set_bind_group(1, voxel_pipeline.model_uniform.bind_group(), &[]);
 
-                    pass.set_vertex_buffer(0, voxel_pipeline.vertex_buf.ssbo.buffer.slice(..));
-                    pass.set_index_buffer(voxel_pipeline.index_buf.ssbo.buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(0, voxel_pipeline.vertex_buf.slice(..));
+                    pass.set_vertex_buffer(1, voxel_pipeline.instances.ssbo.buffer.slice(..));
+                    pass.set_index_buffer(voxel_pipeline.index_buf.slice(..), wgpu::IndexFormat::Uint32);
 
                     let frustum = match &game.lock_frustum {
                         Some(f) => f.clone(),
@@ -259,7 +272,9 @@ impl ApplicationHandler for App {
                             
                     let (player_chunk, _) = split_world_pos(game.player.body.position.as_ivec3());
 
-                    let mut offsets = vec![];
+                    let mut offsets = Vec::new();
+                    offsets.resize(voxel_pipeline.instances.ssbo.len, Vec4::ZERO);
+
                     for y in -rd..rd {
                         for z in -rd..rd {
                             for x in -rd..rd {
@@ -292,7 +307,6 @@ impl ApplicationHandler for App {
                                 let offset = offset.as_dvec3() - camera;
 
                                 let offset = offset.as_vec3();
-                                offsets.push(Vec4::new(offset.x, offset.y, offset.z, 0.0));
 
                                 let mut did_draw = false;
                                 for (i, mesh) in meshes.iter().enumerate() {
@@ -309,12 +323,16 @@ impl ApplicationHandler for App {
                                     if dir_from_camera.dot(normal) > 0.0 {
                                         continue
                                     }
+                                    let vo = mesh.vertex.offset as u32;
+                                    let vs = mesh.vertex.size as u32;
 
-                                    let base_vertex = mesh.vertex.offset;
-                                    let io = mesh.index.offset;
-                                    let is = mesh.index.size;
-                                    assert_eq!(is as u32, mesh.index_count as u32);
-                                    pass.draw_indexed(io as u32..(io+is) as u32, base_vertex as i32, offsets.len() as u32-1..offsets.len() as u32);
+
+                                    for i in vo..vo+vs {
+                                        offsets[i as usize] = Vec4::new(offset.x, offset.y, offset.z, 0.0);
+                                    }
+
+                                    pass.draw_indexed(0..QUAD_INDICES.len() as u32,
+                                                      0, vo..vo+vs);
                                     did_draw = true;
                                 }
 
@@ -323,13 +341,12 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    if !offsets.is_empty() {
-                        voxel_pipeline.model_uniform.update(&renderer.device, &renderer.queue, &offsets);
+                    drop(pass);
 
-                        //event_loop.exit();
+                    if !offsets.is_empty() {
+                        voxel_pipeline.model_uniform.update(&mut renderer.staging_buffer, &mut encoder, &renderer.device, &offsets);
                     }
 
-                    drop(pass);
                     println!("{:?}", game.camera);
                     renderer.staging_buffer.finish();
                     renderer.queue.submit(std::iter::once(encoder.finish()));
@@ -337,9 +354,9 @@ impl ApplicationHandler for App {
 
                 }
 
+                let render_time = now.elapsed();
                 output.present();
 
-                let render_time = now.elapsed();
                 println!("sim_time: {simulation_time:?} render_time: {render_time:?}");
 
                 self.window.as_ref().unwrap().request_redraw();
@@ -383,6 +400,7 @@ fn main() {
     };
 
     event_loop.run_app(&mut app).unwrap();
+    app.game.save();
     return;
 
     /*

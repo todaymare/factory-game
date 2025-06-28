@@ -7,7 +7,7 @@ use sti::hash::fxhash::{fxhash32, FxHasher32};
 use tracing::{info, trace, warn};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
-use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE, COLOUR_DENY, COLOUR_PASS, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::{CardinalDirection, Direction}, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, mesh::Mesh, renderer::{gpu_allocator::GPUAllocator, Renderer}, shader::{Shader, ShaderProgram, ShaderType}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{self, InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{mesh::ChunkVertex, split_world_pos, voxel::Voxel, VoxelWorld}, Camera, PhysicsBody, Player, Tick, DELTA_TICK, DROPPED_ITEM_SCALE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND};
+use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE, COLOUR_DENY, COLOUR_PASS, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::{CardinalDirection, Direction}, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, mesh::Mesh, renderer::{gpu_allocator::GPUAllocator, Renderer}, shader::{Shader, ShaderProgram, ShaderType}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{self, InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{mesh::ChunkQuadInstance, split_world_pos, voxel::Voxel, VoxelWorld}, Camera, PhysicsBody, Player, Tick, DELTA_TICK, DROPPED_ITEM_SCALE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND};
 
 pub struct Game {
     pub world: VoxelWorld,
@@ -625,7 +625,7 @@ impl Game {
 
         let delta_time = DELTA_TICK;
 
-        if self.current_tick.u32() % (TICKS_PER_SECOND * 60) == 0 {
+        if self.current_tick.u32() % (TICKS_PER_SECOND * 120) == 0 {
             info!("autosaving..");
             self.save();
         }
@@ -753,8 +753,8 @@ impl Game {
     }
 
 
-    pub fn update_world(&mut self, voxel_allocator: &mut GPUAllocator<ChunkVertex>, index_allocator: &mut GPUAllocator<u32>) {
-        self.world.process(voxel_allocator, index_allocator);
+    pub fn update_world(&mut self, voxel_allocator: &mut GPUAllocator<ChunkQuadInstance>) {
+        self.world.process(voxel_allocator);
     }
 
 

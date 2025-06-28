@@ -10,15 +10,15 @@ use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pi
 use glam::{IVec2, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
 use gpu_allocator::GPUAllocator;
-use ssbo::SSBO;
+use ssbo::{ResizableBuffer, SSBO};
 use sti::static_assert_eq;
 use textures::{TextureAtlasBuilder, TextureAtlasManager, TextureId};
 use tracing::{error, warn};
 use uniform::Uniform;
-use wgpu::{util::StagingBelt, wgc::id::markers::StagingBuffer, BufferUsages, BufferUses, TextureUsages, *};
+use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgc::id::markers::StagingBuffer, BufferUsages, BufferUses, TextureUsages, *};
 use winit::{event_loop::EventLoop, window::Window};
 
-use crate::{directions::CardinalDirection, items::{Assets, ItemKind}, mesh::{Mesh, Vertex}, shader::{Shader, ShaderProgram, ShaderType}, voxel_world::mesh::{ChunkMesh, ChunkVertex}};
+use crate::{directions::CardinalDirection, items::{Assets, ItemKind}, mesh::{Mesh, Vertex}, shader::{Shader, ShaderProgram, ShaderType}, voxel_world::mesh::{ChunkMesh, ChunkQuadInstance}, QUAD_INDICES, QUAD_VERTICES};
 
 
 const FONT_SIZE : u32 = 64;
@@ -119,8 +119,9 @@ pub struct VoxelPipeline {
     pub model_uniform: SSBO<Vec4>,
     pub depth_buffer: DepthBuffer,
 
-    pub vertex_buf: GPUAllocator<ChunkVertex>,
-    pub index_buf: GPUAllocator<u32>,
+    pub instances: GPUAllocator<ChunkQuadInstance>,
+    pub vertex_buf: Buffer,
+    pub index_buf: Buffer,
 }
 
 
@@ -149,7 +150,7 @@ impl Renderer {
                                     | wgpu::Features::TEXTURE_BINDING_ARRAY
                                     | wgpu::Features::STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING
                                     | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
-                                    | wgpu::Features::PUSH_CONSTANTS
+                                    | wgpu::Features::MULTI_DRAW_INDIRECT
                                     | wgpu::Features::TIMESTAMP_QUERY,
                 required_limits: {
                     let mut limits = wgpu::Limits::downlevel_defaults();
@@ -183,75 +184,10 @@ impl Renderer {
 
         surface.configure(&device, &config);
 
-/*
-        let mesh_pipeline = {
-            let mesh_shader_uniform = Uniform::<MeshShaderUniform>::new("mesh-shader-uniform", &device, 0, 1, ShaderStages::VERTEX_FRAGMENT);
-
-            let shader = device.create_shader_module(
-                wgpu::ShaderModuleDescriptor {
-                    label: Some("mesh-shader"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/mesh.wgsl").into()),
-                }
-            );
-
-
-            let rpl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("mesh-render-pipeline-layout"),
-                bind_group_layouts: &[camera_uniform.bind_group_layout(), mesh_shader_uniform.bind_group_layout()],
-                push_constant_ranges: &[],
-            });
-
-
-            let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("mesh-render-pipeline"),
-                layout: Some(&rpl),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"), // 1.
-                    buffers: &[Vertex::desc()], // 2.
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState { // 3.
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState { // 4.
-                        format: config.format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList, // 1.
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw, // 2.
-                    cull_mode: Some(wgpu::Face::Back),
-                    // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    // Requires Features::DEPTH_CLIP_CONTROL
-                    unclipped_depth: false,
-                    // Requires Features::CONSERVATIVE_RASTERIZATION
-                    conservative: false,
-                },
-                depth_stencil: None, // 1.
-                multisample: wgpu::MultisampleState {
-                    count: 1, // 2.
-                    mask: !0, // 3.
-                    alpha_to_coverage_enabled: false, // 4.
-                },
-                multiview: None, // 5.
-                cache: None, // 6.
-            });
-
-
-            render_pipeline
-        };*/
-
-
 
         let voxel_pipeline = {
             let voxel_shader_uniform = Uniform::<VoxelShaderUniform>::new("voxel-shader-frame-uniform", &device, 0, ShaderStages::VERTEX_FRAGMENT);
-            let ssbo = SSBO::new(&device, BufferUsages::COPY_DST | BufferUsages::STORAGE, &[Vec4::default(); 10240]);
+            let ssbo = SSBO::new(&device, BufferUsages::COPY_DST | BufferUsages::STORAGE, 16 * 1024 * 400);
 
             let shader = device.create_shader_module(
                 wgpu::ShaderModuleDescriptor {
@@ -277,7 +213,20 @@ impl Renderer {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vs_main"), // 1.
-                    buffers: &[ChunkVertex::desc()], // 2.
+                    buffers: &[
+                        wgpu::VertexBufferLayout {
+                            array_stride: 12,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &[
+                                wgpu::VertexAttribute {
+                                    format: wgpu::VertexFormat::Sint32x3,
+                                    offset: 0,
+                                    shader_location: 0,
+                                }
+                            ],
+                        },
+                        ChunkQuadInstance::desc(),
+                    ], 
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState { // 3.
@@ -294,9 +243,10 @@ impl Renderer {
                     topology: wgpu::PrimitiveTopology::TriangleList, // 1.
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Ccw, // 2.
-                    cull_mode: Some(wgpu::Face::Back),
+                    cull_mode: Some(Face::Back),
+                    //cull_mode: None,
                     // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                    polygon_mode: wgpu::PolygonMode::Line,
+                    polygon_mode: wgpu::PolygonMode::Fill,
                     // Requires Features::DEPTH_CLIP_CONTROL
                     unclipped_depth: false,
                     // Requires Features::CONSERVATIVE_RASTERIZATION
@@ -319,13 +269,35 @@ impl Renderer {
             });
 
 
+            let vertex = device.create_buffer_init(&BufferInitDescriptor {
+                    label: Some("quad-vertices"),
+                    usage: BufferUsages::VERTEX,
+                    contents: bytemuck::cast_slice(QUAD_VERTICES),
+                });
+
+            let indices = device.create_buffer_init(&BufferInitDescriptor {
+                    label: Some("quad-indices"),
+                    usage: BufferUsages::INDEX,
+                    contents: bytemuck::cast_slice(QUAD_INDICES),
+                });
+
+
+            /*
+            let mut indirect = ResizableBuffer::new(
+                &device,
+                BufferUsages::INDIRECT | BufferUsages::COPY_DST,
+                1024
+            );*/
+
+
             VoxelPipeline {
                 pipeline: render_pipeline,
                 frame_uniform: voxel_shader_uniform,
                 model_uniform: ssbo,
                 depth_buffer: depth_texture,
-                vertex_buf: GPUAllocator::new(&device, 10),
-                index_buf: GPUAllocator::new(&device, 10),
+                vertex_buf: vertex,
+                index_buf: indices,
+                instances: GPUAllocator::new(&device, 1),
             }
         };
 

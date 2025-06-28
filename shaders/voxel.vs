@@ -1,8 +1,6 @@
 #version 330 core
 layout (location = 0) in uint pos;
 layout (location = 1) in uint colour;
-//layout (location = 1) in vec3 aNormal;
-//layout (location = 1) in vec4 aColour;
 
 out vec4 Colour;
 out vec3 Normal;

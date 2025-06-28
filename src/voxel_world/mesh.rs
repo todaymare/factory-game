@@ -1,34 +1,32 @@
 use std::{mem::offset_of, ptr::null_mut};
 
 use bytemuck::{Pod, Zeroable};
-use glam::{UVec3, UVec4, Vec3, Vec4};
+use glam::{IVec3, UVec3, UVec4, Vec3, Vec4};
 use wgpu::{util::{DeviceExt, StagingBelt}, ShaderStages};
 
 use crate::{buddy_allocator::BuddyAllocator, renderer::{gpu_allocator::{GPUAllocator, GpuPointer}, uniform::Uniform}};
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
 #[repr(C)]
-pub struct ChunkVertex {
+pub struct ChunkQuadInstance {
     data1: u32,
     data2: u32,
+    w: u32,
+    h: u32,
 }
 
-const QUAD_VERTICES: &[f32] = &[
-    // positions     // colors
-    -1.0,  1.0,
-     1.0, -1.0,
-    -1.0, -1.0,
 
-    -1.0,  1.0,
-     1.0, -1.0,
-     1.0,  1.0,
-];
+#[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
+#[repr(C)]
+pub struct ChunkIndirectCall {
+    instance_start: u64,
+    instance_end: u64,
+}
 
 
 #[derive(Debug)]
 pub struct ChunkMesh {
-    pub vertex: GpuPointer<ChunkVertex>,
-    pub index: GpuPointer<u32>,
+    pub vertex: GpuPointer<ChunkQuadInstance>,
     pub index_count: u32,
 }
 
@@ -38,28 +36,25 @@ impl ChunkMesh {
         belt: &mut StagingBelt,
         encoder: &mut wgpu::CommandEncoder,
         device: &wgpu::Device,
-        vertex_allocator: &mut GPUAllocator<ChunkVertex>,
-        index_allocator: &mut GPUAllocator<u32>,
+        vertex_allocator: &mut GPUAllocator<ChunkQuadInstance>,
 
-        vertices: &[ChunkVertex], 
-        indices: &[u32],
+        vertices: &[ChunkQuadInstance], 
    ) -> Self {
         let vertex = vertex_allocator.allocate_slice(belt, encoder, device, vertices);
 
-        let index = index_allocator.allocate_slice(belt, encoder, device, &indices);
-
-
-        Self { vertex, index, index_count: indices.len() as u32 }
+        Self { vertex, index_count: vertices.len() as u32 }
     }
 }
 
 
-impl ChunkVertex {
-    pub fn new(pos: Vec3, colour: Vec4, normal: u8) -> Self {
+impl ChunkQuadInstance {
+    pub fn new(pos: IVec3, colour: Vec4, h: u32, l: u32, normal: u8) -> Self {
         let UVec3 { x, y, z } = pos.as_uvec3();
         let UVec4 { x: r, y: g, z: b, w: a } = (colour * 255.0).as_uvec4();
 
         debug_assert!(x <= 32 && y <= 32 && z <= 32, "{x} {y} {z}");
+        debug_assert!(h <= 32);
+        debug_assert!(l <= 32);
         debug_assert!(normal < 6);
         let pos = ((z as u32) << 12) | ((y as u32) << 6) | (x as u32);
         let pos = pos << 3 | normal as u32;
@@ -68,24 +63,17 @@ impl ChunkVertex {
         let data1 = pos as u32;
         let data2 = colour as u32;
 
-        Self { data1, data2 }
-    }
-
-
-    pub fn set_colour(&mut self, colour: Vec4) {
-        let UVec4 { x: r, y: g, z: b, w: a } = (colour * 255.0).as_uvec4();
-        let colour = ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | (a as u32);
-        self.data2 = colour;
+        Self { data1, data2, w: l, h }
     }
 
 
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRS: &[wgpu::VertexAttribute] =
-            &wgpu::vertex_attr_array![0 => Uint32, 1 => Uint32];
+            &wgpu::vertex_attr_array![1 => Uint32, 2 => Uint32, 3 => Uint32, 4 => Uint32];
 
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<ChunkVertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
+            array_stride: std::mem::size_of::<ChunkQuadInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
             attributes: ATTRS,
         }
     }
@@ -96,7 +84,7 @@ impl ChunkVertex {
 ///! plane data with 4 vertices
 pub struct Quad {
     pub color: Vec4,
-    pub corners: [Vec3; 4],
+    pub corners: [IVec3; 4],
     pub normal: u8,
 }
 
@@ -154,18 +142,3 @@ impl Quad {
 
 }*/
 
-
-pub fn draw_quad(verticies: &mut Vec<ChunkVertex>, indicies: &mut Vec<u32>, quad: Quad) {
-    let k = verticies.len() as u32;
-    let mut i = 0;
-    for corner in quad.corners {
-        let mut colour = quad.color;
-        colour = colour * 0.9 + colour * (i as f32 * 0.1);
-        colour.w = quad.color.w;
-        verticies.push(ChunkVertex::new(Vec3::new(corner[0] as f32, corner[1] as f32, corner[2] as f32), colour, quad.normal));
-        i += 1;
-    }
-
-
-    indicies.extend_from_slice(&[k, k+1, k+2, k+2, k+3, k]);
-}
