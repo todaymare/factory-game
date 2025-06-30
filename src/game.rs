@@ -631,6 +631,7 @@ impl Game {
         }
 
 
+        /*
         if self.current_tick.u32() % TICKS_PER_SECOND == 0 
             && self.world.unload_queue.is_empty() {
 
@@ -650,6 +651,7 @@ impl Game {
 
             error!("checking dead chunks took {:?}", time.elapsed());
         }
+*/
 
         if !self.craft_queue.is_empty() && self.player.can_give(self.craft_queue[0].0) {
             self.craft_progress += 1;

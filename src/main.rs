@@ -288,7 +288,7 @@ impl ApplicationHandler for App {
                         );
                     }
                     
-                    error!("{:?} {} {} {counter} {rendered_counter} {} {}", 
+                    error!("time {:?} chunks cap {} indirect buf len {} counter {counter} rendered count {rendered_counter} {} {}", 
                            now.elapsed(), game.world.chunks.cap(), voxel_pipeline.indirect_buf.len,
                            game.world.mesh_regions.iter().map(|x| x.1.nodes.len()).sum::<usize>(),
                            voxel_pipeline.instances.ssbo.len, );

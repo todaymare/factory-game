@@ -3,7 +3,7 @@ use sti::{define_key, key::Key, vec::KVec};
 use tracing::warn;
 use wgpu::wgt::DrawIndexedIndirectArgs;
 
-use crate::{constants::{CHUNK_SIZE_I32, REGION_SIZE}, directions::Direction, free_list::FreeKVec, frustum::Frustum, renderer::ChunkIndex, voxel_world::mesh::ChunkMesh, QUAD_INDICES};
+use crate::{constants::{CHUNK_SIZE_I32, REGION_SIZE}, directions::Direction, free_list::FreeKVec, frustum::Frustum, renderer::ChunkIndex, voxel_world::mesh::ChunkMesh, QUAD_INDICES, RENDER_DISTANCE};
 
 
 #[derive(Debug)]
@@ -206,7 +206,6 @@ impl Octree {
                 let child_size = 2u32.pow(MAX_DEPTH-depth-1);
                 let is_visible = frustum.is_box_visible(min, max);
 
-                // this breaks shit
                 if !is_visible {
                     return;
                 }
@@ -221,7 +220,6 @@ impl Octree {
 
                     let depth = depth + 1;
                     let pos = curr_pos + child_offset * child_size;
-                    //assert_eq!(which_child_is_this_position_in(pos, depth-1), i as usize, "pos: {pos}, {i}, {depth}, {child_offset} {}", which_child_is_this_position_in(pos, depth));
 
                     if let Some(node) = node {
                         self.render(
@@ -244,6 +242,11 @@ impl Octree {
 
             Node::Leaf(v, meshes) => {
                 let chunk_pos = (region * REGION_SIZE as i32) + v.as_ivec3();
+                let offset = chunk_pos - player_chunk;
+
+                if offset.length_squared() > RENDER_DISTANCE*RENDER_DISTANCE {
+                    return;
+                }
 
                 let min = chunk_pos * CHUNK_SIZE_I32;
                 let max = (chunk_pos + IVec3::ONE) * CHUNK_SIZE_I32;
@@ -257,7 +260,7 @@ impl Octree {
 
                 *rendered_counter += 1;
 
-                let dir_from_camera = ((chunk_pos * CHUNK_SIZE_I32).as_dvec3() - camera).as_vec3().normalize();
+                let dir_from_camera = offset.as_vec3().normalize();
 
                 let offset = chunk_pos * IVec3::splat(CHUNK_SIZE_I32);
                 let offset = offset.as_dvec3() - camera;

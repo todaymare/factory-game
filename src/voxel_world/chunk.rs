@@ -11,7 +11,7 @@ use super::mesh::ChunkMesh;
 
 #[derive(Debug)]
 pub struct Chunk {
-    pub data: Arc<ChunkData>,
+    pub data: Option<Arc<ChunkData>>,
     pub is_dirty: bool,
     pub meshes: Option<NodeId>,
     pub current_mesh: u32,
@@ -21,7 +21,7 @@ pub struct Chunk {
 
 #[derive(Debug, Clone)]
 pub struct ChunkData {
-    pub data: [Voxel; CHUNK_SIZE_P3],
+    pub data: Box<[Voxel; CHUNK_SIZE_P3]>,
 }
 
 
@@ -112,7 +112,7 @@ fn smoothstep(t: f64) -> f64 {
 impl Chunk {
     pub fn empty_chunk() -> Chunk {
         Chunk {
-            data: Arc::new(ChunkData::empty()),
+            data: None,
             is_dirty: false,
             meshes: None,
             // we still want to remesh initially
@@ -220,7 +220,7 @@ impl Chunk {
         }
 
         let chunk = Chunk {
-            data: data.into(),
+            data: if skip || data.is_empty() { None } else { Some(Arc::new(data)) },
             is_dirty: true,
             meshes: None,
             current_mesh: 0,
@@ -236,7 +236,9 @@ impl Chunk {
 
 
     pub fn get_mut_usize(&mut self, x: usize, y: usize, z: usize) -> &mut Voxel {
-        Arc::make_mut(&mut self.data).get_mut_usize(x, y, z)
+        if self.data.is_none() { self.data = Some(Arc::new(ChunkData::empty())) }
+
+        Arc::make_mut(self.data.as_mut().unwrap()).get_mut_usize(x, y, z)
     }
 
 
@@ -246,7 +248,7 @@ impl Chunk {
 
 
     pub fn get_usize(&self, x: usize, y: usize, z: usize) -> Voxel {
-        self.data.get_usize(x, y, z)
+        self.data.as_ref().map(|c| c.get_usize(x, y, z)).unwrap_or(Voxel::Air)
     }
 
 }
@@ -274,7 +276,7 @@ impl ChunkData {
 
     pub fn from_voxels(voxels: [Voxel; CHUNK_SIZE_P3]) -> Self {
         Self {
-            data: voxels,
+            data: Box::new(voxels),
         }
     }
 

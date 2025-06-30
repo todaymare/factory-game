@@ -2,7 +2,7 @@ pub mod chunk;
 pub mod voxel;
 pub mod mesh;
 
-use std::{fs::{self}, ops::Bound, sync::{mpsc, Arc}, time::Instant};
+use std::{fs::{self}, ops::Bound, sync::{mpsc, Arc}, time::{Duration, Instant}};
 
 use chunk::{ChunkData, Noise};
 use glam::{DVec3, IVec3, UVec3, Vec3, Vec4};
@@ -13,7 +13,7 @@ use tracing::{info, trace, warn};
 use voxel::Voxel;
 use wgpu::util::StagingBelt;
 
-use crate::{constants::{CHUNK_SIZE, REGION_SIZE}, free_list::FreeKVec, items::{DroppedItem, Item}, octree::Octree, renderer::{gpu_allocator::GPUAllocator, ChunkIndex}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
+use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_P3, REGION_SIZE}, free_list::FreeKVec, items::{DroppedItem, Item}, octree::Octree, renderer::{gpu_allocator::GPUAllocator, ChunkIndex}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
 
 
 type MeshMPSC = (IVec3, [ChunkIndex; 6], [(Vec<ChunkQuadInstance>); 6], u32);
@@ -26,7 +26,7 @@ pub struct VoxelWorld {
     pub mesh_regions: sti::hash::HashMap<IVec3, Octree>,
     pub structure_blocks: sti::hash::HashMap<IVec3, StructureId>,
     pub dropped_items: Vec<DroppedItem>,
-    pub remesh_queue: sti::hash::HashMap<IVec3, ()>,
+    pub remesh_queue: HashMap<IVec3, ()>,
     pub unload_queue: Vec<IVec3>,
 
     pub noise: Arc<Noise>,
@@ -63,7 +63,7 @@ const SURROUNDING_OFFSETS : &[IVec3] = &[
 struct MeshTaskData {
     version: u32,
     offsets: [ChunkIndex; 6],
-    chunks: [Arc<ChunkData>; 7],
+    chunks: [Option<Arc<ChunkData>>; 7],
     pos: IVec3,
 }
 
@@ -113,7 +113,7 @@ impl VoxelWorld {
             return true;
         }
 
-        if chunk.data.is_empty() {
+        if chunk.data.is_none() {
             trace!("failed to spawn a mesh job for chunk at '{pos}' because it's empty");
             chunk.current_mesh = chunk.version.get();
             return true;
@@ -133,7 +133,7 @@ impl VoxelWorld {
             free_list.push(Vec4::ZERO),
         ];
 
-        let chunks : [Arc<ChunkData>; 7] = core::array::from_fn(|i| {
+        let chunks : [Option<Arc<ChunkData>>; 7] = core::array::from_fn(|i| {
             let pos = if i == 0 { return data.take().unwrap() }
                       else { pos + SURROUNDING_OFFSETS[i-1] };
 
@@ -209,8 +209,9 @@ impl VoxelWorld {
             }
 
 
-
+            self.unload_queue.push(pos);
         }
+
         println!("remaning meshes: {}, remaining chunks: {}", self.queued_meshes, self.queued_chunks);
     }
 
@@ -225,15 +226,14 @@ impl VoxelWorld {
 
         if self.queued_chunks == 0 {
             let mut remesh_queue = core::mem::take(&mut self.remesh_queue);
+
             let now = Instant::now();
             let mut queue = vec![];
             let mut to_remove = vec![];
-            println!("remesh queue size {}", remesh_queue.len());
-            let mut processed = 0;
-            for (i, (&pos, _)) in remesh_queue.iter().enumerate() {
-                if now.elapsed().as_millis() > 10 { break }
 
-                processed += 1;
+            for (_, (&pos, _)) in remesh_queue.iter().enumerate() {
+                if now.elapsed().as_millis() > 3 { break }
+
                 let success = self.spawn_mesh_job(free_list, &mut queue, pos);
                 if success { to_remove.push(pos); }
 
@@ -247,7 +247,7 @@ impl VoxelWorld {
                                 warn!("mesh-generation: {e}");
                             }
                         }
-                        println!("processed 32 meshes in {:?}", time.elapsed());
+                        trace!("processed 32 meshes in {:?}", time.elapsed());
                     });
 
                     queue = vec![];
@@ -266,19 +266,14 @@ impl VoxelWorld {
                     }
                 });
 
-
             }
 
-            println!("removing {} stuff, processed {processed}", to_remove.len());
             to_remove.iter().for_each(|p| { remesh_queue.remove(&p); });
-            println!("removed");
-
             self.remesh_queue = remesh_queue;
         }
 
         self.process_chunks();
 
-        /*
         let mut i = 0;
         let now = Instant::now();
         while now.elapsed().as_millis() < 2
@@ -290,10 +285,11 @@ impl VoxelWorld {
             let Some(chunk) = slot
             else { i += 1; continue; };
 
+            /*
             if chunk.persistent {
                 self.unload_queue.swap_remove(i);
                 continue;
-            }
+            }*/
 
             if let Some(meshes) = chunk.meshes {
                 let (region, region_local) = split_chunk_pos(pos);
@@ -314,7 +310,7 @@ impl VoxelWorld {
             self.save_chunk(pos);
             let chunk = self.chunks.remove(&pos).unwrap();
             chunk.1.unwrap().meshes = None;
-        }*/
+        }
     }
 
 
@@ -337,14 +333,18 @@ impl VoxelWorld {
             let time = Instant::now();
             let mut byte_writer = ByteWriter::new();
 
-            let mut bytes = *data.as_bytes();
-            for byte in &mut bytes {
-                if *byte == Voxel::StructureBlock as u8 {
-                    *byte = Voxel::Air as u8;
+            if let Some(data) = data {
+                let mut bytes = *data.as_bytes();
+                for byte in &mut bytes {
+                    if *byte == Voxel::StructureBlock as u8 {
+                        *byte = Voxel::Air as u8;
+                    }
                 }
-            }
 
-            byte_writer.write(bytes);
+                byte_writer.write(bytes);
+            } else {
+                byte_writer.write([Voxel::Air as u8; CHUNK_SIZE_P3]);
+            }
 
             let path = format!("saves/chunks/{pos}.chunk");
             fs::write(path, byte_writer.finish()).unwrap();
@@ -466,10 +466,10 @@ impl VoxelWorld {
         let chunk = match fs::read(&path) {
             Ok(ref v) if let Some(mut byte_reader) = ByteReader::new(&v) => {
                 let mut chunk = Chunk::empty_chunk();
-                let data = Arc::make_mut(&mut chunk.data);
-
-                *data = ChunkData::from_bytes(byte_reader.read().unwrap());
-
+                let data = ChunkData::from_bytes(byte_reader.read().unwrap());
+                if !data.is_empty() {
+                    chunk.data = Some(Arc::new(data));
+                }
                 chunk.is_dirty = false;
                 chunk
             },
@@ -734,7 +734,7 @@ impl VoxelWorld {
 
 
 
-    pub fn greedy_mesh(c: [ChunkIndex; 6], chunks: [Arc<ChunkData>; 7]) -> [Vec<ChunkQuadInstance>; 6]{
+    pub fn greedy_mesh(c: [ChunkIndex; 6], chunks: [Option<Arc<ChunkData>>; 7]) -> [Vec<ChunkQuadInstance>; 6]{
         let [west, east] = Self::greedy_mesh_dir(c[0], c[3], &chunks, 0);
         let [up, down] = Self::greedy_mesh_dir(c[1], c[4], &chunks, 1);
         let [north, south] = Self::greedy_mesh_dir(c[2], c[5], &chunks, 2);
@@ -745,7 +745,7 @@ impl VoxelWorld {
     pub fn greedy_mesh_dir(
         front_chunk_index: ChunkIndex,
         back_chunk_index: ChunkIndex,
-        chunks: &[Arc<ChunkData>; 7],
+        chunks: &[Option<Arc<ChunkData>>; 7],
         d: usize
     ) -> [Vec<ChunkQuadInstance>; 2] {
 
@@ -797,9 +797,9 @@ impl VoxelWorld {
                             let nchunk = &chunks[curr_nchunk];
                             let pos = r;
                             let voxel = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
-                            nchunk.get(voxel)
+                            nchunk.as_ref().map(|c| c.get(voxel)).unwrap_or(Voxel::Air)
                         } else {
-                            chunk.get(r)
+                            chunk.as_ref().map(|c| c.get(r)).unwrap_or(Voxel::Air)
                         }
                     };
 
@@ -814,9 +814,9 @@ impl VoxelWorld {
                             let nchunk = &chunks[cmp_nchunk];
                             let pos = r;
                             let voxel = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
-                            nchunk.get(voxel)
+                            nchunk.as_ref().map(|c| c.get(voxel)).unwrap_or(Voxel::Air)
                         } else {
-                            chunk.get(r)
+                            chunk.as_ref().map(|c| c.get(r)).unwrap_or(Voxel::Air)
                         }
                     };
 
