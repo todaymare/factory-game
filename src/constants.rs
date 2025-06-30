@@ -1,5 +1,8 @@
 use glam::{Vec3, Vec4};
 
+
+pub const REGION_SIZE : u32 = 32;
+
 pub const COLOUR_PASS : Vec3 = Vec3::new(0.5, 0.8, 0.5);
 pub const COLOUR_DENY : Vec3 = Vec3::new(0.8, 0.5, 0.5);
 

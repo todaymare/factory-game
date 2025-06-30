@@ -117,7 +117,6 @@ impl Structures {
             let (chunk_pos, voxel_pos) = split_world_pos(pos);
             let chunk = world.get_chunk_mut(chunk_pos);
             *chunk.get_mut(voxel_pos) = Voxel::StructureBlock;
-            chunk.persistent = true;
             world.structure_blocks.insert(pos, id);
         }
 

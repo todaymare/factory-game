@@ -27,10 +27,12 @@ pub mod game;
 pub mod constants;
 pub mod buddy_allocator;
 pub mod free_list;
+pub mod octree;
 
 use std::{f32::consts::{PI, TAU}, ops::{self}, time::Instant};
 
 use constants::CHUNK_SIZE;
+use dhat::assert_eq;
 use directions::{CardinalDirection, Direction};
 use frustum::Frustum;
 use game::Game;
@@ -38,7 +40,7 @@ use rand::seq::IndexedRandom;
 use sti::define_key;
 use tracing::{error, warn, Level};
 use voxel_world::split_world_pos;
-use glam::{DVec2, DVec3, IVec3, Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
+use glam::{DVec2, DVec3, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
 use input::InputManager;
 use items::{DroppedItem, Item};
 use renderer::{utils::multi_draw_indexed_indirect, DepthBuffer, Renderer, VoxelShaderUniform};
@@ -54,14 +56,14 @@ define_key!(EntityId(u32));
 const MOUSE_SENSITIVITY : f32 = 0.0016;
 
 const PLAYER_REACH : f32 = 5.0;
-const PLAYER_SPEED : f32 = 100.0;
+const PLAYER_SPEED : f32 = 10.0;
 const PLAYER_PULL_DISTANCE : f32 = 3.5;
 const PLAYER_INTERACT_DELAY : f32 = 0.125;
 const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-const RENDER_DISTANCE : i32 = 48;
+const RENDER_DISTANCE : i32 = 80;
 
 const DROPPED_ITEM_SCALE : f32 = 0.5;
 
@@ -78,6 +80,11 @@ const QUAD_VERTICES : &[i32] = &[
 
 
 const QUAD_INDICES : &[u32] = &[0, 1, 2, 2, 3, 0];
+
+
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
 
 
 struct App {
@@ -100,7 +107,27 @@ impl ApplicationHandler for App {
             .unwrap();
         let static_window = unsafe { core::mem::transmute::<&Window, &'static Window>(window) };
         self.renderer = Some(pollster::block_on(Renderer::new(static_window)));
-        self.game.load();
+        //self.game.load();
+
+        let (player_chunk, _) = split_world_pos(self.game.player.body.position.as_ivec3());
+        let rd = RENDER_DISTANCE + 1;
+        dbg!(-rd..=rd);
+
+        for y in -rd..=rd {
+            for z in -rd..=rd {
+                for x in -rd..=rd {
+                    let offset = IVec3::new(x, y, z);
+                    let chunk_pos = offset;
+                    if offset.length_squared() < rd*rd {
+                        self.game.world.try_get_chunk(chunk_pos);
+                    }
+                    if offset.length_squared() < RENDER_DISTANCE*RENDER_DISTANCE {
+                        self.game.world.try_get_mesh(chunk_pos);
+                    }
+                }
+            }
+        }
+
     }
 
 
@@ -158,6 +185,7 @@ impl ApplicationHandler for App {
 
 
             WindowEvent::RedrawRequested => {
+
                 let game = &mut self.game;
                 let Some(renderer) = &mut self.renderer
                 else { error!("redraw-requested: no renderer found"); return; };
@@ -193,6 +221,7 @@ impl ApplicationHandler for App {
                     &mut encoder,
                     &mut renderer.staging_buffer,
                     &mut renderer.voxel_pipeline.instances,
+                    &mut renderer.voxel_pipeline.chunk_offsets,
                 );
 
 
@@ -201,7 +230,6 @@ impl ApplicationHandler for App {
                 //
                 // render
                 let now = Instant::now();
-
                 let c = game.sky_colour.as_dvec4();
                 let camera = game.camera.position;
                 let projection = game.camera.perspective_matrix();
@@ -209,6 +237,7 @@ impl ApplicationHandler for App {
 
                 // render chunks
                 {
+                    renderer.staging_buffer.recall();
                     let voxel_pipeline = &mut renderer.voxel_pipeline;
                     let rd = game.settings.render_distance;
                     let fog_distance = (rd - 1) as f32;
@@ -239,89 +268,37 @@ impl ApplicationHandler for App {
                         None => Frustum::compute(projection, cview),
                     };
 
-                    let mut quad_count = 0;
-                    let mut mesh_count = 0;
-                    let mut chunk_count = 0;
 
                     let now = Instant::now();
-                    for y in -rd..=rd {
-                        for z in -rd..=rd {
-                            for x in -rd..=rd {
-                                let offset = IVec3::new(x, y, z);
-
-                                if offset.length_squared() > (rd*rd) {
-                                    continue;
-                                }
-
-
-                                let chunk_pos = player_chunk + offset;
-
-                                let min = chunk_pos * CHUNK_SIZE as i32;
-                                let max = (chunk_pos + IVec3::ONE) * CHUNK_SIZE as i32;
-
-                                let min = (min.as_dvec3() - camera).as_vec3();
-                                let max = (max.as_dvec3() - camera).as_vec3();
-
-                                if !frustum.is_box_visible(min, max) {
-                                    continue;
-                                }
-
-                                chunk_count += 1;
-                                let Some(meshes) = game.world.try_get_mesh(chunk_pos)
-                                else { continue };
-
-                                let dir_from_camera = offset.as_vec3().normalize();
-
-
-                                let offset = chunk_pos * IVec3::splat(CHUNK_SIZE as i32);
-                                let offset = offset.as_dvec3() - camera;
-
-                                let offset = offset.as_vec3();
-
-                                for (i, mesh) in meshes.iter().enumerate() {
-                                    let Some(mesh) = mesh
-                                    else { continue };
-
-                                    if mesh.index_count == 0 {
-                                        warn!("an empty mesh was generated");
-                                        continue;
-                                    }
-
-                                    
-                                    let normal = Direction::NORMALS[i];
-                                    if dir_from_camera.dot(normal) > 0.0 {
-                                        continue
-                                    }
-
-                                    let vo = mesh.vertex.offset as u32;
-                                    let vs = mesh.vertex.size as u32;
-
-                                    indirect.push(DrawIndexedIndirectArgs {
-                                        index_count: QUAD_INDICES.len() as _,
-                                        instance_count: vs,
-                                        first_index: 0,
-                                        base_vertex: 0,
-                                        first_instance: vo,
-                                    });
-
-                                    quad_count += vs;
-                                    mesh_count += 1;
-
-                                    *voxel_pipeline.chunk_offsets.get_mut(mesh.chunk_mesh_data_index) = Vec4::new(offset.x, offset.y, offset.z, 0.0);
-                                }
-                            }
-                        }
+                    let mut counter = 0;
+                    let mut rendered_counter = 0;
+                    for (region, value) in game.world.mesh_regions.iter() {
+                        value.render(
+                            value.root,
+                            0,
+                            *region,
+                            UVec3::ZERO,
+                            player_chunk,
+                            &mut indirect,
+                            &mut voxel_pipeline.chunk_offsets,
+                            &frustum,
+                            camera,
+                            &mut counter,
+                            &mut rendered_counter,
+                        );
                     }
-                    error!("{:?}", now.elapsed());
-
-
                     
+                    error!("{:?} {} {} {counter} {rendered_counter} {} {}", 
+                           now.elapsed(), game.world.chunks.cap(), voxel_pipeline.indirect_buf.len,
+                           game.world.mesh_regions.iter().map(|x| x.1.nodes.len()).sum::<usize>(),
+                           voxel_pipeline.instances.ssbo.len, );
                     if !indirect.is_empty() {
                         voxel_pipeline.model_uniform.resize(&renderer.device, &mut encoder, voxel_pipeline.chunk_offsets.as_slice().len());
                         voxel_pipeline.model_uniform.update(&mut renderer.staging_buffer, &mut encoder, &renderer.device, voxel_pipeline.chunk_offsets.as_slice());
                         voxel_pipeline.indirect_buf.resize(&renderer.device, &mut encoder, indirect.len());
                         voxel_pipeline.indirect_buf.write(&mut renderer.staging_buffer, &mut encoder, &renderer.device, 0, &indirect);
                     }
+
 
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("voxel-render-pass"),
@@ -368,15 +345,11 @@ impl ApplicationHandler for App {
 
                     renderer.staging_buffer.finish();
                     renderer.queue.submit(std::iter::once(encoder.finish()));
-                    renderer.staging_buffer.recall();
 
-                    println!("quad count: {quad_count}, mesh count {mesh_count}, chunk count {chunk_count}");
                 }
 
                 let render_time = now.elapsed();
                 output.present();
-
-                println!("sim_time: {simulation_time:?} render_time: {render_time:?}");
 
                 self.window.as_ref().unwrap().request_redraw();
             }
@@ -400,8 +373,10 @@ impl ApplicationHandler for App {
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(Level::WARN)
+        .with_max_level(Level::INFO)
         .init();
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
 
     let event_loop = EventLoop::builder().build().unwrap();
 

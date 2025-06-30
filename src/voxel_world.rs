@@ -5,14 +5,15 @@ pub mod mesh;
 use std::{fs::{self}, ops::Bound, sync::{mpsc, Arc}, time::Instant};
 
 use chunk::{ChunkData, Noise};
-use glam::{DVec3, IVec3, Vec3, Vec4};
+use glam::{DVec3, IVec3, UVec3, Vec3, Vec4};
 use mesh::{ChunkQuadInstance, ChunkMesh};
 use save_format::byte::{ByteReader, ByteWriter};
+use sti::hash::HashMap;
 use tracing::{info, trace, warn};
 use voxel::Voxel;
 use wgpu::util::StagingBelt;
 
-use crate::{constants::CHUNK_SIZE, free_list::FreeKVec, items::{DroppedItem, Item}, renderer::{gpu_allocator::GPUAllocator, ChunkIndex}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
+use crate::{constants::{CHUNK_SIZE, REGION_SIZE}, free_list::FreeKVec, items::{DroppedItem, Item}, octree::Octree, renderer::{gpu_allocator::GPUAllocator, ChunkIndex}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
 
 
 type MeshMPSC = (IVec3, [ChunkIndex; 6], [(Vec<ChunkQuadInstance>); 6], u32);
@@ -22,9 +23,10 @@ type SaveChunkMPSC = ();
 
 pub struct VoxelWorld {
     pub chunks: sti::hash::HashMap<IVec3, Option<Chunk>>,
+    pub mesh_regions: sti::hash::HashMap<IVec3, Octree>,
     pub structure_blocks: sti::hash::HashMap<IVec3, StructureId>,
     pub dropped_items: Vec<DroppedItem>,
-    remesh_queue: sti::hash::HashMap<IVec3, ()>,
+    pub remesh_queue: sti::hash::HashMap<IVec3, ()>,
     pub unload_queue: Vec<IVec3>,
 
     pub noise: Arc<Noise>,
@@ -58,21 +60,26 @@ const SURROUNDING_OFFSETS : &[IVec3] = &[
 ];
 
 
+struct MeshTaskData {
+    version: u32,
+    offsets: [ChunkIndex; 6],
+    chunks: [Arc<ChunkData>; 7],
+    pos: IVec3,
+}
+
+
 impl VoxelWorld {
     pub fn new() -> Self {
         let (ms, mr) = mpsc::channel();
         let (cs, cr) = mpsc::channel();
         let (scs, scr) = mpsc::channel();
 
-        let mut full_chunk = Chunk::empty_chunk();
-        let data = Arc::make_mut(&mut full_chunk.data);
-        data.data.iter_mut().for_each(|x| *x = Voxel::Stone);
-
         Self {
             total_meshes: 0,
             total_chunks: 0,
 
             chunks: sti::hash::HashMap::new(),
+            mesh_regions: sti::hash::HashMap::new(),
             structure_blocks: sti::hash::HashMap::new(),
             dropped_items: vec![],
             remesh_queue: sti::hash::HashMap::new(),
@@ -95,33 +102,27 @@ impl VoxelWorld {
     }
 
 
-    fn spawn_mesh_job(&mut self, free_list: &mut FreeKVec<ChunkIndex, Vec4>, pos: IVec3) {
-        for i in 0..7 {
-            let chunk_pos = if i == 0 { pos }
-                      else { pos + SURROUNDING_OFFSETS[i-1] };
+    fn spawn_mesh_job(&mut self, free_list: &mut FreeKVec<ChunkIndex, Vec4>, task_queue: &mut Vec<MeshTaskData>, pos: IVec3) -> bool {
+        let Some(chunk) = self.chunks.get_mut(&pos).unwrap().as_mut()
+        else {
+            return false;
+        };
 
-            if self.try_get_chunk(chunk_pos).is_none() {
-                self.remesh_queue.insert(pos, ());
-                return;
-            }
-        }
-
-        let chunk = self.chunks.get_mut(&pos).unwrap().as_mut().unwrap();
-        if chunk.version == chunk.current_mesh {
-            trace!("failed to spawn a mesh job for chunk at '{pos}' because the mesh is fine");
-            return;
+        if chunk.version.get() == chunk.current_mesh {
+            warn!("failed to spawn a mesh job for chunk at '{pos}' because the mesh is up-to-date");
+            return true;
         }
 
         if chunk.data.is_empty() {
             trace!("failed to spawn a mesh job for chunk at '{pos}' because it's empty");
-            chunk.current_mesh = chunk.version;
-            return;
+            chunk.current_mesh = chunk.version.get();
+            return true;
         }
 
         self.total_meshes += 1;
         self.queued_meshes += 1;
         let version = chunk.version;
-        chunk.current_mesh = chunk.version;
+        let mut data = Some(chunk.data.clone());
 
         let offsets = [
             free_list.push(Vec4::ZERO),
@@ -132,23 +133,21 @@ impl VoxelWorld {
             free_list.push(Vec4::ZERO),
         ];
 
-        let chunks = core::array::from_fn(|i| {
-            let pos = if i == 0 { pos }
+        let chunks : [Arc<ChunkData>; 7] = core::array::from_fn(|i| {
+            let pos = if i == 0 { return data.take().unwrap() }
                       else { pos + SURROUNDING_OFFSETS[i-1] };
 
             self.chunks[&pos].as_ref().unwrap().data.clone()
         });
 
-        let sender = self.mesh_sender.clone();
-
-        rayon::spawn(move || {
-            let time = Instant::now();
-            let result = VoxelWorld::greedy_mesh(offsets, chunks);
-            trace!("mesh-generation: meshes in {:?}", time.elapsed());
-            if let Err(_) = sender.send((pos, offsets, result, version)) {
-                warn!("mesh-generation: job receiver terminated before all meshing jobs were done");
-            }
+        task_queue.push(MeshTaskData {
+            version: version.get(),
+            offsets,
+            chunks,
+            pos,
         });
+
+        true
     }
 
 
@@ -159,58 +158,130 @@ impl VoxelWorld {
         encoder: &mut wgpu::CommandEncoder,
         belt: &mut StagingBelt,
         vertex_allocator: &mut GPUAllocator<ChunkQuadInstance>,
+        free_list: &mut FreeKVec<ChunkIndex, Vec4>,
     ) {
-
         let now = Instant::now();
-        while now.elapsed().as_millis() < 1
+        while now.elapsed().as_millis() < 3
             && let Ok((pos, offsets, result, version)) = self.mesh_reciever.try_recv() {
             self.queued_meshes -= 1;
             let Some(Some(chunk)) = self.chunks.get_mut(&pos)
             else {
-                info!("discarded mesh of chunk '{pos}' because it was unloaded");
+                trace!("discarded mesh of chunk '{pos}' because it was unloaded");
                 continue;
             };
 
             if version < chunk.current_mesh {
-                info!("outdated mesh");
+                trace!("outdated mesh");
                 continue;
             }
 
+
+            if result.iter().all(|x| x.is_empty()) {
+                continue;
+            }
+
+
+            let (region, region_local) = split_chunk_pos(pos);
+            let hash = self.mesh_regions.hash(&region);
+            let (present, slot) = self.mesh_regions.lookup_for_insert(&region, hash);
+            if !present {
+                trace!("no region");
+                self.mesh_regions.insert_at(slot, hash, region, Octree::new());
+            }
+
+            let octree = self.mesh_regions.slot_mut(slot).1;
+            if chunk.meshes.is_none() {
+                chunk.meshes = Some(octree.insert(region_local, [None, None, None, None, None, None]));
+            }
+
+            let meshes = octree.get_mut(chunk.meshes.unwrap());
             for (i, vertices) in result.iter().enumerate() {
                 if vertices.is_empty() {
-                    chunk.meshes[i] = None;
-                    info!("discarded mesh of chunk '{pos}' because it was empty");
+                    meshes[i] = None;
+                    free_list.remove(offsets[i]);
+                    trace!("discarded mesh of chunk '{pos}' because it was empty");
                     continue;
                 }
 
                 self.vertex_count += vertices.len() as u32;
                 let mesh = ChunkMesh::new(belt, encoder, device, vertex_allocator, &vertices, offsets[i]);
-                chunk.meshes[i] = Some(mesh);
+                meshes[i] = Some(mesh);
             }
 
+
+
         }
+        println!("remaning meshes: {}, remaining chunks: {}", self.queued_meshes, self.queued_chunks);
     }
 
 
 
     pub fn process(&mut self, voxel_allocator: &mut GPUAllocator<ChunkQuadInstance>, free_list: &mut FreeKVec<ChunkIndex, Vec4>) {
-        let remesh_queue = core::mem::take(&mut self.remesh_queue);
-
-        for (pos, _) in remesh_queue.iter() {
-            self.spawn_mesh_job(free_list, *pos);
-        }
 
         if self.queued_meshes == 0 && self.queued_chunks == 0 {
         } else {
             info!("{} total meshes {} total chunks {} meshes left {} chunks left", self.total_meshes, self.total_chunks, self.queued_meshes, self.queued_chunks);
         }
 
+        if self.queued_chunks == 0 {
+            let mut remesh_queue = core::mem::take(&mut self.remesh_queue);
+            let now = Instant::now();
+            let mut queue = vec![];
+            let mut to_remove = vec![];
+            println!("remesh queue size {}", remesh_queue.len());
+            let mut processed = 0;
+            for (i, (&pos, _)) in remesh_queue.iter().enumerate() {
+                if now.elapsed().as_millis() > 10 { break }
+
+                processed += 1;
+                let success = self.spawn_mesh_job(free_list, &mut queue, pos);
+                if success { to_remove.push(pos); }
+
+                if queue.len() == 64 {
+                    let sender = self.mesh_sender.clone();
+                    rayon::spawn(move || {
+                        let time = Instant::now();
+                        for item in queue {
+                            let mesh = Self::greedy_mesh(item.offsets, item.chunks);
+                            if let Err(e) = sender.send((item.pos, item.offsets, mesh, item.version)) {
+                                warn!("mesh-generation: {e}");
+                            }
+                        }
+                        println!("processed 32 meshes in {:?}", time.elapsed());
+                    });
+
+                    queue = vec![];
+                }
+
+            }
+
+            if queue.len() > 0 {
+                let sender = self.mesh_sender.clone();
+                rayon::spawn(move || {
+                    for item in queue {
+                        let mesh = Self::greedy_mesh(item.offsets, item.chunks);
+                        if let Err(e) = sender.send((item.pos, item.offsets, mesh, item.version)) {
+                            warn!("mesh-generation: {e}");
+                        }
+                    }
+                });
+
+
+            }
+
+            println!("removing {} stuff, processed {processed}", to_remove.len());
+            to_remove.iter().for_each(|p| { remesh_queue.remove(&p); });
+            println!("removed");
+
+            self.remesh_queue = remesh_queue;
+        }
 
         self.process_chunks();
 
+        /*
         let mut i = 0;
         let now = Instant::now();
-        while now.elapsed().as_millis() < 1
+        while now.elapsed().as_millis() < 2
             && let Some(&pos) = self.unload_queue.get(i) {
 
             let Some(slot) = self.chunks.get(&pos)
@@ -224,22 +295,31 @@ impl VoxelWorld {
                 continue;
             }
 
-            for mesh in &chunk.meshes {
-                let Some(mesh) = mesh
-                else { continue };
+            if let Some(meshes) = chunk.meshes {
+                let (region, region_local) = split_chunk_pos(pos);
+                let octree = self.mesh_regions.get_mut(&region).unwrap();
+                let meshes = octree.get_mut(meshes);
+                for mesh in meshes {
+                    let Some(mesh) = mesh
+                    else { continue };
 
-                voxel_allocator.free(mesh.vertex);
-                free_list.remove(mesh.chunk_mesh_data_index);
+                    voxel_allocator.free(mesh.vertex);
+                    free_list.remove(mesh.chunk_mesh_data_index);
+                }
+
+                octree.remove(region_local);
             }
 
             self.unload_queue.remove(i);
             self.save_chunk(pos);
-            self.chunks.remove(&pos);
-        }
+            let chunk = self.chunks.remove(&pos).unwrap();
+            chunk.1.unwrap().meshes = None;
+        }*/
     }
 
 
     pub fn save_chunk(&mut self, pos: IVec3) {
+        return;
         let chunk = self.chunks.get_mut(&pos).unwrap().as_mut().unwrap();
         if !chunk.is_dirty {
             trace!("chunk-save-system: chunk at '{pos}' isn't dirty. skipping saving");
@@ -263,6 +343,7 @@ impl VoxelWorld {
                     *byte = Voxel::Air as u8;
                 }
             }
+
             byte_writer.write(bytes);
 
             let path = format!("saves/chunks/{pos}.chunk");
@@ -289,19 +370,19 @@ impl VoxelWorld {
             let Some(Some(chunk)) = self.chunks.get_mut(&pos)
             else { continue };
 
-            chunk.version += 1;
+            chunk.version = chunk.version.checked_add(1).unwrap();
         }
 
 
         let chunk = self.ensure_chunk_exists(pos);
-        chunk.version += 1;
+        chunk.version = chunk.version.checked_add(1).unwrap();
         chunk.is_dirty = true;
 
         chunk
     }
 
 
-    pub fn try_get_chunk(&mut self, pos: IVec3) -> Option<&Chunk> {
+    pub fn try_get_chunk(&mut self, pos: IVec3) -> Option<Option<&Chunk>> {
         let hash = self.chunks.hash(&pos);
         let (present, slot) = self.chunks.lookup_for_insert(&pos, hash);
 
@@ -324,7 +405,7 @@ impl VoxelWorld {
             return None;
         }
 
-        return self.chunks.slot(slot).1.as_ref();
+        return Some(self.chunks.slot(slot).1.as_ref());
     }
 
 
@@ -356,10 +437,8 @@ impl VoxelWorld {
                 let pos = pos + invalidate;
                 let Some(Some(chunk)) = self.chunks.get_mut(&pos)
                 else { continue };
-                chunk.version += 1;
+                chunk.version = chunk.version.checked_add(1).unwrap();
             }
-
-
         }
     }
 
@@ -407,38 +486,23 @@ impl VoxelWorld {
 
 
     pub fn try_get_mesh(&mut self, pos: IVec3) -> Option<&[Option<ChunkMesh>; 6]> {
-        let chunk = {
-            let hash = self.chunks.hash(&pos);
-            let (present, slot) = self.chunks.lookup_for_insert(&pos, hash);
+        let Some(chunk) = self.try_get_chunk(pos)?
+        else {
+            trace!("queueing the chunk at '{pos}' for remeshing");
+            self.remesh_queue.insert(pos, ());
+            return None;
+        };
 
-            if !present {
-                self.chunks.insert_at(slot, hash, pos, None);
-                self.total_chunks += 1;
-
-                let sender = self.chunk_sender.clone();
-                let perlin = self.noise.clone();
-
-                self.queued_chunks += 1;
-                rayon::spawn(move || {
-                    let chunk = Self::chunk_creation_job(pos, &perlin);
-
-                    if let Err(_) = sender.send((pos, chunk)) {
-                        warn!("chunk-generation-system: job receiver terminated before all meshing jobs were done");
-                    }
-                });
-
-                return None;
-            }
-
-            self.chunks.slot(slot).1.as_ref()
-        }?;
-
-        if chunk.version != chunk.current_mesh {
-            info!("queueing the chunk at '{pos}' for remeshing");
+        if chunk.version.get() != chunk.current_mesh {
+            trace!("queueing the chunk at '{pos}' for remeshing");
             self.remesh_queue.insert(pos, ());
         }
 
-        Some(&chunk.meshes)
+        let chunk = self.chunks.get(&pos)?;
+        let meshes = chunk.as_ref()?.meshes?;
+        let (region, _) = split_chunk_pos(pos);
+        let octree = &self.mesh_regions[&region];
+        Some(octree.get(meshes))
     }
 
 
@@ -646,7 +710,7 @@ impl VoxelWorld {
 
 
     pub fn save(&mut self) {
-        trace!("voxel-save-system: saving the world..");
+        warn!("voxel-save-system: saving the world..");
         let time = Instant::now();
         self.process_blocking();
 
@@ -832,39 +896,7 @@ impl VoxelWorld {
                     } else {
                         forward_vertices.push(ChunkQuadInstance::new(x, kind.colour(), h as _, w as _, d as u8, front_chunk_index));
                     }
-/*
-                    if neg_d {
-                        let quad =  mesh::Quad {
-                                    //color: if neg_d { Vec4::new(1.0, 0.0, 0.0, 1.0) }
-                                    //       else { Vec4::new(0.0, 1.0, 0.0, 1.0) },
-                                    color: kind.colour(),
-                                    corners: [
-                                        (x+dv).as_vec3(),
-                                        (x+du+dv).as_vec3(),
-                                        (x+du).as_vec3(),
-                                        x.as_vec3(),
-                                    ],
-                                    normal: d as u8 + 3,
-                                };
-
-                        draw_quad(&mut backward_vertices, &mut backward_indices, quad);
-                    } else {
-                        let quad =  mesh::Quad {
-                                    //color: if neg_d { Vec4::new(1.0, 0.0, 0.0, 1.0) }
-                                    //       else { Vec4::new(0.0, 1.0, 0.0, 1.0) },
-                                    color: kind.colour(),
-                                    corners: [
-                                        x.as_vec3(),
-                                        (x+du).as_vec3(),
-                                        (x+du+dv).as_vec3(),
-                                        (x+dv).as_vec3(),
-                                    ],
-                                    normal: d as u8,
-                                };
-
-                        draw_quad(&mut forward_vertices, &mut forward_indices, quad);
-                    }*/
-
+                    
                     // clear this part of the mask so we don't add duplicates
                     for l in 0..h  {
                         for k in 0..w {
@@ -887,6 +919,7 @@ impl VoxelWorld {
 }
 
 
+/// takes in a world position and returns a chunk position, chunk local position pair
 pub fn split_world_pos(pos: IVec3) -> (IVec3, IVec3) {
     let chunk_pos = pos.div_euclid(IVec3::splat(CHUNK_SIZE as i32));
     let chunk_local_pos = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
@@ -895,4 +928,9 @@ pub fn split_world_pos(pos: IVec3) -> (IVec3, IVec3) {
 }
 
 
-
+/// takes in a chunk position and returns a region position, region local position pair
+pub fn split_chunk_pos(pos: IVec3) -> (IVec3, UVec3) {
+    let region = pos.div_euclid(IVec3::splat(REGION_SIZE as i32));
+    let region_local = pos.rem_euclid(IVec3::splat(REGION_SIZE as i32));
+    (region, region_local.as_uvec3())
+}

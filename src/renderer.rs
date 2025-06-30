@@ -472,19 +472,6 @@ impl Renderer {
         glfw.set_swap_interval(glfw::SwapInterval::None);
 */
         let this = Self {
-            /*
-            glfw,
-            window,
-            window_events,
-            quad_vao,
-            quad_vbo,
-            white,
-            characters,
-            biggest_y_size,
-            meshes: assets,
-            atlases,
-            */
-
             ui_scale: 1.0,
             rects: vec![],
             current_rect: ScreenRect::new(),
@@ -496,7 +483,7 @@ impl Renderer {
             config,
             //mesh_pipeline,
             voxel_pipeline,
-            staging_buffer: StagingBelt::new(10240),
+            staging_buffer: StagingBelt::new(128 << 20),
         };
 
         this

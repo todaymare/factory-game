@@ -183,8 +183,8 @@ impl Game {
         this.command_registry.register("remesh", |game, _| {
 
             game.world.chunks.iter_mut().filter_map(|x| x.1.as_mut()).for_each(|x| {
-                x.meshes.iter_mut().for_each(|x| *x = None);
-                x.version += 1;
+                //x.meshes.iter_mut().for_each(|x| *x = None);
+                //x.version.add(1);
             });
             Some(())
         });
@@ -627,7 +627,7 @@ impl Game {
 
         if self.current_tick.u32() % (TICKS_PER_SECOND * 120) == 0 {
             info!("autosaving..");
-            self.save();
+            //self.save();
         }
 
 
