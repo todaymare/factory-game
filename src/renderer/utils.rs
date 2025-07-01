@@ -1,4 +1,3 @@
-use metal::{IndirectCommandBufferDescriptor, MTLResourceOptions};
 use wgpu::{util::RenderEncoder, wgc::api::Metal, wgt::{self, DrawIndexedIndirectArgs}, Buffer, Device, IndexFormat, RenderPass};
 
 pub fn multi_draw_indexed_indirect(

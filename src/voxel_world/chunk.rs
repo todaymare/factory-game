@@ -19,7 +19,7 @@ pub struct Chunk {
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ChunkData {
     pub data: Box<[Voxel; CHUNK_SIZE_P3]>,
 }
@@ -323,4 +323,11 @@ impl ChunkData {
     }
 }
 
+
+
+impl core::fmt::Debug for ChunkData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChunkData").finish()
+    }
+}
 

@@ -32,7 +32,6 @@ pub mod octree;
 use std::{f32::consts::{PI, TAU}, ops::{self}, time::Instant};
 
 use constants::CHUNK_SIZE;
-use dhat::assert_eq;
 use directions::{CardinalDirection, Direction};
 use frustum::Frustum;
 use game::Game;
@@ -63,7 +62,8 @@ const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-const RENDER_DISTANCE : i32 = 80;
+const RENDER_DISTANCE : i32 = 16;
+const LOAD_DISTANCE : i32 = 16;
 
 const DROPPED_ITEM_SCALE : f32 = 0.5;
 
@@ -121,6 +121,7 @@ impl ApplicationHandler for App {
                     if offset.length_squared() < rd*rd {
                         self.game.world.try_get_chunk(chunk_pos);
                     }
+
                     if offset.length_squared() < RENDER_DISTANCE*RENDER_DISTANCE {
                         self.game.world.try_get_mesh(chunk_pos);
                     }

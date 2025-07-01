@@ -113,9 +113,10 @@ impl VoxelWorld {
             return true;
         }
 
+        chunk.current_mesh = chunk.version.get();
+
         if chunk.data.is_none() {
             trace!("failed to spawn a mesh job for chunk at '{pos}' because it's empty");
-            chunk.current_mesh = chunk.version.get();
             return true;
         }
 
@@ -207,9 +208,6 @@ impl VoxelWorld {
                 let mesh = ChunkMesh::new(belt, encoder, device, vertex_allocator, &vertices, offsets[i]);
                 meshes[i] = Some(mesh);
             }
-
-
-            self.unload_queue.push(pos);
         }
 
         println!("remaning meshes: {}, remaining chunks: {}", self.queued_meshes, self.queued_chunks);
@@ -235,7 +233,11 @@ impl VoxelWorld {
                 if now.elapsed().as_millis() > 3 { break }
 
                 let success = self.spawn_mesh_job(free_list, &mut queue, pos);
-                if success { to_remove.push(pos); }
+                if success {
+                    let chunk = self.chunks[&pos].as_ref().unwrap();
+                    assert_eq!(chunk.version.get(), chunk.current_mesh);
+                    to_remove.push(pos);
+                }
 
                 if queue.len() == 64 {
                     let sender = self.mesh_sender.clone();

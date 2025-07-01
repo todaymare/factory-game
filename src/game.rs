@@ -3,6 +3,7 @@ pub mod save_system;
 use std::time::Instant;
 
 use glam::{usize, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
+use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge, ParallelIterator};
 use sti::hash::fxhash::{fxhash32, FxHasher32};
 use tracing::{error, info, trace, warn};
 use winit::{event::MouseButton, keyboard::KeyCode};
@@ -458,6 +459,21 @@ impl Game {
                 let time = Instant::now();
                 self.load();
                 info!("loaded save in {:?}", time.elapsed());
+            }
+
+
+            if input.is_key_just_pressed(KeyCode::F4) {
+                info!("validating meshes");
+                let time = Instant::now();
+                self.world.chunks.iter()
+                    .for_each(|x| {
+                        if x.0.length_squared() < RENDER_DISTANCE*RENDER_DISTANCE {
+                            let chunk = x.1.as_ref().expect("chunk wasn't loaded");
+                            assert_eq!(chunk.version.get(), chunk.current_mesh, "{} {} {:?}", x.0, x.0.length_squared(), chunk);
+                        }
+                    });
+
+                info!("validated in {:?}", time.elapsed());
             }
 
 
