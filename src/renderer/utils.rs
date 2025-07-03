@@ -1,7 +1,6 @@
 use wgpu::{util::RenderEncoder, wgc::api::Metal, wgt::{self, DrawIndexedIndirectArgs}, Buffer, Device, IndexFormat, RenderPass};
 
 pub fn multi_draw_indexed_indirect(
-    device: &Device,
     render_pass: &mut RenderPass,
     vertex_buff: &Buffer,
     instance_buff: &Buffer,

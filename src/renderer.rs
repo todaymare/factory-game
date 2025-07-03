@@ -19,7 +19,7 @@ use uniform::Uniform;
 use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgc::id::markers::StagingBuffer, wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs}, BufferUsages, BufferUses, TextureUsages, *};
 use winit::{event_loop::EventLoop, window::Window};
 
-use crate::{directions::CardinalDirection, free_list::FreeKVec, items::{Assets, ItemKind}, mesh::{Mesh, Vertex}, shader::{Shader, ShaderProgram, ShaderType}, voxel_world::mesh::{ChunkMesh, ChunkQuadInstance}, QUAD_INDICES, QUAD_VERTICES};
+use crate::{directions::CardinalDirection, free_list::FreeKVec, items::{Assets, ItemKind}, mesh::{Mesh, Vertex}, shader::{Shader, ShaderProgram, ShaderType}, voxel_world::mesh::{ChunkFaceMesh, ChunkMeshFramedata, ChunkQuadInstance}, QUAD_INDICES, QUAD_VERTICES};
 
 
 const FONT_SIZE : u32 = 64;
@@ -101,29 +101,31 @@ pub struct VoxelShaderUniform {
     pub view: Mat4,
     pub projection: Mat4,
     pub modulate: Vec4,
-    pub camera_pos: Vec3,
+    pub camera_block: IVec3,
     pub pad_00: f32,
-    pub fog_color: Vec3,
+    pub camera_offset: Vec3,
     pub pad_01: f32,
+    pub fog_color: Vec3,
+    pub pad_02: f32,
     pub fog_density: f32,
     pub fog_start: f32,
     pub fog_end: f32,
-    pub pad_02: f32,
+    pub pad_03: f32,
 }
 
-static_assert_eq!(size_of::<VoxelShaderUniform>(), 192);
+static_assert_eq!(size_of::<VoxelShaderUniform>(), 208);
 
 
-define_key!(pub ChunkIndex(u32));
+define_key!(pub MeshIndex(u32));
 
 
 pub struct VoxelPipeline {
     pub pipeline: RenderPipeline,
     pub frame_uniform: Uniform<VoxelShaderUniform>,
-    pub model_uniform: SSBO<Vec4>,
+    pub model_uniform: SSBO<ChunkMeshFramedata>,
     pub depth_buffer: DepthBuffer,
 
-    pub chunk_offsets: FreeKVec<ChunkIndex, Vec4>,
+    pub chunk_offsets: FreeKVec<MeshIndex, ChunkMeshFramedata>,
     pub instances: GPUAllocator<ChunkQuadInstance>,
     pub indirect_buf: ResizableBuffer<DrawIndexedIndirectArgs>,
     pub vertex_buf: Buffer,
@@ -161,7 +163,8 @@ impl Renderer {
                                     | wgpu::Features::TIMESTAMP_QUERY,
                 required_limits: {
                     let mut limits = wgpu::Limits::downlevel_defaults();
-                    limits.max_buffer_size = 0x100000000;
+                    limits.max_buffer_size = 17179869184;
+                    limits.max_storage_buffer_binding_size = 512 << 20;
                     limits
                 },
                 label: Some("main device"),

@@ -2,13 +2,14 @@ pub mod save_system;
 
 use std::time::Instant;
 
+use gl::RENDERER;
 use glam::{usize, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge, ParallelIterator};
 use sti::hash::fxhash::{fxhash32, FxHasher32};
 use tracing::{error, info, trace, warn};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
-use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE, COLOUR_DENY, COLOUR_PASS, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::{CardinalDirection, Direction}, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, mesh::Mesh, renderer::{gpu_allocator::GPUAllocator, Renderer}, shader::{Shader, ShaderProgram, ShaderType}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{self, InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{mesh::ChunkQuadInstance, split_world_pos, voxel::Voxel, VoxelWorld}, Camera, PhysicsBody, Player, Tick, DELTA_TICK, DROPPED_ITEM_SCALE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND};
+use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE, COLOUR_DENY, COLOUR_PASS, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::{CardinalDirection, Direction}, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, mesh::Mesh, renderer::{gpu_allocator::GPUAllocator, Renderer}, shader::{Shader, ShaderProgram, ShaderType}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{self, InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, mesh::ChunkQuadInstance, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick, DELTA_TICK, DROPPED_ITEM_SCALE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND};
 
 pub struct Game {
     pub world: VoxelWorld,
@@ -114,7 +115,7 @@ impl Game {
                 ui_scale: 1.0,
                 delta_tick: DELTA_TICK,
                 player_speed: PLAYER_SPEED,
-                render_distance: RENDER_DISTANCE,
+                render_distance: 1,
             },
 
         };
@@ -183,10 +184,10 @@ impl Game {
 
         this.command_registry.register("remesh", |game, _| {
 
-            game.world.chunks.iter_mut().filter_map(|x| x.1.as_mut()).for_each(|x| {
+            //game.world.chunks.iter_mut().filter_map(|x| x.1.as_mut()).for_each(|x| {
                 //x.meshes.iter_mut().for_each(|x| *x = None);
                 //x.version.add(1);
-            });
+            //});
             Some(())
         });
 
@@ -462,22 +463,6 @@ impl Game {
             }
 
 
-            if input.is_key_just_pressed(KeyCode::F4) {
-                info!("validating meshes");
-                let time = Instant::now();
-                self.world.chunks.iter()
-                    .for_each(|x| {
-                        if x.0.length_squared() < RENDER_DISTANCE*RENDER_DISTANCE {
-                            let chunk = x.1.as_ref().expect("chunk wasn't loaded");
-                            assert_eq!(chunk.version.get(), chunk.current_mesh, "{} {} {:?}", x.0, x.0.length_squared(), chunk);
-                        }
-                    });
-
-                info!("validated in {:?}", time.elapsed());
-            }
-
-
-
             if input.is_key_pressed(KeyCode::ControlLeft) {
                 let mut offset = None;
                 if input.is_key_just_pressed(KeyCode::Numpad1) { offset = Some(0) }
@@ -647,27 +632,121 @@ impl Game {
         }
 
 
-        /*
-        if self.current_tick.u32() % TICKS_PER_SECOND == 0 
-            && self.world.unload_queue.is_empty() {
+        if self.settings.render_distance < RENDER_DISTANCE
+            && self.world.chunker.mesh_load_queue_len() == 0
+            && self.world.chunker.chunk_load_queue_len() == 0
+            && self.world.chunker.chunk_active_jobs_len() == 0
+            && self.world.chunker.mesh_active_jobs_len() == 0 {
 
-            let time = Instant::now();
             let (player_chunk, _) = split_world_pos(self.player.body.position.as_ivec3());
+            let player_chunk = IVec3::ZERO;
             let rd = self.settings.render_distance;
-            let mins = player_chunk - IVec3::splat(rd);
-            let maxs = player_chunk + IVec3::splat(rd);
+            let rdp1 = rd+1;
 
-            for (pos, _) in self.world.chunks.iter() {
-                if pos.x < mins.x || pos.y < mins.y || pos.z < mins.z
-                    || pos.x > maxs.x || pos.y > maxs.y || pos.z > maxs.z
-                {
-                    self.world.unload_queue.push(*pos);
+
+            for y in -rd..=rd {
+                for z in -rd..=rd {
+                    for x in -rd..=rd {
+                        let offset = IVec3::new(x, y, z);
+                        let dist = offset.length_squared();
+                        let chunk_pos = offset + player_chunk;
+
+                        let entry = self.world.chunker.get_mesh_entry(WorldChunkPos(chunk_pos));
+                        if !matches!(entry, MeshEntry::None) {
+                            continue;
+                        }
+
+                        if dist < rdp1*rdp1 {
+                            self.world.try_get_chunk(chunk_pos);
+                        }
+
+                        if dist < rd*rd {
+                            self.world.try_get_mesh(chunk_pos);
+                        }
+                    }
                 }
             }
 
-            error!("checking dead chunks took {:?}", time.elapsed());
+            self.settings.render_distance += 1;
+            self.settings.render_distance = self.settings.render_distance.min(RENDER_DISTANCE);
         }
-*/
+
+
+        if self.current_tick.u32() % (TICKS_PER_SECOND * 5) == 0 {
+
+            let time = Instant::now();
+            let (player_chunk, _) = split_world_pos(self.player.body.position.as_ivec3());
+            let rd = self.settings.render_distance-1;
+
+            let mut skipped = 0;
+            let mut unloaded = 0;
+
+            let mut unload = vec![];
+
+            'unload:
+            for (pos, chunk, mesh) in self.world.chunker.iter_chunks() {
+                let offset = (pos.0-player_chunk).length_squared();
+
+                let chunk = match chunk {
+                    ChunkEntry::Loaded(chunk) => chunk,
+                    _ => continue
+                };
+
+                let mesh = match mesh {
+                    MeshEntry::Loaded(mesh) => mesh,
+                    _ => continue
+                };
+
+                if self.world.chunker.is_queued_for_meshing(pos) {
+                    continue
+                }
+
+                if self.world.chunker.is_chunk_meshing(pos) {
+                    continue
+                }
+
+                if self.world.chunker.is_queued_for_unloading(pos) {
+                    continue;
+                }
+
+                
+                // the mesh exists
+                if offset < RENDER_DISTANCE*RENDER_DISTANCE {
+                    if chunk.version != mesh.version {
+                        // the version mismatches
+                        skipped += 1;
+                        continue;
+                    }
+                }
+
+                // check that any surrounding chunk isn't gonna need it soon
+                for offset in SURROUNDING_OFFSETS {
+                    let pos = WorldChunkPos(pos.0 + offset);
+                    if self.world.chunker.is_queued_for_meshing(pos) {
+                        continue 'unload;
+                    }
+                }
+
+
+                let full_unload = offset > RENDER_DISTANCE*RENDER_DISTANCE;
+
+                unload.push((full_unload, pos));
+                unloaded += 1;
+            }
+
+            
+            for (full, pos) in unload {
+                if full {
+                    self.world.chunker.unload_chunk(pos);
+                } else {
+                    self.world.chunker.unload_voxel_data_of_chunk(pos);
+                }
+            }
+
+
+            warn!("checking dead chunks took {:?}, skipped {skipped}, unloaded: {unloaded}, render distance {}, size: {}",
+                  time.elapsed(), self.settings.render_distance, self.world.chunker.iter_chunks().count());
+        }
 
         if !self.craft_queue.is_empty() && self.player.can_give(self.craft_queue[0].0) {
             self.craft_progress += 1;

@@ -2,7 +2,7 @@ use std::{marker::PhantomData, num::{NonZero, NonZeroU64}};
 
 use bytemuck::Pod;
 use rand::seq::IndexedRandom;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use wgpu::util::{DeviceExt, StagingBelt};
 
 pub struct SSBO<T> {
@@ -10,6 +10,7 @@ pub struct SSBO<T> {
     bind_group: wgpu::BindGroup,
     layout: wgpu::BindGroupLayout,
     marker: PhantomData<T>,
+    name: &'static str,
 }
 
 
@@ -31,6 +32,7 @@ impl<T: Pod + std::fmt::Debug> ResizableBuffer<T> {
             mapped_at_creation: false,
         });
 
+
         Self {
             buffer,
             name,
@@ -44,6 +46,14 @@ impl<T: Pod + std::fmt::Debug> ResizableBuffer<T> {
     pub fn resize(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, new_cap: usize) {
         if new_cap < self.len { return };
 
+        let max_cap = device.limits().max_buffer_size/size_of::<T>() as u64;
+        if max_cap < new_cap as u64 {
+            warn!("buffer is too large to fit in the gpu. max capacity is '{max_cap}' requested capacity is '{new_cap}'. \
+                  trimming down to max capacity");
+        }
+
+        let new_cap = new_cap.min(max_cap as usize);
+
         let new_buff = Self::new(self.name, device, self.usage, new_cap);
 
         encoder.copy_buffer_to_buffer(
@@ -56,11 +66,18 @@ impl<T: Pod + std::fmt::Debug> ResizableBuffer<T> {
     }
 
 
-    pub fn write(&self, belt: &mut StagingBelt, encoder: &mut wgpu::CommandEncoder, device: &wgpu::Device, offset: u64, data: &[T]) {
+    pub fn write(&self, belt: &mut StagingBelt, encoder: &mut wgpu::CommandEncoder, device: &wgpu::Device, offset: usize, mut data: &[T]) {
+        if data.len() > self.len {
+            error!("buffer is too small ('{}') to fit the data ('{}'). trimming the data to fit the buffer.",
+                  self.len, data.len());
+            data = &data[..self.len];
+        }
+
+
         let mut view = belt.write_buffer(
             encoder, 
             &self.buffer,
-            offset * size_of::<T>() as u64,
+            (offset * size_of::<T>()) as u64,
             NonZeroU64::new((data.len() * size_of::<T>()) as u64).unwrap(),
             device
         );
@@ -102,6 +119,7 @@ impl<T: Pod + std::fmt::Debug> SSBO<T> {
             bind_group,
             layout,
             marker: PhantomData,
+            name,
         }
     }
 
@@ -132,17 +150,12 @@ impl<T: Pod + std::fmt::Debug> SSBO<T> {
     }
 
     /// Replaces the contents with new data, resizing if needed.
-    pub fn update(&self, belt: &mut StagingBelt, encoder: &mut wgpu::CommandEncoder, device: &wgpu::Device, mut data: &[T]) {
-        if data.len() >= self.buffer.len {
-            warn!("ssbo is too small to fit the data");
-            data = &data[..self.buffer.len]
-        }
-
+    pub fn update(&self, belt: &mut StagingBelt, encoder: &mut wgpu::CommandEncoder, device: &wgpu::Device, data: &[T]) {
         self.write(belt, encoder, device, 0, data);
     }
 
 
-    pub fn write(&self, belt: &mut StagingBelt, encoder: &mut wgpu::CommandEncoder, device: &wgpu::Device, offset: u64, data: &[T]) {
+    pub fn write(&self, belt: &mut StagingBelt, encoder: &mut wgpu::CommandEncoder, device: &wgpu::Device, offset: usize, data: &[T]) {
         self.buffer.write(belt, encoder, device, offset, data);
     }
 

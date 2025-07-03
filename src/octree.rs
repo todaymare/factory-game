@@ -3,11 +3,11 @@ use sti::{define_key, key::Key, vec::KVec};
 use tracing::warn;
 use wgpu::wgt::DrawIndexedIndirectArgs;
 
-use crate::{constants::{CHUNK_SIZE_I32, REGION_SIZE}, directions::Direction, free_list::FreeKVec, frustum::Frustum, renderer::ChunkIndex, voxel_world::mesh::ChunkMesh, QUAD_INDICES, RENDER_DISTANCE};
+use crate::{constants::{CHUNK_SIZE_I32, REGION_SIZE}, directions::Direction, free_list::FreeKVec, frustum::Frustum, renderer::MeshIndex, voxel_world::{chunker::ChunkPos, mesh::{ChunkFaceMesh, ChunkMeshFramedata}}, QUAD_INDICES, RENDER_DISTANCE};
 
 
 #[derive(Debug)]
-pub struct Octree {
+pub struct MeshOctree {
     pub root: NodeId,
     pub nodes: KVec<NodeId, Node>,
     free: Vec<NodeId>,
@@ -20,14 +20,14 @@ define_key!(pub NodeId(u32));
 #[derive(Debug)]
 pub enum Node {
     Branch([Option<NodeId>; 8]),
-    Leaf(UVec3, Box<[Option<ChunkMesh>; 6]>),
+    Leaf(UVec3, Box<[Option<ChunkFaceMesh>; 6]>),
 }
 
 
 const MAX_DEPTH : u32 = REGION_SIZE.ilog2();
 
 
-impl Octree {
+impl MeshOctree {
     pub fn new() -> Self {
         let mut nodes = KVec::new();
         let root = nodes.push(Node::Branch([None; 8]));
@@ -40,7 +40,7 @@ impl Octree {
     }
 
 
-    pub fn orphan(&mut self, pos: UVec3, data: [Option<ChunkMesh>; 6]) -> NodeId {
+    pub fn orphan(&mut self, pos: UVec3, data: [Option<ChunkFaceMesh>; 6]) -> NodeId {
         let node = Node::Leaf(pos, Box::new(data));
         self._orphan(node)
     }
@@ -56,7 +56,7 @@ impl Octree {
     }
 
 
-    pub fn get(&self, node: NodeId) -> &[Option<ChunkMesh>; 6] {
+    pub fn get(&self, node: NodeId) -> &[Option<ChunkFaceMesh>; 6] {
         match &self.nodes[node] {
             Node::Branch(_) => unreachable!(),
             Node::Leaf(_, data) => data,
@@ -64,7 +64,7 @@ impl Octree {
     }
 
 
-    pub fn get_mut(&mut self, node: NodeId) -> &mut [Option<ChunkMesh>; 6] {
+    pub fn get_mut(&mut self, node: NodeId) -> &mut [Option<ChunkFaceMesh>; 6] {
         match &mut self.nodes[node] {
             Node::Branch(_) => unreachable!(),
             Node::Leaf(_, data) => data,
@@ -72,29 +72,40 @@ impl Octree {
     }
 
 
-    pub fn insert(&mut self, pos: UVec3, data: [Option<ChunkMesh>; 6]) -> NodeId {
-        let node = self.orphan(pos, data);
-        self._insert(self.root, 0, pos, node);
+    pub fn insert(&mut self, pos: ChunkPos, data: [Option<ChunkFaceMesh>; 6]) -> NodeId {
+        debug_assert!(data.iter().any(|x| x.is_some()));
+        let node = self.orphan(pos.0, data);
+        self._insert(self.root, 0, pos.0, node);
         node
     }
 
 
-    pub fn find(&mut self, pos: UVec3) -> Option<NodeId> {
-        self._find(self.root, 0, pos)
+    pub fn find(&mut self, pos: ChunkPos) -> Option<NodeId> {
+        self._find(self.root, 0, pos.0)
     }
 
 
-    pub fn remove(&mut self, pos: UVec3) {
-        let result = self._remove(self.root, 0, pos);
+    pub fn remove(&mut self, pos: ChunkPos) {
+        let result = self._remove(self.root, 0, pos.0);
         assert!(!result);
+    }
+
+
+    pub fn is_empty(&self) -> bool {
+        match self.nodes[self.root] {
+            Node::Branch(b) => b.iter().all(|x| x.is_none()),
+            Node::Leaf(_, _) => unreachable!(),
+        }
     }
 
 
     fn _insert(&mut self, curr_id: NodeId, depth: u32, pos: UVec3, node_id: NodeId) -> Option<NodeId> {
         if depth > MAX_DEPTH {
             warn!("exceeded max depth with pos {pos}. is it within bounds?");
+            panic!();
             return None
         }
+
         let root = &mut self.nodes[curr_id];
 
         match root {
@@ -115,6 +126,7 @@ impl Octree {
 
             Node::Leaf(leaf_pos, _) => {
                 let leaf_pos = *leaf_pos;
+                assert_ne!(leaf_pos, pos);
 
                 let new_node = self._orphan(Node::Branch([None; 8]));
 
@@ -165,8 +177,10 @@ impl Octree {
                 return None;
             },
 
-            Node::Leaf(_, _) => {
-                return Some(parent_id)
+            Node::Leaf(v, _) => {
+                if *v == pos {
+                    return Some(parent_id)
+                } else { return None }
             },
         }
     }
@@ -180,7 +194,6 @@ impl Octree {
         curr_pos: UVec3,
         player_chunk: IVec3,
         buffer: &mut Vec<DrawIndexedIndirectArgs>,
-        chunk_offsets: &mut FreeKVec<ChunkIndex, Vec4>,
         frustum: &Frustum,
         camera: DVec3,
         counter: &mut usize,
@@ -229,7 +242,6 @@ impl Octree {
                             pos,
                             player_chunk,
                             buffer,
-                            chunk_offsets,
                             frustum,
                             camera,
                             counter,
@@ -262,11 +274,6 @@ impl Octree {
 
                 let dir_from_camera = offset.as_vec3().normalize();
 
-                let offset = chunk_pos * IVec3::splat(CHUNK_SIZE_I32);
-                let offset = offset.as_dvec3() - camera;
-                let offset = offset.as_vec3();
-
-
                 for (i, mesh) in meshes.iter().enumerate() {
                     let Some(mesh) = mesh
                     else { continue };
@@ -293,7 +300,6 @@ impl Octree {
                         first_instance: vo,
                     });
 
-                    *chunk_offsets.get_mut(mesh.chunk_mesh_data_index) = Vec4::new(offset.x, offset.y, offset.z, 0.0);
                 }
 
 

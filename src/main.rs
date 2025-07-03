@@ -37,7 +37,7 @@ use frustum::Frustum;
 use game::Game;
 use rand::seq::IndexedRandom;
 use sti::define_key;
-use tracing::{error, warn, Level};
+use tracing::{error, info, trace, warn, Level};
 use voxel_world::split_world_pos;
 use glam::{DVec2, DVec3, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
 use input::InputManager;
@@ -55,15 +55,15 @@ define_key!(EntityId(u32));
 const MOUSE_SENSITIVITY : f32 = 0.0016;
 
 const PLAYER_REACH : f32 = 5.0;
-const PLAYER_SPEED : f32 = 10.0;
+const PLAYER_SPEED : f32 = 1000.0;
 const PLAYER_PULL_DISTANCE : f32 = 3.5;
 const PLAYER_INTERACT_DELAY : f32 = 0.125;
 const PLAYER_HOTBAR_SIZE : usize = 5;
 const PLAYER_ROW_SIZE : usize = 6;
 const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-const RENDER_DISTANCE : i32 = 16;
-const LOAD_DISTANCE : i32 = 16;
+const RENDER_DISTANCE : i32 = 64;
+const LOAD_DISTANCE : i32 = 4;
 
 const DROPPED_ITEM_SCALE : f32 = 0.5;
 
@@ -113,6 +113,7 @@ impl ApplicationHandler for App {
         let rd = RENDER_DISTANCE + 1;
         dbg!(-rd..=rd);
 
+        /*
         for y in -rd..=rd {
             for z in -rd..=rd {
                 for x in -rd..=rd {
@@ -127,7 +128,7 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-        }
+        }*/
 
     }
 
@@ -223,6 +224,7 @@ impl ApplicationHandler for App {
                     &mut renderer.staging_buffer,
                     &mut renderer.voxel_pipeline.instances,
                     &mut renderer.voxel_pipeline.chunk_offsets,
+                    &mut renderer.voxel_pipeline.model_uniform,
                 );
 
 
@@ -247,7 +249,10 @@ impl ApplicationHandler for App {
                         view: cview * Mat4::from_scale(Vec3::splat(0.5)),
                         projection,
                         modulate: Vec4::ONE,
-                        camera_pos: camera.as_vec3(),
+
+                        camera_block: camera.floor().as_ivec3(),
+                        camera_offset: (camera - camera.floor()).as_vec3(),
+
                         fog_color: game.sky_colour.xyz(),
                         fog_density: 1.0,
                         fog_start: fog_distance * CHUNK_SIZE as f32 * 0.9,
@@ -255,6 +260,7 @@ impl ApplicationHandler for App {
                         pad_00: 0.0,
                         pad_01: 0.0,
                         pad_02: 0.0,
+                        pad_03: 0.0,
 
 
                     };
@@ -273,33 +279,35 @@ impl ApplicationHandler for App {
                     let now = Instant::now();
                     let mut counter = 0;
                     let mut rendered_counter = 0;
-                    for (region, value) in game.world.mesh_regions.iter() {
-                        value.render(
-                            value.root,
+                    for (pos, region) in game.world.chunker.regions() {
+                        region.octree().render(
+                            region.octree().root,
                             0,
-                            *region,
+                            pos.0,
                             UVec3::ZERO,
                             player_chunk,
                             &mut indirect,
-                            &mut voxel_pipeline.chunk_offsets,
                             &frustum,
                             camera,
                             &mut counter,
                             &mut rendered_counter,
                         );
                     }
+
                     
-                    error!("time {:?} chunks cap {} indirect buf len {} counter {counter} rendered count {rendered_counter} {} {}", 
-                           now.elapsed(), game.world.chunks.cap(), voxel_pipeline.indirect_buf.len,
-                           game.world.mesh_regions.iter().map(|x| x.1.nodes.len()).sum::<usize>(),
-                           voxel_pipeline.instances.ssbo.len, );
+                    /*
+                    info!("time {:?} distance: {}, index count: {}, indirect: {}", 
+                           now.elapsed(), game.settings.render_distance-1,
+                           voxel_pipeline.chunk_offsets.as_slice().len(),
+                           indirect.len());
+                           */
+
                     if !indirect.is_empty() {
-                        voxel_pipeline.model_uniform.resize(&renderer.device, &mut encoder, voxel_pipeline.chunk_offsets.as_slice().len());
-                        voxel_pipeline.model_uniform.update(&mut renderer.staging_buffer, &mut encoder, &renderer.device, voxel_pipeline.chunk_offsets.as_slice());
                         voxel_pipeline.indirect_buf.resize(&renderer.device, &mut encoder, indirect.len());
                         voxel_pipeline.indirect_buf.write(&mut renderer.staging_buffer, &mut encoder, &renderer.device, 0, &indirect);
                     }
 
+                    renderer.staging_buffer.finish();
 
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("voxel-render-pass"),
@@ -333,7 +341,6 @@ impl ApplicationHandler for App {
                     pass.set_bind_group(1, voxel_pipeline.model_uniform.bind_group(), &[]);
 
                     multi_draw_indexed_indirect(
-                        &renderer.device,
                         &mut pass,
                         &voxel_pipeline.vertex_buf,
                         &voxel_pipeline.instances.ssbo.buffer,
@@ -385,6 +392,20 @@ fn main() {
     // dispatched any events. This is ideal for games and similar applications.
     event_loop.set_control_flow(ControlFlow::Poll);
 
+    let mut game = Game::new();
+    game.load();
+
+    info!("loading previous save-state");
+    if !std::fs::exists("saves/").is_ok_and(|f| f == true) {
+        trace!("no previous save-state. creating files");
+        let _ = std::fs::create_dir("saves/");
+        let _ = std::fs::create_dir("saves/chunks/");
+        game.save();
+    }
+
+    game.load();
+
+
     let mut app = App {
         window: None,
         last_frame: Instant::now(),
@@ -399,7 +420,6 @@ fn main() {
     return;
 
     /*
-    let mut game = Game::new();
     let mut input = InputManager::default();
 
     //game.renderer.window.set_cursor_mode(glfw::CursorMode::Disabled);

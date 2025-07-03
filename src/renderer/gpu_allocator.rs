@@ -46,7 +46,7 @@ impl<T: Pod + core::fmt::Debug + PartialEq> GPUAllocator<T> {
             return self.allocate_slice(belt, encoder, device, slice);
         };
 
-        self.ssbo.write(belt, encoder, device, index as u64, slice);
+        self.ssbo.write(belt, encoder, device, index, slice);
         GpuPointer { size: slice.len(), offset: index, marker: PhantomData }
     }
 

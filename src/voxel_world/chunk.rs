@@ -1,27 +1,25 @@
-use std::{hash::Hash, i32, num::{NonZero, NonZeroI16, NonZeroU32}, simd::{cmp::SimdPartialEq, u8x64}, sync::Arc};
+use std::{cell::Cell, hash::Hash, i32, num::{NonZero, NonZeroI16, NonZeroU32}, simd::{cmp::SimdPartialEq, u8x64}, sync::Arc};
 
 use glam::{DVec2, IVec2, IVec3, Vec3Swizzles};
 use libnoise::{Generator, ImprovedPerlin, Simplex, Source};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use sti::{hash::fxhash::FxHasher64, key::Key};
 
-use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_P3}, octree::NodeId, renderer::ChunkIndex, voxel_world::voxel::Voxel};
+use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_P3}, octree::NodeId, renderer::MeshIndex, voxel_world::voxel::Voxel};
 
-use super::mesh::ChunkMesh;
+use super::mesh::ChunkFaceMesh;
 
 #[derive(Debug)]
 pub struct Chunk {
     pub data: Option<Arc<ChunkData>>,
     pub is_dirty: bool,
-    pub meshes: Option<NodeId>,
-    pub current_mesh: u32,
     pub version: NonZeroU32,
 }
 
 
 #[derive(Clone)]
 pub struct ChunkData {
-    pub data: Box<[Voxel; CHUNK_SIZE_P3]>,
+    pub data: [Voxel; CHUNK_SIZE_P3],
 }
 
 
@@ -114,10 +112,7 @@ impl Chunk {
         Chunk {
             data: None,
             is_dirty: false,
-            meshes: None,
-            // we still want to remesh initially
             version: NonZero::new(1).unwrap(),
-            current_mesh: 0,
         }
     }
 
@@ -222,8 +217,6 @@ impl Chunk {
         let chunk = Chunk {
             data: if skip || data.is_empty() { None } else { Some(Arc::new(data)) },
             is_dirty: true,
-            meshes: None,
-            current_mesh: 0,
             version: NonZero::new(1).unwrap(),
         };
         chunk
@@ -276,7 +269,7 @@ impl ChunkData {
 
     pub fn from_voxels(voxels: [Voxel; CHUNK_SIZE_P3]) -> Self {
         Self {
-            data: Box::new(voxels),
+            data: voxels,
         }
     }
 

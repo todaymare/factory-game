@@ -1,32 +1,54 @@
-use std::{mem::offset_of, ptr::null_mut};
+use std::{mem::offset_of, num::NonZeroU32, ptr::null_mut};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec3, UVec3, UVec4, Vec3, Vec4};
 use sti::key::Key;
 use wgpu::{util::{DeviceExt, StagingBelt}, ShaderStages};
 
-use crate::{buddy_allocator::BuddyAllocator, renderer::{gpu_allocator::{GPUAllocator, GpuPointer}, uniform::Uniform, ChunkIndex}};
+use crate::{buddy_allocator::BuddyAllocator, octree::NodeId, renderer::{gpu_allocator::{GPUAllocator, GpuPointer}, uniform::Uniform, MeshIndex}};
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
 #[repr(C)]
 pub struct ChunkQuadInstance {
-    data1: u32,
-    data2: u32,
-    w: u32,
-    h: u32,
+    // pos.x : 0..6
+    // pos.y : 6..12
+    // pos.z : 12..18
+    // width : 18..23
+    // height: 23..28
+    // red   : 28..36
+    // green : 36..44
+    // blue  : 44..52
+    // empty : 52..64
+    p1: u32,
+    p2: u32,
+
     chunk_index: u32,
 }
 
 
-#[derive(Debug)]
-pub struct ChunkMesh {
-    pub vertex: GpuPointer<ChunkQuadInstance>,
-    pub index_count: u32,
-    pub chunk_mesh_data_index: ChunkIndex, 
+#[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
+#[repr(C)]
+pub struct ChunkMeshFramedata {
+    pub offset: IVec3,
+    pub normal: u32, // needs to be 4 bytes anyways cos we need to align to 16 bytes
 }
 
 
-impl ChunkMesh {
+#[derive(Debug)]
+pub struct ChunkFaceMesh {
+    pub vertex: GpuPointer<ChunkQuadInstance>,
+    pub index_count: u32,
+    pub chunk_mesh_data_index: MeshIndex, 
+}
+
+
+pub struct ChunkMeshes {
+    pub meshes: Option<NodeId>,
+    pub version: NonZeroU32,
+}
+
+
+impl ChunkFaceMesh {
     pub fn new(
         belt: &mut StagingBelt,
         encoder: &mut wgpu::CommandEncoder,
@@ -34,7 +56,7 @@ impl ChunkMesh {
         vertex_allocator: &mut GPUAllocator<ChunkQuadInstance>,
 
         vertices: &[ChunkQuadInstance], 
-        index: ChunkIndex,
+        index: MeshIndex,
    ) -> Self {
         debug_assert!(vertices.iter().all(|x| x.chunk_index == index.usize() as u32));
 
@@ -46,28 +68,36 @@ impl ChunkMesh {
 
 
 impl ChunkQuadInstance {
-    pub fn new(pos: IVec3, colour: Vec4, h: u32, l: u32, normal: u8, chunk_index: ChunkIndex) -> Self {
+    pub fn new(pos: IVec3, colour: Vec4, h: u32, l: u32, normal: u8, chunk_index: MeshIndex) -> Self {
         let UVec3 { x, y, z } = pos.as_uvec3();
-        let UVec4 { x: r, y: g, z: b, w: a } = (colour * 255.0).as_uvec4();
+        let UVec4 { x: r, y: g, z: b, w: _ } = (colour * 255.0).as_uvec4();
 
-        debug_assert!(x <= 32 && y <= 32 && z <= 32, "{x} {y} {z}");
-        debug_assert!(h <= 32);
-        debug_assert!(l <= 32);
-        debug_assert!(normal < 6);
-        let pos = ((z as u32) << 12) | ((y as u32) << 6) | (x as u32);
-        let pos = pos << 3 | normal as u32;
-        let colour = ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | (a as u32);
+        debug_assert!(x <= 32 && y <= 32 && z <= 32, "{x} {y} {z} {l}x{h} {normal}");
+        debug_assert!(h-1 < 32);
+        debug_assert!(l-1 < 32);
 
-        let data1 = pos as u32;
-        let data2 = colour as u32;
+        let base = 
+            ( (x      & 0x3F)         as u64)        |  // 6 bits
+            (((y      & 0x3F) as u64) <<  6)         |  // 6 bits
+            (((z      & 0x3F) as u64) << 12)         |  // 6 bits
+            (((l-1    & 0x1F) as u64) << 18)         |  // 5 bits
+            (((h-1    & 0x1F) as u64) << 23)         |  // 5 bits
+            (((r      & 0xFF) as u64) << 28)         |  // 8 bits
+            (((g      & 0xFF) as u64) << 36)         |  // 8 bits
+            (((b      & 0xFF) as u64) << 44);
 
-        Self { data1, data2, w: l, h, chunk_index: chunk_index.usize() as u32 }
+
+        let b = base.to_le_bytes();
+        let p1 = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        let p2 = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+
+        Self { chunk_index: chunk_index.usize() as u32, p1, p2 }
     }
 
 
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRS: &[wgpu::VertexAttribute] =
-            &wgpu::vertex_attr_array![1 => Uint32, 2 => Uint32, 3 => Uint32, 4 => Uint32, 5 => Uint32];
+            &wgpu::vertex_attr_array![1 => Uint32, 2 => Uint32, 3 => Uint32];
 
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<ChunkQuadInstance>() as wgpu::BufferAddress,
@@ -77,66 +107,4 @@ impl ChunkQuadInstance {
     }
 }
 
-
-#[derive(Debug)]
-///! plane data with 4 vertices
-pub struct Quad {
-    pub color: Vec4,
-    pub corners: [IVec3; 4],
-    pub normal: u8,
-}
-
-/*
-impl Quad {
-    // the input position is assumed to be a voxel's (0,0,0) pos
-    // therefore right / up / forward are offset by 1
-    #[inline]
-    pub fn from_direction(direction: Direction, pos: Vec3, color: Vec4) -> Self {
-        let corners = match direction {
-            Direction::Left => [
-                Vec3::new(pos.x+1.0, pos.y, pos.z),
-                Vec3::new(pos.x+1.0, pos.y, pos.z + 1.0),
-                Vec3::new(pos.x+1.0, pos.y + 1.0, pos.z + 1.0),
-                Vec3::new(pos.x+1.0, pos.y + 1.0, pos.z),
-            ],
-            Direction::Right => [
-                Vec3::new(pos.x, pos.y + 1.0, pos.z),
-                Vec3::new(pos.x, pos.y + 1.0, pos.z + 1.0),
-                Vec3::new(pos.x, pos.y, pos.z + 1.0),
-                Vec3::new(pos.x, pos.y, pos.z),
-            ],
-            Direction::Down => [
-                Vec3::new(pos.x, pos.y, pos.z + 1.0),
-                Vec3::new(pos.x + 1.0, pos.y, pos.z + 1.0),
-                Vec3::new(pos.x + 1.0, pos.y, pos.z),
-                Vec3::new(pos.x, pos.y, pos.z),
-            ],
-            Direction::Up => [
-                Vec3::new(pos.x    , pos.y+1.0, pos.z),
-                Vec3::new(pos.x + 1.0, pos.y+1.0, pos.z),
-                Vec3::new(pos.x + 1.0, pos.y+1.0, pos.z + 1.0),
-                Vec3::new(pos.x,   pos.y+1.0, pos.z + 1.0),
-            ],
-            Direction::Back => [
-                Vec3::new(pos.x + 1.0, pos.y, pos.z),
-                Vec3::new(pos.x + 1.0, pos.y + 1.0, pos.z),
-                Vec3::new(pos.x, pos.y + 1.0, pos.z),
-                Vec3::new(pos.x, pos.y, pos.z),
-            ],
-            Direction::Forward => [
-                Vec3::new(pos.x, pos.y, pos.z+1.0),
-                Vec3::new(pos.x, pos.y + 1.0, pos.z+1.0),
-                Vec3::new(pos.x + 1.0, pos.y + 1.0, pos.z+1.0),
-                Vec3::new(pos.x + 1.0, pos.y, pos.z+1.0),
-            ],
-        };
-
-        Self {
-            corners,
-            color,
-            normal: 
-        }
-    }
-
-}*/
 
