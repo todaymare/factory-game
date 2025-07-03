@@ -2,27 +2,20 @@ pub mod textures;
 pub mod uniform;
 pub mod ssbo;
 pub mod gpu_allocator;
-pub mod utils;
 
-use std::{cell::Cell, collections::HashMap, ffi::CString, fs, mem::offset_of, ptr::null_mut};
+use std::cell::Cell;
 
 use bytemuck::{Pod, Zeroable};
-use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
-use glam::{IVec2, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
-use glfw::{ffi::glfwGetProcAddress, Context, GlfwReceiver, PWindow, WindowEvent};
+use glam::{IVec2, IVec3, Mat4, Vec2, Vec3, Vec4};
 use gpu_allocator::GPUAllocator;
 use ssbo::{ResizableBuffer, SSBO};
 use sti::{define_key, static_assert_eq};
-use textures::{TextureAtlasBuilder, TextureAtlasManager, TextureId};
-use tracing::{error, warn};
+use textures::TextureId;
 use uniform::Uniform;
-use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgc::id::markers::StagingBuffer, wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs}, BufferUsages, BufferUses, TextureUsages, *};
-use winit::{event_loop::EventLoop, window::Window};
+use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgt::DrawIndexedIndirectArgs, BufferUsages, TextureUsages, *};
+use winit::window::Window;
 
-use crate::{directions::CardinalDirection, free_list::FreeKVec, items::{Assets, ItemKind}, mesh::{Mesh, Vertex}, shader::{Shader, ShaderProgram, ShaderType}, voxel_world::mesh::{ChunkFaceMesh, ChunkMeshFramedata, ChunkQuadInstance}, QUAD_INDICES, QUAD_VERTICES};
-
-
-const FONT_SIZE : u32 = 64;
+use crate::{free_list::FreeKVec, voxel_world::mesh::{ChunkMeshFramedata, ChunkQuadInstance}, constants::{QUAD_INDICES, QUAD_VERTICES}};
 
 
 // the renderer is done,
@@ -31,38 +24,16 @@ const FONT_SIZE : u32 = 64;
 // whichever comes first
 
 pub struct Renderer {
-    /*
-    pub glfw: glfw::Glfw,
-    pub window: PWindow,
-    pub window_events: GlfwReceiver<(f64, WindowEvent)>,
-
-    pub quad_vao: u32,
-    pub quad_vbo: u32,
-    pub white: TextureId,
-
-    pub characters: HashMap<char, Character>,
-    pub biggest_y_size: f32,
-
-    pub is_wireframe: bool,
-
-    pub atlases: TextureAtlasManager,
-
-    pub meshes: Assets,*/
-
-
     pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
-    //pub mesh_pipeline: wgpu::RenderPipeline,
     pub voxel_pipeline: VoxelPipeline,
     pub staging_buffer: StagingBelt,
 
 
     pub ui_scale: f32,
     pub rects: Vec<DrawRect>,
-
-    current_rect: ScreenRect,
 
     pub draw_count: Cell<u32>,
     pub triangle_count: Cell<u32>,
@@ -477,7 +448,6 @@ impl Renderer {
         let this = Self {
             ui_scale: 1.0,
             rects: vec![],
-            current_rect: ScreenRect::new(),
             draw_count: Cell::new(0),
             triangle_count: Cell::new(0),
             surface,
@@ -490,88 +460,6 @@ impl Renderer {
         };
 
         this
-    }
-
-
-    pub fn begin(&mut self, colour: Vec4) {
-
-        /*
-        unsafe {
-            gl::Enable(gl::DEPTH_TEST);
-            gl::ClearColor(colour.x, colour.y, colour.z, colour.w);
-            gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-            //gl::Enable(gl::CULL_FACE);
-            //gl::CullFace(gl::BACK);
-
-            if self.is_wireframe {
-                gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
-            } else {
-                gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
-            }
-        }*/
-    }
-
-
-    pub fn end(&mut self) {
-        /*
-        unsafe { gl::Clear(gl::DEPTH_BUFFER_BIT) };
-
-        let mut z = 0.0;
-        let triangle_count = self.triangle_count.get_mut();
-        let draw_count = self.draw_count.get_mut();
-        for rect in self.rects.iter() {
-            let tex = rect.tex;
-            let pos = rect.pos;
-            let dims = rect.dims;
-            let modulate = rect.modulate;
-
-            let uvs = self.atlases.get_uv(tex);
-            let buf = self.atlases.buf(tex);
-
-            let x0 = uvs.x;
-            let y0 = uvs.y;
-            let x1 = uvs.z;
-            let y1 = uvs.w;
-
-            z += 0.0001;
-            let z = if let Some(z) = rect.z { z } else { z };
-
-            buf.push(UIVertex::new(pos+dims, Vec2::new(x1, y1), modulate, z));
-            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
-            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
-
-            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
-            buf.push(UIVertex::new(pos, Vec2::new(x0, y0), modulate, z));
-            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
-
-            *triangle_count += 6;
-        }
-        self.rects.clear();
-
-        let projection = glam::Mat4::orthographic_rh(0.0, self.window.get_size().0 as f32 / self.ui_scale, self.window.get_size().1 as f32 / self.ui_scale, 0.0, 0.0001, 100.0);
-        for (atlas, shader, buf) in self.atlases.atlases.values_mut() {
-            shader.use_program();
-            shader.set_matrix4(c"projection", projection);
-            unsafe {
-                // update buffer
-                gl::BindVertexArray(self.quad_vao);
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.quad_vbo);
-                gl::BufferData(gl::ARRAY_BUFFER, (size_of::<UIVertex>() * buf.len()) as _,
-                                buf.as_ptr() as _, gl::DYNAMIC_DRAW);
-
-                // render
-                gl::ActiveTexture(gl::TEXTURE0);
-                gl::BindTexture(gl::TEXTURE_2D, atlas.gpu_texture.id);
-
-                gl::DrawArrays(gl::TRIANGLES, 0, buf.len() as _);
-            }
-
-            buf.clear();
-            *draw_count += 1;
-        }
-
-        self.window.swap_buffers();
-        self.glfw.poll_events();*/
     }
 
 

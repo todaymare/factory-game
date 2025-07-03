@@ -4,11 +4,9 @@ struct VertexIn {
 
 
 struct InstanceIn {
-    @location(1) pos    : u32,
-    @location(2) colour : u32,
-    @location(3) w      : u32,
-    @location(4) h      : u32,
-    @location(5) offset : u32,
+    @location(1) p1 : u32,
+    @location(2) p2 : u32,
+    @location(3) offset : u32,
 };
 
 
@@ -29,25 +27,33 @@ struct FragmentIn {
 };
 
 
+struct ChunkMeshFramedata {
+    offset: vec3<i32>,
+    normal: u32,
+}
+
+
 struct Uniforms {
     view       : mat4x4<f32>,
     projection : mat4x4<f32>,
     modulate   : vec4<f32>,
-    camera_pos : vec3<f32>,
+    camera_block: vec3<i32>,
     pad_00     : f32,
-    fog_color  : vec3<f32>,
+    camera_offset: vec3<f32>,
     pad_01     : f32,
+    fog_color  : vec3<f32>,
+    pad_02     : f32,
     fog_density: f32,
     fog_start  : f32,
     fog_end    : f32,
-    pad_02     : f32,
+    pad_03     : f32,
 };
 
 @group(0) @binding(0)
 var<uniform> u : Uniforms;
 
 @group(1) @binding(0)
-var<storage, read> positions: array<vec4<f32>>;
+var<storage, read> positions: array<ChunkMeshFramedata>;
 
 
 const NORMAL_LOOKUP : array<vec3<f32>, 6> = array<vec3<f32>, 6>(
@@ -59,31 +65,36 @@ const NORMAL_LOOKUP : array<vec3<f32>, 6> = array<vec3<f32>, 6>(
     vec3<f32>( 0.0, 0.0,-1.0)
 );
 
-fn unpack_voxel_pos(pos: u32) -> vec3<f32> {
-    let x = f32( (pos >> 3u) & 63u );
-    let y = f32( (pos >> 9u) & 63u );
-    let z = f32( (pos >> 15u) & 63u );
-    return vec3<f32>(x, y, z);
-}
-
-fn unpack_voxel_color(colour: u32) -> vec4<f32> {
-    let r = f32( (colour >> 24u) & 0xFFu ) / 255.0;
-    let g = f32( (colour >> 16u) & 0xFFu ) / 255.0;
-    let b = f32( (colour >> 8u)  & 0xFFu ) / 255.0;
-    let a = f32(  colour        & 0xFFu ) / 255.0;
-    return vec4<f32>(r, g, b, a);
-}
-
 
 @vertex
 fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
     var output: VertexOut;
 
-    let normal_index : u32 = input.pos & 7u;
+    // unpacking
+    let p1 = input.p1;
+    let p2 = input.p2;
 
-    let normal = NORMAL_LOOKUP[normal_index % 6u];
+    let x      =  p1          & 0x3Fu;
+    let y      = (p1 >>  6u)  & 0x3Fu;
+    let z      = (p1 >> 12u)  & 0x3Fu;
+    let width  = (p1 >> 18u)  & 0x1Fu;
+    let height = (p1 >> 23u)  & 0x1Fu;
 
-    let pos_vec = unpack_voxel_pos(input.pos);
+    let r      = ((p1 >> 28u) & 0xFu) | ((p2 & 0xFu) << 4u);
+    let g      = (p2 >>  4u) & 0xFFu;
+    let b      = (p2 >> 12u) & 0xFFu;
+
+    let pos = vec3<f32>(f32(x), f32(y), f32(z));
+    let colour = vec3<f32>(f32(r), f32(g), f32(b)) / 255.0;
+
+
+    // other stuff
+
+    let mesh_data = positions[input.offset];
+    let normal_index : u32 = mesh_data.normal;
+    let model = vec3<f32>(mesh_data.offset.xyz*32-u.camera_block) - u.camera_offset;
+
+    let normal = NORMAL_LOOKUP[normal_index];
 
     var o = offset.pos;
 
@@ -91,8 +102,8 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
     // for the up and down faces width and height are flipped for some reason
     if (normal_index == 1 || normal_index == 4) {
         if normal_index == 1 { o = o.zyx; }
-        if o.x == 1 { o.x += i32(input.h-1); }
-        if o.z == 1 { o.z += i32(input.w-1); }
+        if o.x == 1 { o.x += i32(height); }
+        if o.z == 1 { o.z += i32(width); }
 
     }
     else {
@@ -102,8 +113,8 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
             default: {}
         }
 
-        if o.x == 1 { o.x += i32(input.w-1); }
-        if o.z == 1 { o.z += i32(input.h-1); }
+        if o.x == 1 { o.x += i32(width); }
+        if o.z == 1 { o.z += i32(height); }
 
         switch normal_index {
             case 0: { o = o.yxz; } // X+
@@ -116,9 +127,7 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
     };
 
 
-    let colour = unpack_voxel_color(input.colour);
-    let model = positions[input.offset];
-    let world_pos = pos_vec + model.xyz + vec3<f32>(o);
+    let world_pos = pos + model.xyz + vec3<f32>(o);
 
     let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));
 

@@ -5,7 +5,7 @@ use image::{codecs::png::PngDecoder, ImageDecoder};
 use rand::random;
 use tracing::error;
 
-use crate::{mesh::Mesh, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::StructureKind, voxel_world::voxel::Voxel, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
+use crate::{mesh::Mesh, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::StructureKind, voxel_world::voxel::Voxel, PhysicsBody, Tick, constants::DROPPED_ITEM_SCALE};
 
 #[derive(Clone)]
 pub struct DroppedItem {

@@ -4,14 +4,14 @@ pub mod belts;
 pub mod inventory;
 
 
-use glam::{DVec3, IVec3, Mat4, Vec3};
+use glam::{IVec3, Vec3};
 use inventory::StructureInventory;
-use sti::{define_key, hash::fxhash::fxhash32};
+use sti::define_key;
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use tracing::warn;
 use work_queue::WorkQueue;
 
-use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, renderer::Renderer, shader::ShaderProgram, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick, DROPPED_ITEM_SCALE, TICKS_PER_SECOND};
+use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::Item, renderer::Renderer, shader::ShaderProgram, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));

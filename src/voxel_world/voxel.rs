@@ -1,6 +1,6 @@
 use glam::Vec4;
 
-use crate::{items::ItemKind, TICKS_PER_SECOND};
+use crate::{items::ItemKind, constants::TICKS_PER_SECOND};
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 #[repr(u8)]

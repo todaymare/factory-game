@@ -1,9 +1,9 @@
-use glam::{DVec3, IVec3, UVec3, Vec4};
-use sti::{define_key, key::Key, vec::KVec};
+use glam::{DVec3, IVec3, UVec3};
+use sti::{define_key, vec::KVec};
 use tracing::warn;
 use wgpu::wgt::DrawIndexedIndirectArgs;
 
-use crate::{constants::{CHUNK_SIZE_I32, REGION_SIZE}, directions::Direction, free_list::FreeKVec, frustum::Frustum, renderer::MeshIndex, voxel_world::{chunker::ChunkPos, mesh::{ChunkFaceMesh, ChunkMeshFramedata}}, QUAD_INDICES, RENDER_DISTANCE};
+use crate::{constants::{CHUNK_SIZE_I32, REGION_SIZE}, directions::Direction, frustum::Frustum, voxel_world::{chunker::ChunkPos, mesh::ChunkFaceMesh}, constants::{QUAD_INDICES, RENDER_DISTANCE}};
 
 
 #[derive(Debug)]
@@ -102,7 +102,6 @@ impl MeshOctree {
     fn _insert(&mut self, curr_id: NodeId, depth: u32, pos: UVec3, node_id: NodeId) -> Option<NodeId> {
         if depth > MAX_DEPTH {
             warn!("exceeded max depth with pos {pos}. is it within bounds?");
-            panic!();
             return None
         }
 

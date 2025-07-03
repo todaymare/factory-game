@@ -31,19 +31,18 @@ pub mod octree;
 
 use std::{f32::consts::{PI, TAU}, ops::{self}, time::Instant};
 
-use constants::CHUNK_SIZE;
-use directions::{CardinalDirection, Direction};
+use constants::{CHUNK_SIZE, PLAYER_HOTBAR_SIZE};
+use directions::CardinalDirection;
 use frustum::Frustum;
 use game::Game;
-use rand::seq::IndexedRandom;
 use sti::define_key;
-use tracing::{error, info, trace, warn, Level};
+use tracing::{error, info, trace, Level};
 use voxel_world::split_world_pos;
 use glam::{DVec2, DVec3, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
 use input::InputManager;
 use items::{DroppedItem, Item};
-use renderer::{utils::multi_draw_indexed_indirect, DepthBuffer, Renderer, VoxelShaderUniform};
-use wgpu::{wgc::{api::Metal, hal_api::HalApi}, wgt::DrawIndexedIndirectArgs};
+use renderer::{DepthBuffer, Renderer, VoxelShaderUniform};
+use wgpu::wgt::DrawIndexedIndirectArgs;
 use winit::{event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, window::{CursorGrabMode, Window, WindowId}};
 use winit::application::ApplicationHandler;
 
@@ -51,35 +50,6 @@ use winit::application::ApplicationHandler;
 
 define_key!(EntityId(u32));
 
-
-const MOUSE_SENSITIVITY : f32 = 0.0016;
-
-const PLAYER_REACH : f32 = 5.0;
-const PLAYER_SPEED : f32 = 1000.0;
-const PLAYER_PULL_DISTANCE : f32 = 3.5;
-const PLAYER_INTERACT_DELAY : f32 = 0.125;
-const PLAYER_HOTBAR_SIZE : usize = 5;
-const PLAYER_ROW_SIZE : usize = 6;
-const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
-
-const RENDER_DISTANCE : i32 = 64;
-const LOAD_DISTANCE : i32 = 4;
-
-const DROPPED_ITEM_SCALE : f32 = 0.5;
-
-const TICKS_PER_SECOND : u32 = 60;
-const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32; 
-
-
-const QUAD_VERTICES : &[i32] = &[
-     0,   0,  0,
-     1,   0,  0,
-     1,   0,  1,
-     0,   0,  1,
-];
-
-
-const QUAD_INDICES : &[u32] = &[0, 1, 2, 2, 3, 0];
 
 
 #[cfg(feature = "dhat-heap")]
@@ -105,31 +75,9 @@ impl ApplicationHandler for App {
         window.set_cursor_grab(CursorGrabMode::Confined) // or Locked
             .or_else(|_| window.set_cursor_grab(CursorGrabMode::Locked))
             .unwrap();
+
         let static_window = unsafe { core::mem::transmute::<&Window, &'static Window>(window) };
         self.renderer = Some(pollster::block_on(Renderer::new(static_window)));
-        //self.game.load();
-
-        let (player_chunk, _) = split_world_pos(self.game.player.body.position.as_ivec3());
-        let rd = RENDER_DISTANCE + 1;
-        dbg!(-rd..=rd);
-
-        /*
-        for y in -rd..=rd {
-            for z in -rd..=rd {
-                for x in -rd..=rd {
-                    let offset = IVec3::new(x, y, z);
-                    let chunk_pos = offset;
-                    if offset.length_squared() < rd*rd {
-                        self.game.world.try_get_chunk(chunk_pos);
-                    }
-
-                    if offset.length_squared() < RENDER_DISTANCE*RENDER_DISTANCE {
-                        self.game.world.try_get_mesh(chunk_pos);
-                    }
-                }
-            }
-        }*/
-
     }
 
 
@@ -208,7 +156,7 @@ impl ApplicationHandler for App {
                     self.time_since_last_simulation -= game.settings.delta_tick;
                 }
 
-                game.world.process(&mut renderer.voxel_pipeline.instances, &mut renderer.voxel_pipeline.chunk_offsets);
+                game.world.process(&mut renderer.voxel_pipeline.chunk_offsets);
 
 
                 let output = renderer.surface.get_current_texture().unwrap();
@@ -218,7 +166,8 @@ impl ApplicationHandler for App {
                 });
 
 
-                game.world.process_meshes(
+                game.world.chunker.process_mesh_jobs(
+                    3,
                     &renderer.device,
                     &mut encoder,
                     &mut renderer.staging_buffer,
@@ -228,11 +177,8 @@ impl ApplicationHandler for App {
                 );
 
 
-                let simulation_time = now.elapsed();
-                
                 //
                 // render
-                let now = Instant::now();
                 let c = game.sky_colour.as_dvec4();
                 let camera = game.camera.position;
                 let projection = game.camera.perspective_matrix();
@@ -295,12 +241,10 @@ impl ApplicationHandler for App {
                     }
 
                     
-                    /*
                     info!("time {:?} distance: {}, index count: {}, indirect: {}", 
                            now.elapsed(), game.settings.render_distance-1,
                            voxel_pipeline.chunk_offsets.as_slice().len(),
                            indirect.len());
-                           */
 
                     if !indirect.is_empty() {
                         voxel_pipeline.indirect_buf.resize(&renderer.device, &mut encoder, indirect.len());
@@ -340,15 +284,13 @@ impl ApplicationHandler for App {
                     voxel_pipeline.frame_uniform.use_uniform(&mut pass);
                     pass.set_bind_group(1, voxel_pipeline.model_uniform.bind_group(), &[]);
 
-                    multi_draw_indexed_indirect(
-                        &mut pass,
-                        &voxel_pipeline.vertex_buf,
-                        &voxel_pipeline.instances.ssbo.buffer,
-                        &indirect,
-                        &voxel_pipeline.indirect_buf.buffer,
-                        &voxel_pipeline.index_buf, 
-                        wgpu::IndexFormat::Uint32
-                    );
+                    {
+                        pass.set_vertex_buffer(0, voxel_pipeline.vertex_buf.slice(..));
+                        pass.set_vertex_buffer(1, voxel_pipeline.instances.ssbo.buffer.slice(..));
+                        pass.set_index_buffer(voxel_pipeline.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+
+                        pass.multi_draw_indexed_indirect(&voxel_pipeline.indirect_buf.buffer, 0, indirect.len() as _);
+                    }
                     drop(pass);
 
                     renderer.staging_buffer.finish();
@@ -356,7 +298,6 @@ impl ApplicationHandler for App {
 
                 }
 
-                let render_time = now.elapsed();
                 output.present();
 
                 self.window.as_ref().unwrap().request_redraw();
@@ -577,7 +518,7 @@ impl ops::Sub for Tick {
 }
 
 
-struct Player {
+pub struct Player {
     body: PhysicsBody,
     inventory: [Option<Item>; 30],
     hand: usize,

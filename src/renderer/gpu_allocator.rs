@@ -1,13 +1,12 @@
 use std::marker::PhantomData;
 
 use bytemuck::Pod;
-use rand::seq::IndexedRandom;
-use tracing::{error, info, warn};
-use wgpu::{util::StagingBelt, Buffer, BufferUsages, CommandEncoder};
+use tracing::warn;
+use wgpu::{util::StagingBelt, BufferUsages, CommandEncoder};
 
 use crate::buddy_allocator::BuddyAllocator;
 
-use super::ssbo::{ResizableBuffer, SSBO};
+use super::ssbo::ResizableBuffer;
 
 pub struct GPUAllocator<T> {
     pub allocator: BuddyAllocator,

@@ -6,7 +6,9 @@
 //
 //
 //
-use crate::{items::{Item, ItemKind}, structures::{inventory::{SlotKind, SlotMeta}, strct::StructureKind}, voxel_world::voxel::Voxel, TICKS_PER_SECOND};use super::Recipe;
+use crate::{constants::TICKS_PER_SECOND, items::{Item, ItemKind}, structures::{inventory::{SlotKind, SlotMeta}, strct::StructureKind}, voxel_world::voxel::Voxel};
+use super::Recipe;
+
 pub const FURNACE_RECIPES : &'static [Recipe] = &[
     Recipe {
         requirements: &[Item::new(ItemKind::IronOre, 1)],

@@ -5,7 +5,7 @@ use save_format::{Arena, Value};
 use sti::format_in;
 use tracing::warn;
 
-use crate::{crafting::{crafting_recipe_index, crafting_recipe_inventory, RECIPES}, directions::CardinalDirection, game::Game, items::{DroppedItem, Item, ItemKind}, structures::{inventory::StructureInventory, strct::{InserterState, Structure, StructureData, StructureKind}}, PhysicsBody, Tick, DROPPED_ITEM_SCALE};
+use crate::{constants::DROPPED_ITEM_SCALE, crafting::{crafting_recipe_index, crafting_recipe_inventory, RECIPES}, directions::CardinalDirection, game::Game, items::{DroppedItem, Item, ItemKind}, structures::{inventory::StructureInventory, strct::{InserterState, Structure, StructureData, StructureKind}}, PhysicsBody, Tick};
 
 impl Game {
     #[allow(unused_must_use)]

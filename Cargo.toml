@@ -10,6 +10,7 @@ wgpu-profiler = "*"
 winit = "*"
 bytemuck = "*"
 pollster = "*"
+metal = "*"
 
 glfw = "*"
 gl = "*"
@@ -30,6 +31,7 @@ tracing-subscriber = "*"
 
 [profile.release]
 debug = 1
+debug-assertions = true
 
 [features]
 dhat-heap = []    # if you are doing heap profiling

@@ -2,14 +2,11 @@ pub mod save_system;
 
 use std::time::Instant;
 
-use gl::RENDERER;
-use glam::{usize, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
-use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge, ParallelIterator};
-use sti::hash::fxhash::{fxhash32, FxHasher32};
-use tracing::{error, info, trace, warn};
+use glam::{DVec3, IVec3, Vec3, Vec4};
+use tracing::{info, warn};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
-use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE, COLOUR_DENY, COLOUR_PASS, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::{CardinalDirection, Direction}, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, mesh::Mesh, renderer::{gpu_allocator::GPUAllocator, Renderer}, shader::{Shader, ShaderProgram, ShaderType}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{self, InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, mesh::ChunkQuadInstance, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick, DELTA_TICK, DROPPED_ITEM_SCALE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND};
+use crate::{commands::{Command, CommandRegistry}, directions::CardinalDirection, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick, constants::{DELTA_TICK, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND}};
 
 pub struct Game {
     pub world: VoxelWorld,
@@ -48,19 +45,6 @@ pub struct Settings {
 
 impl Game {
     pub fn new() -> Game {
-        // this also inits glfw + opengl
-        //let fragment = Shader::new(&std::fs::read("shaders/mesh.fs").unwrap(), ShaderType::Fragment).unwrap();
-        //let vertex = Shader::new(&std::fs::read("shaders/mesh.vs").unwrap(), ShaderType::Vertex).unwrap();
-        //let shader_mesh = ShaderProgram::new(fragment, vertex).unwrap();
-
-
-        //let fragment = Shader::new(&std::fs::read("shaders/voxel.fs").unwrap(), ShaderType::Fragment).unwrap();
-        //let vertex = Shader::new(&std::fs::read("shaders/voxel.vs").unwrap(), ShaderType::Vertex).unwrap();
-        //let shader_world = ShaderProgram::new(fragment, vertex).unwrap();
-
-
-        //let block_outline_mesh = Mesh::from_vmf("assets/models/block_outline.vmf");
-
         let mut this = Game {
             triangle_count: 0,
             total_rendered_chunks: 0,
@@ -179,15 +163,6 @@ impl Game {
 
         this.command_registry.register("ui_scale", |game, cmd| {
             game.settings.ui_scale = cmd.arg(0)?.as_f32()?;
-            Some(())
-        });
-
-        this.command_registry.register("remesh", |game, _| {
-
-            //game.world.chunks.iter_mut().filter_map(|x| x.1.as_mut()).for_each(|x| {
-                //x.meshes.iter_mut().for_each(|x| *x = None);
-                //x.version.add(1);
-            //});
             Some(())
         });
 
@@ -638,7 +613,6 @@ impl Game {
             && self.world.chunker.chunk_active_jobs_len() == 0
             && self.world.chunker.mesh_active_jobs_len() == 0 {
 
-            let (player_chunk, _) = split_world_pos(self.player.body.position.as_ivec3());
             let player_chunk = IVec3::ZERO;
             let rd = self.settings.render_distance;
             let rdp1 = rd+1;
@@ -711,7 +685,7 @@ impl Game {
 
                 
                 // the mesh exists
-                if offset < RENDER_DISTANCE*RENDER_DISTANCE {
+                if offset < rd*rd {
                     if chunk.version != mesh.version {
                         // the version mismatches
                         skipped += 1;
@@ -849,97 +823,7 @@ impl Game {
         self.structures.process(&mut self.world);
     }
 
-
     /*
-    pub fn render(&mut self, input: &mut InputManager, dt: f32) {
-        self.renderer.ui_scale = self.settings.ui_scale;
-        self.renderer.begin(self.sky_colour);
-
-        let camera = self.camera.position;
-        let projection = self.camera.perspective_matrix();
-        let view = self.camera.view_matrix();
-
-
-        // render chunks
-        {
-            let rd = self.settings.render_distance;
-            let fog_distance = (rd - 1) as f32;
-
-            self.shader_world.use_program();
-            self.shader_world.set_matrix4(c"projection", projection);
-            self.shader_world.set_matrix4(c"view", view);
-            self.shader_world.set_vec4(c"modulate", Vec4::ONE);
-            self.shader_world.set_vec3(c"cameraPos", camera.as_vec3());
-            self.shader_world.set_vec3(c"fog_color", self.sky_colour.xyz());
-            self.shader_world.set_f32(c"fog_density", 1.0);
-            self.shader_world.set_f32(c"time", self.renderer.glfw.get_time() as _);
-            self.shader_world.set_f32(c"fog_start", fog_distance * CHUNK_SIZE as f32 * 0.9);
-            self.shader_world.set_f32(c"fog_end", fog_distance * CHUNK_SIZE as f32);
-
-
-            let frustum = match &self.lock_frustum {
-                Some(f) => f.clone(),
-                None => Frustum::compute(projection, view),
-            };
-
-            let (player_chunk, _) = split_world_pos(self.player.body.position.as_ivec3());
-
-            let mut chunks = 0;
-            for y in -rd..rd {
-                for z in -rd..rd {
-                    for x in -rd..rd {
-                        let offset = IVec3::new(x, y, z);
-                        if offset.length_squared() > (rd*rd) {
-                            continue;
-                        }
-
-
-                        let chunk_pos = player_chunk + offset;
-
-                        let min = chunk_pos * CHUNK_SIZE as i32;
-                        let max = (chunk_pos + IVec3::ONE) * CHUNK_SIZE as i32;
-
-                        let min = (min.as_dvec3() - camera).as_vec3();
-                        let max = (max.as_dvec3() - camera).as_vec3();
-
-                        if !frustum.is_box_visible(min, max) {
-                            continue;
-                        }
-
-                        let Some(meshes) = self.world.try_get_mesh(chunk_pos)
-                        else { continue };
-
-                        let dir_from_camera = offset.as_vec3().normalize();
-
-                        for (i, mesh) in meshes.iter().enumerate() {
-                            let Some(mesh) = mesh
-                            else { continue };
-
-                            if mesh.indices == 0 {
-                                warn!("an empty mesh was generated");
-                                continue;
-                            }
-
-                            
-                            let normal = Direction::NORMALS[i];
-                            if dir_from_camera.dot(normal) > 0.0 {
-                                continue
-                            }
-
-                            let offset = chunk_pos * IVec3::splat(CHUNK_SIZE as i32);
-                            let offset = offset.as_dvec3() - camera;
-                            let model = Mat4::from_translation(offset.as_vec3());
-
-                            self.shader_world.set_matrix4(c"model", model);
-
-                            self.renderer.draw_voxel_mesh(mesh);
-                        }
-                    }
-                }
-            }
-
-        }
-
         // render meshes
         self.shader_mesh.use_program();
         self.shader_mesh.set_matrix4(c"projection", projection);

@@ -1,10 +1,7 @@
-use std::{ops::Bound, fmt::Write};
-
-use glam::{DVec3, Vec2, Vec4};
-use glfw::{CursorMode, Key};
+use glfw::CursorMode;
 use winit::keyboard::KeyCode;
 
-use crate::{commands::Command, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{SlotKind, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{split_world_pos, VoxelWorld}, Game, Player, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND};
+use crate::{input::InputManager, items::Item, structures::StructureId, Game};
 
 pub enum UILayer {
     Inventory {

@@ -1,5 +1,3 @@
-use rand::random;
-
 #[derive(Clone, PartialEq)]
 pub struct BuddyAllocator {
     pub arrays: Vec<Vec<usize>>,
@@ -114,7 +112,7 @@ mod tests {
 
         let mut cap = 100;
         while let Some((pop, size)) = stack.pop() {
-            if cap != 0 && random::<bool>() {
+            if cap != 0 && rand::random::<bool>() {
                 stack.push((pop, size));
                 stack.push((alloc.alloc(size*5).unwrap(), size*5));
                 cap -= 1;

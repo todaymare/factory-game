@@ -1,16 +1,14 @@
-use std::{marker::PhantomData, num::{NonZero, NonZeroU64}};
+use std::{marker::PhantomData, num::NonZeroU64};
 
 use bytemuck::Pod;
-use rand::seq::IndexedRandom;
-use tracing::{error, info, warn};
-use wgpu::util::{DeviceExt, StagingBelt};
+use tracing::{error, warn};
+use wgpu::util::StagingBelt;
 
 pub struct SSBO<T> {
     pub buffer: ResizableBuffer<T>,
     bind_group: wgpu::BindGroup,
     layout: wgpu::BindGroupLayout,
     marker: PhantomData<T>,
-    name: &'static str,
 }
 
 
@@ -48,8 +46,8 @@ impl<T: Pod + std::fmt::Debug> ResizableBuffer<T> {
 
         let max_cap = device.limits().max_buffer_size/size_of::<T>() as u64;
         if max_cap < new_cap as u64 {
-            warn!("buffer is too large to fit in the gpu. max capacity is '{max_cap}' requested capacity is '{new_cap}'. \
-                  trimming down to max capacity");
+            warn!("[{}] buffer is too large to fit in the gpu. max capacity is '{max_cap}' requested capacity is '{new_cap}'. \
+                  trimming down to max capacity", self.name);
         }
 
         let new_cap = new_cap.min(max_cap as usize);
@@ -119,7 +117,6 @@ impl<T: Pod + std::fmt::Debug> SSBO<T> {
             bind_group,
             layout,
             marker: PhantomData,
-            name,
         }
     }
 
