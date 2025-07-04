@@ -156,7 +156,7 @@ impl ApplicationHandler for App {
                     self.time_since_last_simulation -= game.settings.delta_tick;
                 }
 
-                game.world.process(&mut renderer.voxel_pipeline.chunk_offsets);
+                game.world.process(&mut renderer.voxel_pipeline.chunk_offsets, &mut renderer.voxel_pipeline.instances);
 
 
                 let output = renderer.surface.get_current_texture().unwrap();
@@ -241,7 +241,8 @@ impl ApplicationHandler for App {
                     }
 
                     
-                    info!("time {:?} distance: {}, index count: {}, indirect: {}", 
+                    info!("time {:?} distance: {}, index count: {}, indirect: {} \
+                          ", 
                            now.elapsed(), game.settings.render_distance-1,
                            voxel_pipeline.chunk_offsets.as_slice().len(),
                            indirect.len());

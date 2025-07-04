@@ -46,10 +46,11 @@ impl VoxelWorld {
     }
 
 
-    pub fn process(&mut self, free_list: &mut FreeKVec<MeshIndex, ChunkMeshFramedata>) {
+    pub fn process(&mut self, free_list: &mut FreeKVec<MeshIndex, ChunkMeshFramedata>, instance_allocator: &mut GPUAllocator<ChunkQuadInstance>) {
         self.chunker.process_mesh_queue(3, free_list);
         self.chunker.process_chunk_queue(3);
         self.chunker.process_chunk_jobs(3);
+        self.chunker.process_mesh_unload_queue(3, free_list, instance_allocator);
     }
 
 

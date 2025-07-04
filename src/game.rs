@@ -617,7 +617,6 @@ impl Game {
             let rd = self.settings.render_distance;
             let rdp1 = rd+1;
 
-
             for y in -rd..=rd {
                 for z in -rd..=rd {
                     for x in -rd..=rd {
@@ -659,40 +658,49 @@ impl Game {
 
             'unload:
             for (pos, chunk, mesh) in self.world.chunker.iter_chunks() {
+                if self.world.chunker.is_queued_for_unloading(pos) {
+                    warn!("skipping cos queued for unloading");
+                    continue;
+                }
+
                 let offset = (pos.0-player_chunk).length_squared();
 
                 let chunk = match chunk {
                     ChunkEntry::Loaded(chunk) => chunk,
-                    _ => continue
+                    _ => {
+                        continue
+                    }
                 };
 
-                let mesh = match mesh {
-                    MeshEntry::Loaded(mesh) => mesh,
-                    _ => continue
-                };
+                let mut full_unload = offset > RENDER_DISTANCE*RENDER_DISTANCE;
 
                 if self.world.chunker.is_queued_for_meshing(pos) {
+                    warn!("skipping cos queued for meshing");
                     continue
+                } else if self.world.chunker.is_chunk_meshing(pos) {
+                    warn!("skipping cos meshing");
+                    continue
+                } else {
+                    // the mesh exists
+                    if offset < rd*rd {
+                        match mesh {
+                            MeshEntry::Loaded(mesh) => {
+                                if chunk.version != mesh.version {
+                                    warn!("skipping cos version difference");
+                                    // the version mismatches
+                                    continue;
+                                }
+
+                            },
+                            _ => (),
+                        };
+                    }
+
+
                 }
 
-                if self.world.chunker.is_chunk_meshing(pos) {
-                    continue
-                }
-
-                if self.world.chunker.is_queued_for_unloading(pos) {
-                    continue;
-                }
 
                 
-                // the mesh exists
-                if offset < rd*rd {
-                    if chunk.version != mesh.version {
-                        // the version mismatches
-                        skipped += 1;
-                        continue;
-                    }
-                }
-
                 // check that any surrounding chunk isn't gonna need it soon
                 for offset in SURROUNDING_OFFSETS {
                     let pos = WorldChunkPos(pos.0 + offset);
@@ -701,8 +709,6 @@ impl Game {
                     }
                 }
 
-
-                let full_unload = offset > RENDER_DISTANCE*RENDER_DISTANCE;
 
                 unload.push((full_unload, pos));
                 unloaded += 1;

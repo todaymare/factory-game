@@ -107,7 +107,6 @@ impl Chunker {
         }
     }
 
-
     pub fn process_mesh_queue(
         &mut self,
         timeout: u32,
@@ -148,6 +147,61 @@ impl Chunker {
         self.spawn_mesh_task(batch);
 
         self.mesh_load_queue = load_queue;
+    }
+
+    pub fn process_mesh_unload_queue(
+        &mut self,
+        timeout: u32,
+        framedata: &mut FreeKVec<MeshIndex, ChunkMeshFramedata>,
+        instance_allocator: &mut GPUAllocator<ChunkQuadInstance>,
+    ) {
+        let timeout = timeout as u128;
+        let start = Instant::now();
+
+        let mut unload_queue = core::mem::take(&mut self.mesh_unload_queue);
+        let mut remove_list = vec![];
+        let mut iter = unload_queue.iter();
+
+        loop {
+            if start.elapsed().as_millis() > timeout { break; }
+
+            let Some(&chunk_pos) = iter.next()
+            else { break };
+
+            let region = self.get_region_or_insert(chunk_pos.region());
+
+            let mesh = region.get_mesh_mut(chunk_pos.chunk());
+
+            remove_list.push(chunk_pos);
+            match mesh {
+                MeshEntry::None => {
+                    //warn!("tried to unload a mesh that was already unloaded");
+                    continue;
+                },
+
+
+                MeshEntry::Loaded(chunk_meshes) => {
+                    if let Some(meshes) = chunk_meshes.meshes.take() {
+                        let prev_meshes = region.octree.get_mut(meshes);
+
+                        for mesh in prev_meshes.iter_mut() {
+                            let Some(mesh) = mesh.take()
+                            else { continue };
+
+                            framedata.remove(mesh.chunk_mesh_data_index);
+                            instance_allocator.free(mesh.vertex);
+                        }
+
+                    }
+
+
+                },
+            }
+        }
+        drop(iter);
+
+        remove_list.iter().for_each(|x| { unload_queue.remove(x); });
+        self.mesh_unload_queue = unload_queue;
     }
 
 
