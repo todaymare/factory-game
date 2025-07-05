@@ -3,6 +3,9 @@ use glam::{Vec3, Vec4};
 pub const COLOUR_PASS : Vec3 = Vec3::new(0.5, 0.8, 0.5);
 pub const COLOUR_DENY : Vec3 = Vec3::new(0.8, 0.5, 0.5);
 
+pub const MSAA_SAMPLE_COUNT : u32 = 4;
+pub const VOXEL_TEXTURE_ATLAS_TILE_SIZE : u32 = 32;
+pub const VOXEL_TEXTURE_ATLAS_TILE_CAP : u32 = 256;
 
 pub const UI_CROSSAIR_SIZE        : f32  = 8.0;
 pub const UI_CROSSAIR_COLOUR      : Vec4 = Vec4::ONE;
@@ -24,14 +27,14 @@ pub const CHUNK_SIZE_I32 : i32 = CHUNK_SIZE as i32;
 pub const MOUSE_SENSITIVITY : f32 = 0.0016;
 
 pub const PLAYER_REACH : f32 = 5.0;
-pub const PLAYER_SPEED : f32 = 1000.0;
+pub const PLAYER_SPEED : f32 = 100.0;
 pub const PLAYER_PULL_DISTANCE : f32 = 3.5;
 pub const PLAYER_INTERACT_DELAY : f32 = 0.125;
 pub const PLAYER_HOTBAR_SIZE : usize = 5;
 pub const PLAYER_ROW_SIZE : usize = 6;
 pub const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-pub const RENDER_DISTANCE : i32 = 64;
+pub const RENDER_DISTANCE : i32 = 80;
 
 pub const DROPPED_ITEM_SCALE : f32 = 0.5;
 

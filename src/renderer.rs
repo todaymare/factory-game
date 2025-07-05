@@ -8,14 +8,15 @@ use std::cell::Cell;
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec2, IVec3, Mat4, Vec2, Vec3, Vec4};
 use gpu_allocator::GPUAllocator;
+use image::{DynamicImage, EncodableLayout, GenericImage, GenericImageView, RgbaImage};
 use ssbo::{ResizableBuffer, SSBO};
-use sti::{define_key, static_assert_eq};
+use sti::{alloc::default_realloc, define_key, static_assert_eq};
 use textures::TextureId;
 use uniform::Uniform;
 use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgt::DrawIndexedIndirectArgs, BufferUsages, TextureUsages, *};
 use winit::window::Window;
 
-use crate::{free_list::FreeKVec, voxel_world::mesh::{ChunkMeshFramedata, ChunkQuadInstance}, constants::{QUAD_INDICES, QUAD_VERTICES}};
+use crate::{constants::{MSAA_SAMPLE_COUNT, QUAD_INDICES, QUAD_VERTICES, VOXEL_TEXTURE_ATLAS_TILE_CAP, VOXEL_TEXTURE_ATLAS_TILE_SIZE}, free_list::FreeKVec, voxel_world::mesh::{ChunkMeshFramedata, ChunkQuadInstance}};
 
 
 // the renderer is done,
@@ -28,6 +29,7 @@ pub struct Renderer {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
+    pub framebuffer: wgpu::TextureView,
     pub voxel_pipeline: VoxelPipeline,
     pub staging_buffer: StagingBelt,
 
@@ -101,6 +103,8 @@ pub struct VoxelPipeline {
     pub indirect_buf: ResizableBuffer<DrawIndexedIndirectArgs>,
     pub vertex_buf: Buffer,
     pub index_buf: Buffer,
+
+    pub texture: BindGroup,
 }
 
 
@@ -136,6 +140,7 @@ impl Renderer {
                     let mut limits = wgpu::Limits::downlevel_defaults();
                     limits.max_buffer_size = 17179869184;
                     limits.max_storage_buffer_binding_size = 512 << 20;
+                    limits.max_texture_dimension_2d = 8192;
                     limits
                 },
                 label: Some("main device"),
@@ -178,9 +183,145 @@ impl Renderer {
             );
 
 
+
+            let diffuse_bytes = include_bytes!("../textures.png");
+            let diffuse_image = image::load_from_memory(diffuse_bytes).unwrap();
+            let diffuse_image = diffuse_image.flipv();
+
+            let dims = diffuse_image.dimensions();
+            assert_eq!(dims.0, VOXEL_TEXTURE_ATLAS_TILE_SIZE * VOXEL_TEXTURE_ATLAS_TILE_CAP);
+            assert_eq!(dims.1, VOXEL_TEXTURE_ATLAS_TILE_SIZE);
+
+            let texture_size = wgpu::Extent3d {
+                width: dims.0,
+                height: dims.1,
+                depth_or_array_layers: 1,
+            };
+
+            let mipmap_count = 1 + VOXEL_TEXTURE_ATLAS_TILE_SIZE.ilog2();
+
+            let diffuse_texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("diffuse-texture"),
+                size: texture_size,
+                mip_level_count: mipmap_count,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+
+
+            let mut mipmap_visual_image = RgbaImage::new(
+                dims.0,
+                (0..mipmap_count).map(|i| dims.1 / (2u32.pow(i))).sum(),
+            );
+
+            let mut mipmap_visual_y_offset = 0;
+
+            for i in 0..mipmap_count {
+                let dims = if i == 0 { dims }
+                else { (dims.0 / (2u32.pow(i)), dims.1 / (2u32.pow(i))) };
+
+                let mut mipmap_image = RgbaImage::new(dims.0, dims.1);
+
+                for offset in 0..VOXEL_TEXTURE_ATLAS_TILE_CAP {
+                    let base = offset * VOXEL_TEXTURE_ATLAS_TILE_SIZE;
+                    let diffuse_image = diffuse_image.crop_imm(base, 0, 32, 32);
+                    dbg!(dims, offset*dims.1);
+                    let diffuse_image = diffuse_image.resize_exact(dims.1, dims.1, image::imageops::FilterType::Lanczos3);
+                    mipmap_image.copy_from(&diffuse_image, offset*dims.1, 0).unwrap();
+                }
+
+
+                mipmap_visual_image.copy_from(&mipmap_image, 0, mipmap_visual_y_offset).unwrap();
+                mipmap_visual_y_offset += dims.1;
+
+                let texture_size = wgpu::Extent3d {
+                    width: dims.0,
+                    height: dims.1,
+                    depth_or_array_layers: 1,
+                };
+
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &diffuse_texture,
+                        mip_level: i,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &mipmap_image.as_bytes(),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4*dims.0),
+                        rows_per_image: Some(dims.1),
+                    },
+
+                    texture_size
+                );
+            }
+
+            mipmap_visual_image.save("mipmaps.png").unwrap();
+
+            let diffuse_texture_view = diffuse_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("diffuse-sampler"),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+
+
+            let texture_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("texutre-bind-group-layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        // This should match the filterable field of the
+                        // corresponding Texture entry above.
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+            let diffuse_bind_group = device.create_bind_group(
+                &wgpu::BindGroupDescriptor {
+                    layout: &texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&diffuse_texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
+                        }
+                    ],
+                    label: Some("diffuse-bind-group"),
+                }
+            );
+
+
+
             let rpl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("voxel-render-pipeline-layout"),
-                bind_group_layouts: &[voxel_shader_uniform.bind_group_layout(), ssbo.layout()],
+                bind_group_layouts: &[voxel_shader_uniform.bind_group_layout(), ssbo.layout(), &texture_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -241,7 +382,7 @@ impl Renderer {
                     bias: wgpu::DepthBiasState::default(),
                 }),
                 multisample: wgpu::MultisampleState {
-                    count: 1, // 2.
+                    count: MSAA_SAMPLE_COUNT, // 2.
                     mask: !0, // 3.
                     alpha_to_coverage_enabled: false, // 4.
                 },
@@ -270,7 +411,6 @@ impl Renderer {
                 1024
             );
 
-
             VoxelPipeline {
                 pipeline: render_pipeline,
                 frame_uniform: voxel_shader_uniform,
@@ -281,8 +421,10 @@ impl Renderer {
                 instances: GPUAllocator::new(&device, 1),
                 indirect_buf: indirect,
                 chunk_offsets: FreeKVec::new(),
+                texture: diffuse_bind_group,
             }
         };
+
 
         /*
         let mut glfw = glfw::init(|error, str| error!("glfw error {str}: {error}"))
@@ -445,6 +587,9 @@ impl Renderer {
 
         glfw.set_swap_interval(glfw::SwapInterval::None);
 */
+
+        let framebuffer = create_multisampled_framebuffer(&device, &config);
+
         let this = Self {
             ui_scale: 1.0,
             rects: vec![],
@@ -457,6 +602,7 @@ impl Renderer {
             //mesh_pipeline,
             voxel_pipeline,
             staging_buffer: StagingBelt::new(128 << 20),
+            framebuffer,
         };
 
         this
@@ -866,7 +1012,7 @@ impl DepthBuffer {
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: MSAA_SAMPLE_COUNT,
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -878,3 +1024,33 @@ impl DepthBuffer {
         Self { view, format }
     }
 }
+
+
+pub fn create_multisampled_framebuffer(
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> wgpu::TextureView {
+    let size = wgpu::Extent3d {
+        width: config.width,
+        height: config.height,
+        depth_or_array_layers: 1,
+    };
+
+
+    let multisampled_frame_descriptor = &wgpu::TextureDescriptor {
+        size,
+        mip_level_count: 1,
+        sample_count: MSAA_SAMPLE_COUNT,
+        dimension: wgpu::TextureDimension::D2,
+        format: config.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        label: None,
+        view_formats: &[],
+    };
+
+    device
+        .create_texture(multisampled_frame_descriptor)
+        .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+

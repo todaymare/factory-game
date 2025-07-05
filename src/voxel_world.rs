@@ -467,9 +467,9 @@ impl VoxelWorld {
                     x[v] = j as _;
 
                     if neg_d {
-                        backward_vertices.push(ChunkQuadInstance::new(x, kind.colour(), h as _, w as _, d as u8 + 3, back_chunk_index));
+                        backward_vertices.push(ChunkQuadInstance::new(x, kind, h as _, w as _, d as u8 + 3, back_chunk_index));
                     } else {
-                        forward_vertices.push(ChunkQuadInstance::new(x, kind.colour(), h as _, w as _, d as u8, front_chunk_index));
+                        forward_vertices.push(ChunkQuadInstance::new(x, kind, h as _, w as _, d as u8, front_chunk_index));
                     }
                     
                     // clear this part of the mask so we don't add duplicates

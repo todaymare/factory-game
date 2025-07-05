@@ -1,6 +1,6 @@
 use glam::Vec4;
 
-use crate::{items::ItemKind, constants::TICKS_PER_SECOND};
+use crate::{constants::TICKS_PER_SECOND, directions::Direction, items::ItemKind};
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 #[repr(u8)]
@@ -74,6 +74,27 @@ impl Voxel {
 
             Voxel::StructureBlock => unreachable!(),
             Voxel::Air => unreachable!(),
+        }
+    }
+
+
+    pub fn texture_id(self, normal: Direction) -> u32 {
+        match self {
+            Voxel::Dirt => {
+                match normal {
+                    Direction::Up => 1,
+                    Direction::Down => 0,
+                    _ => 2,
+                }
+            },
+
+            Voxel::Stone => 3,
+            Voxel::Copper => 4,
+            Voxel::Iron => 5,
+            Voxel::Coal => 6,
+
+            Voxel::Air => unreachable!(),
+            Voxel::StructureBlock => unreachable!(),
         }
     }
 

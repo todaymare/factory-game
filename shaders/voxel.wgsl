@@ -4,26 +4,28 @@ struct VertexIn {
 
 
 struct InstanceIn {
-    @location(1) p1 : u32,
-    @location(2) p2 : u32,
+    @location(1) p1     : u32,
+    @location(2) id     : u32,
     @location(3) offset : u32,
 };
 
 
 struct VertexOut {
     @builtin(position) position  : vec4<f32>,
-    @location(0)      colour    : vec4<f32>,
     @location(1)      normal    : vec3<f32>,
     @location(2)      frag_pos  : vec3<f32>,
     @location(3)      v_distance: f32,
+    @location(4)      tex_coords: vec2<f32>,
+    @location(5)      id        : u32,
 };
 
 
 struct FragmentIn {
-    @location(0) colour    : vec4<f32>,
     @location(1) normal    : vec3<f32>,
     @location(2) frag_pos  : vec3<f32>,
     @location(3) v_distance: f32,
+    @location(4) tex_coords: vec2<f32>,
+    @location(5)      id        : u32,
 };
 
 
@@ -56,6 +58,12 @@ var<uniform> u : Uniforms;
 var<storage, read> positions: array<ChunkMeshFramedata>;
 
 
+@group(2) @binding(0)
+var t_diffuse: texture_2d<f32>;
+@group(2) @binding(1)
+var s_diffuse: sampler;
+
+
 const NORMAL_LOOKUP : array<vec3<f32>, 6> = array<vec3<f32>, 6>(
     vec3<f32>( 1.0, 0.0, 0.0),
     vec3<f32>( 0.0, 1.0, 0.0),
@@ -72,7 +80,6 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
 
     // unpacking
     let p1 = input.p1;
-    let p2 = input.p2;
 
     let x      =  p1          & 0x3Fu;
     let y      = (p1 >>  6u)  & 0x3Fu;
@@ -80,13 +87,7 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
     let width  = (p1 >> 18u)  & 0x1Fu;
     let height = (p1 >> 23u)  & 0x1Fu;
 
-    let r      = ((p1 >> 28u) & 0xFu) | ((p2 & 0xFu) << 4u);
-    let g      = (p2 >>  4u) & 0xFFu;
-    let b      = (p2 >> 12u) & 0xFFu;
-
     let pos = vec3<f32>(f32(x), f32(y), f32(z));
-    let colour = vec3<f32>(f32(r), f32(g), f32(b)) / 255.0;
-
 
     // other stuff
 
@@ -102,10 +103,13 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
     // for the up and down faces width and height are flipped for some reason
     if (normal_index == 1 || normal_index == 4) {
         if normal_index == 1 { o = o.zyx; }
+
         if o.x == 1 { o.x += i32(height); }
         if o.z == 1 { o.z += i32(width); }
 
+        output.tex_coords = vec2<f32>(f32(o.x), f32(o.z));
     }
+
     else {
         switch normal_index {
             case 3: { o = o.zyx; } // X-
@@ -116,11 +120,13 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
         if o.x == 1 { o.x += i32(width); }
         if o.z == 1 { o.z += i32(height); }
 
+        let uv = vec2<f32>(f32(o.x), f32(o.z));
+
         switch normal_index {
-            case 0: { o = o.yxz; } // X+
-            case 3: { o = o.yxz; } // X-
-            case 5: { o = o.xzy; } // Z+
-            case 2: { o = o.xzy; } // Z-
+            case 0: { o = o.yxz; output.tex_coords = uv.yx; } // X+
+            case 3: { o = o.yxz; output.tex_coords = uv.yx; } // X-
+            case 5: { o = o.xzy; output.tex_coords = uv.xy; } // Z+
+            case 2: { o = o.xzy; output.tex_coords = uv.xy; } // Z-
             default: {}
         }
 
@@ -133,19 +139,34 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
 
     let light = min(max(dot(normal, light_dir), 0.0) + 0.2, 1.0);
 
-    output.colour = vec4<f32>(colour.rgb * light, 1.0) * u.modulate;
-
     output.position = u.projection * u.view * vec4<f32>(world_pos, 1.0);
     output.v_distance = length(world_pos);
     output.frag_pos = world_pos;
+    output.id = input.id;
 
     return output;
 }
 
+
+const TILE_SIZE: f32 = 1.0 / 256.0;
+const PIXEL_SIZE : f32 = TILE_SIZE / 32.0;
+
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    return a + t * (b - a);
+}
+
+
 @fragment
 fn fs_main(in: FragmentIn) -> @location(0) vec4<f32> {
     let fog_factor = clamp((u.fog_end - in.v_distance) / (u.fog_end - u.fog_start), 0.0, 1.0);
-    //return in.colour;
-    //return vec4(model.xyz * 0.01, 1);
-    return vec4(mix(u.fog_color, in.colour.xyz, fog_factor), in.colour.w);
+
+    let base = f32(in.id) * TILE_SIZE;
+    let max = base + TILE_SIZE;
+
+    var v = clamp(lerp(base, max, in.tex_coords.x % 1.0), base, max);
+    var colour = textureSample(t_diffuse, s_diffuse, vec2<f32>(v, in.tex_coords.y % 1.0));
+
+
+    return vec4(mix(u.fog_color, colour.xyz, fog_factor), colour.w);
 }

@@ -41,7 +41,7 @@ use voxel_world::split_world_pos;
 use glam::{DVec2, DVec3, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
 use input::InputManager;
 use items::{DroppedItem, Item};
-use renderer::{DepthBuffer, Renderer, VoxelShaderUniform};
+use renderer::{create_multisampled_framebuffer, DepthBuffer, Renderer, VoxelShaderUniform};
 use wgpu::wgt::DrawIndexedIndirectArgs;
 use winit::{event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, window::{CursorGrabMode, Window, WindowId}};
 use winit::application::ApplicationHandler;
@@ -160,7 +160,8 @@ impl ApplicationHandler for App {
 
 
                 let output = renderer.surface.get_current_texture().unwrap();
-                let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let output_texture = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let view = &renderer.framebuffer;
                 let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("voxel-command-encoder"),
                 });
@@ -259,7 +260,7 @@ impl ApplicationHandler for App {
                         color_attachments: &[
                             Some(wgpu::RenderPassColorAttachment {
                                 view: &view,
-                                resolve_target: None,
+                                resolve_target: Some(&output_texture),
                                 ops: wgpu::Operations {
                                     load: wgpu::LoadOp::Clear(wgpu::Color { r: c.x, g: c.y, b: c.z, a: c.w }),
                                     store: wgpu::StoreOp::Store,
@@ -284,6 +285,7 @@ impl ApplicationHandler for App {
                     voxel_pipeline.frame_uniform.update(&renderer.queue, &uniform);
                     voxel_pipeline.frame_uniform.use_uniform(&mut pass);
                     pass.set_bind_group(1, voxel_pipeline.model_uniform.bind_group(), &[]);
+                    pass.set_bind_group(2, &voxel_pipeline.texture, &[]);
 
                     {
                         pass.set_vertex_buffer(0, voxel_pipeline.vertex_buf.slice(..));
@@ -309,9 +311,10 @@ impl ApplicationHandler for App {
                 let Some(renderer) = &mut self.renderer
                 else { error!("resized: no renderer found"); return; };
 
-                renderer.config.width = size.width.min(2048);
-                renderer.config.height = size.height.min(2048);
+                renderer.config.width = size.width;
+                renderer.config.height = size.height;
                 renderer.surface.configure(&renderer.device, &renderer.config);
+                renderer.framebuffer = create_multisampled_framebuffer(&renderer.device, &renderer.config);
                 renderer.voxel_pipeline.depth_buffer = DepthBuffer::new(&renderer.device, renderer.config.width, renderer.config.height);
 
             }

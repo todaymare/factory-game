@@ -71,6 +71,21 @@ impl Direction {
         Vec3::new( 0.0,  0.0, -1.0),
         
     ];
+
+    
+    pub fn from_normal(normal: u8) -> Direction {
+        match normal {
+            0 => Direction::Left,
+            1 => Direction::Up,
+            2 => Direction::Forward,
+            3 => Direction::Right,
+            4 => Direction::Down,
+            5 => Direction::Back,
+            _ => unreachable!(),
+        }
+    }
+
+
     pub fn get_opposite(self) -> Self {
         match self {
             Direction::Left => Direction::Right,
