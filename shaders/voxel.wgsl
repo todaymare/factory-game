@@ -17,6 +17,7 @@ struct VertexOut {
     @location(3)      v_distance: f32,
     @location(4)      tex_coords: vec2<f32>,
     @location(5)      id        : u32,
+    @location(6) colour    : vec3<f32>,
 };
 
 
@@ -26,6 +27,7 @@ struct FragmentIn {
     @location(3) v_distance: f32,
     @location(4) tex_coords: vec2<f32>,
     @location(5)      id        : u32,
+    @location(6) colour    : vec3<f32>,
 };
 
 
@@ -98,7 +100,14 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
     let normal = NORMAL_LOOKUP[normal_index];
 
     var o = offset.pos;
+    let ao = input.id >> 8;
+    var ao_state = 3u;
 
+    if o.x == 0 && o.z == 0 { ao_state = (ao >> 0 & 0x3); }
+    if o.x == 0 && o.z == 1 { ao_state = (ao >> 2 & 0x3); }
+    if o.x == 1 && o.z == 0 { ao_state = (ao >> 4 & 0x3); }
+    if o.x == 1 && o.z == 1 { ao_state = (ao >> 6 & 0x3); }
+    
 
     // for the up and down faces width and height are flipped for some reason
     if (normal_index == 1 || normal_index == 4) {
@@ -132,6 +141,10 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
 
     };
 
+    output.colour = vec3(0);
+    //let ao_colours = vec4<f32>(1.0,0.7,0.5,0.15);
+    let ao_colours = vec4<f32>(0.0,0.3,0.5,1.0);
+    output.colour = vec3(ao_colours[ao_state]);
 
     let world_pos = pos + model.xyz + vec3<f32>(o);
 
@@ -142,7 +155,7 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
     output.position = u.projection * u.view * vec4<f32>(world_pos, 1.0);
     output.v_distance = length(world_pos);
     output.frag_pos = world_pos;
-    output.id = input.id;
+    output.id = input.id & 0xFF;
 
     return output;
 }
@@ -168,5 +181,5 @@ fn fs_main(in: FragmentIn) -> @location(0) vec4<f32> {
     var colour = textureSample(t_diffuse, s_diffuse, vec2<f32>(v, in.tex_coords.y % 1.0));
 
 
-    return vec4(mix(u.fog_color, colour.xyz, fog_factor), colour.w);
+    return vec4(mix(u.fog_color, colour.xyz * in.colour, fog_factor), colour.w);
 }
