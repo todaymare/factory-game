@@ -228,7 +228,6 @@ impl Renderer {
                 for offset in 0..VOXEL_TEXTURE_ATLAS_TILE_CAP {
                     let base = offset * VOXEL_TEXTURE_ATLAS_TILE_SIZE;
                     let diffuse_image = diffuse_image.crop_imm(base, 0, 32, 32);
-                    dbg!(dims, offset*dims.1);
                     let diffuse_image = diffuse_image.resize_exact(dims.1, dims.1, image::imageops::FilterType::Lanczos3);
                     mipmap_image.copy_from(&diffuse_image, offset*dims.1, 0).unwrap();
                 }
@@ -269,8 +268,8 @@ impl Renderer {
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
                 address_mode_v: wgpu::AddressMode::ClampToEdge,
                 address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
+                mag_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Nearest,
                 mipmap_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             });

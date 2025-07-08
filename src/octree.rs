@@ -283,9 +283,11 @@ impl MeshOctree {
                     }
 
                     let normal = Direction::NORMALS[i];
+                    /*
                     if dir_from_camera.dot(normal) > 0.0 {
                         continue
                     }
+                    */
 
 
                     let vo = mesh.vertex.offset as u32;

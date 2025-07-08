@@ -607,8 +607,8 @@ impl Game {
         }
 
 
-        if self.settings.render_distance < RENDER_DISTANCE
-            && self.world.chunker.mesh_load_queue_len() == 0
+        if 
+            self.world.chunker.mesh_load_queue_len() == 0
             && self.world.chunker.chunk_load_queue_len() == 0
             && self.world.chunker.chunk_active_jobs_len() == 0
             && self.world.chunker.mesh_active_jobs_len() == 0 {
@@ -624,10 +624,11 @@ impl Game {
                         let dist = offset.length_squared();
                         let chunk_pos = offset + player_chunk;
 
+                        /*
                         let entry = self.world.chunker.get_mesh_entry(WorldChunkPos(chunk_pos));
                         if !matches!(entry, MeshEntry::None) {
                             continue;
-                        }
+                        }*/
 
                         if dist < rdp1*rdp1 {
                             self.world.try_get_chunk(chunk_pos);
@@ -651,13 +652,13 @@ impl Game {
             let (player_chunk, _) = split_world_pos(self.player.body.position.as_ivec3());
             let rd = self.settings.render_distance-1;
 
-            let mut skipped = 0;
             let mut unloaded = 0;
 
             let mut unload = vec![];
 
             'unload:
             for (pos, chunk, mesh) in self.world.chunker.iter_chunks() {
+                break;
                 if self.world.chunker.is_queued_for_unloading(pos) {
                     warn!("skipping cos queued for unloading");
                     continue;
@@ -672,7 +673,7 @@ impl Game {
                     }
                 };
 
-                let mut full_unload = offset > RENDER_DISTANCE*RENDER_DISTANCE;
+                let full_unload = offset > RENDER_DISTANCE*RENDER_DISTANCE;
 
                 if self.world.chunker.is_queued_for_meshing(pos) {
                     warn!("skipping cos queued for meshing");
@@ -724,7 +725,7 @@ impl Game {
             }
 
 
-            warn!("checking dead chunks took {:?}, skipped {skipped}, unloaded: {unloaded}, render distance {}, size: {}",
+            warn!("checking dead chunks took {:?}, unloaded: {unloaded}, render distance {}, size: {}",
                   time.elapsed(), self.settings.render_distance, self.world.chunker.iter_chunks().count());
         }
 

@@ -28,6 +28,11 @@ impl Voxel {
     }
 
 
+    pub fn is_solid(self) -> bool { 
+        !self.is_transparent()
+    }
+
+
     pub fn is_transparent(self) -> bool { 
         matches!(self, Voxel::Air | Voxel::StructureBlock)
     }

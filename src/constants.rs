@@ -21,20 +21,21 @@ pub const REGION_SIZE    : usize = 32;
 pub const REGION_SIZE_P3 : usize = REGION_SIZE*REGION_SIZE*REGION_SIZE;
 
 pub const CHUNK_SIZE     : usize = 32;
+pub const CHUNK_SIZE_PAD : usize = CHUNK_SIZE+2;
 pub const CHUNK_SIZE_P3  : usize = CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE;
 pub const CHUNK_SIZE_I32 : i32 = CHUNK_SIZE as i32;
 
 pub const MOUSE_SENSITIVITY : f32 = 0.0016;
 
 pub const PLAYER_REACH : f32 = 5.0;
-pub const PLAYER_SPEED : f32 = 100.0;
+pub const PLAYER_SPEED : f32 = 10.0;
 pub const PLAYER_PULL_DISTANCE : f32 = 3.5;
 pub const PLAYER_INTERACT_DELAY : f32 = 0.125;
 pub const PLAYER_HOTBAR_SIZE : usize = 5;
 pub const PLAYER_ROW_SIZE : usize = 6;
 pub const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-pub const RENDER_DISTANCE : i32 = 80;
+pub const RENDER_DISTANCE : i32 = 4;
 
 pub const DROPPED_ITEM_SCALE : f32 = 0.5;
 

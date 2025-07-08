@@ -9,9 +9,9 @@ use sti::key::Key;
 use tracing::{error, info, trace, warn};
 use wgpu::util::StagingBelt;
 
-use crate::{constants::{REGION_SIZE, REGION_SIZE_P3}, free_list::FreeKVec, octree::MeshOctree, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO, MeshIndex}};
+use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_I32, REGION_SIZE, REGION_SIZE_P3}, free_list::FreeKVec, octree::MeshOctree, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO, MeshIndex}};
 
-use super::{chunk::{Chunk, ChunkData, Noise}, mesh::{ChunkFaceMesh, ChunkMeshFramedata, ChunkMeshes, ChunkQuadInstance}, VoxelWorld, SURROUNDING_OFFSETS};
+use super::{chunk::{Chunk, ChunkData, Noise}, mesh::{ChunkDataRef, ChunkFaceMesh, ChunkMeshFramedata, ChunkMeshes, ChunkQuadInstance}, VoxelWorld, SURROUNDING_OFFSETS};
 
 pub struct Chunker {
     regions: sti::hash::HashMap<RegionPos, Region>,
@@ -53,7 +53,7 @@ pub struct Region {
 pub struct MeshTaskData {
     version: NonZeroU32,
     offsets: [MeshIndex; 6],
-    chunks: [Option<Arc<ChunkData>>; 7],
+    chunks: ChunkDataRef,
     pos: WorldChunkPos,
 }
 
@@ -399,9 +399,15 @@ impl Chunker {
     ) -> bool {
         if self.mesh_active_jobs.contains(&pos) { return true };
 
-        for offset in SURROUNDING_OFFSETS {
-            let Some(_) = self.get_chunk_or_queue(WorldChunkPos(pos.0+offset))
-            else { return false; };
+        let base = pos.0;
+        for x in -1..=1 {
+            for y in -1..=1 {
+                for z in -1..=1 {
+                    let offset = IVec3::new(x, y, z);
+                    let Some(_) = self.get_chunk_or_queue(WorldChunkPos(base+offset))
+                    else { return false; };
+                }
+            }
         }
 
 
@@ -440,10 +446,7 @@ impl Chunker {
 
 
         let version = chunk.version;
-        let data = chunk.data.clone();
-
         self.mesh_active_jobs.insert(pos);
-
 
         let offsets = [
             free_list.push(ChunkMeshFramedata::zeroed()),
@@ -454,21 +457,29 @@ impl Chunker {
             free_list.push(ChunkMeshFramedata::zeroed()),
         ];
 
-        let mut chunks : [Option<Arc<ChunkData>>; 7] = [const { None }; 7];
-        chunks[0] = data;
+        let mut chunks : [Option<Arc<ChunkData>>; 27] = [const { None }; 27];
+        let base = pos.0 - IVec3::ONE;
+        for x in 0..3 {
+            for y in 0..3 {
+                for z in 0..3 {
+                    let offset = IVec3::new(x, y, z);
+                    let chunk = self.get_chunk(WorldChunkPos(base+offset)).unwrap();
+                    if chunk.data.is_none() { continue };
 
-        for (i, offset) in SURROUNDING_OFFSETS.iter().enumerate() {
-            let pos = WorldChunkPos(pos.0 + offset);
-            let Some(chunk) = self.get_chunk_or_queue(pos)
-            else { return false; };
-
-            chunks[i+1] = chunk.data.clone();
+                    let chunk_idx =
+                          9*offset.x
+                        + 3*offset.y
+                        + 1*offset.z;
+                    chunks[chunk_idx as usize] = chunk.data.clone();
+                }
+            }
         }
+
 
         task_queue.push(MeshTaskData {
             version,
             offsets,
-            chunks,
+            chunks: ChunkDataRef::new(chunks),
             pos,
         });
 
@@ -637,6 +648,7 @@ impl Chunker {
 
             (ChunkEntry::Loaded(chunk), MeshEntry::Loaded(chunk_meshes)) => {
                 if chunk.version != chunk_meshes.version {
+                    println!("queueing");
                     self.mesh_load_queue.insert(pos);
                 }
 

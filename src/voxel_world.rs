@@ -8,13 +8,13 @@ use std::{fs::{self}, ops::Bound, sync::Arc, time::Instant};
 use chunk::{ChunkData, Noise};
 use chunker::{Chunker, WorldChunkPos};
 use glam::{DVec3, IVec3, UVec3, Vec3};
-use mesh::{ChunkFaceMesh, ChunkMeshFramedata, ChunkMeshes, ChunkQuadInstance};
+use mesh::{ChunkDataRef, ChunkFaceMesh, ChunkMeshFramedata, ChunkMeshes, ChunkQuadInstance};
 use save_format::byte::ByteReader;
 use tracing::{info, warn};
 use voxel::Voxel;
 use wgpu::util::StagingBelt;
 
-use crate::{constants::{CHUNK_SIZE, REGION_SIZE}, free_list::FreeKVec, items::{DroppedItem, Item}, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO, MeshIndex}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
+use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_I32, REGION_SIZE}, free_list::FreeKVec, items::{DroppedItem, Item}, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO, MeshIndex}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
 
 
 pub struct VoxelWorld {
@@ -316,7 +316,7 @@ impl VoxelWorld {
 
 
 
-    pub fn greedy_mesh(c: [MeshIndex; 6], chunks: [Option<Arc<ChunkData>>; 7]) -> [Vec<ChunkQuadInstance>; 6]{
+    pub fn greedy_mesh(c: [MeshIndex; 6], chunks: ChunkDataRef) -> [Vec<ChunkQuadInstance>; 6]{
         let [west, east] = Self::greedy_mesh_dir(c[0], c[3], &chunks, 0);
         let [up, down] = Self::greedy_mesh_dir(c[1], c[4], &chunks, 1);
         let [north, south] = Self::greedy_mesh_dir(c[2], c[5], &chunks, 2);
@@ -327,98 +327,133 @@ impl VoxelWorld {
     pub fn greedy_mesh_dir(
         front_chunk_index: MeshIndex,
         back_chunk_index: MeshIndex,
-        chunks: &[Option<Arc<ChunkData>>; 7],
+        chunks: &ChunkDataRef,
         d: usize
     ) -> [Vec<ChunkQuadInstance>; 2] {
+        // offsets of corners per vertex per direction
+        const AO_OFFSETS: &[[[IVec3; 3]; 4]; 6] = &[
+            // X
+            [
+                [IVec3::new(0, -1, 0), IVec3::new(0, 0, -1), IVec3::new(0, -1, -1)],
+                [IVec3::new(0, -1, 0), IVec3::new(0, 0, 1),  IVec3::new(0, -1, 1)],
+                [IVec3::new(0, 1, 0),  IVec3::new(0, 0, -1), IVec3::new(0, 1, -1)],
+                [IVec3::new(0, 1, 0),  IVec3::new(0, 0, 1),  IVec3::new(0, 1, 1)],
+            ],
+            // Y
+            [
+                [IVec3::new(-1, 0, 0), IVec3::new(0, 0, -1), IVec3::new(-1, 0, -1)],
+                [IVec3::new(1, 0, 0),  IVec3::new(0, 0, -1), IVec3::new(1, 0, -1)],
+                [IVec3::new(-1, 0, 0), IVec3::new(0, 0, 1),  IVec3::new(-1, 0, 1)],
+                [IVec3::new(1, 0, 0),  IVec3::new(0, 0, 1),  IVec3::new(1, 0, 1)],
+            ],
+            // Z
+            [
+                [IVec3::new(-1, 0, 0), IVec3::new(0, -1, 0), IVec3::new(-1, -1, 0)],
+                [IVec3::new(-1, 0, 0), IVec3::new(0, 1, 0),  IVec3::new(-1, 1, 0)],
+                [IVec3::new(1, 0, 0),  IVec3::new(0, -1, 0), IVec3::new(1, -1, 0)],
+                [IVec3::new(1, 0, 0),  IVec3::new(0, 1, 0),  IVec3::new(1, 1, 0)],
+            ],
+            // X-
+            [
+                [IVec3::new(0, -1, 0), IVec3::new(0, 0, -1), IVec3::new(0, -1, -1)],
+                [IVec3::new(0, 1, 0), IVec3::new(0, 0, -1),  IVec3::new(0, 1, -1)],
+                [IVec3::new(0, -1, 0),  IVec3::new(0, 0, 1), IVec3::new(0, -1, 1)],
+                [IVec3::new(0, 1, 0),  IVec3::new(0, 0, 1),  IVec3::new(0, 1, 1)],
+            ],
+            // Y-
+            [
+                [IVec3::new(-1, 0, 0), IVec3::new(0, 0, -1), IVec3::new(-1, 0, -1)],
+                [IVec3::new(-1, 0, 0), IVec3::new(0, 0, 1),  IVec3::new(-1, 0, 1)],
+                [IVec3::new(1, 0, 0),  IVec3::new(0, 0, -1), IVec3::new(1, 0, -1)],
+                [IVec3::new(1, 0, 0),  IVec3::new(0, 0, 1),  IVec3::new(1, 0, 1)],
+            ],
+            // Z-
+            [
+                [IVec3::new(-1, 0, 0), IVec3::new(0, -1, 0), IVec3::new(-1, -1, 0)],
+                [IVec3::new(1, 0, 0),  IVec3::new(0, -1, 0), IVec3::new(1, -1, 0)],
+                [IVec3::new(-1, 0, 0), IVec3::new(0, 1, 0),  IVec3::new(-1, 1, 0)],
+                [IVec3::new(1, 0, 0),  IVec3::new(0, 1, 0),  IVec3::new(1, 1, 0)],
+            ],
+        ];
 
         let mut forward_vertices: Vec<ChunkQuadInstance> = vec![];
         let mut backward_vertices: Vec<ChunkQuadInstance> = vec![];
 
-        let chunk = &chunks[0];
-
         let u = (d + 1) % 3;
         let v = (d + 2) % 3;
-        let mut x = IVec3::ZERO;
+        let mut voxel_pos = IVec3::ZERO;
 
-        let mut block_mask = [(Voxel::Air, false); CHUNK_SIZE*CHUNK_SIZE];
+        let mut block_mask = [(Voxel::Air, 0); CHUNK_SIZE*CHUNK_SIZE];
 
-        
-        let curr_nchunk = match d {
-            0 => 2,
-            1 => 4,
-            2 => 6,
-            _ => unreachable!(),
-        };
-        
-
-        let cmp_nchunk = match d {
-            0 => 1,
-            1 => 3,
-            2 => 5,
-
-            _ => unreachable!(),
-        };
-
-        x[d] = -1;
-        while x[d] < CHUNK_SIZE as i32 {
+        voxel_pos[d] = -1;
+        while voxel_pos[d] < CHUNK_SIZE as i32 {
             let mut n = 0;
-            x[v] = 0;
+            voxel_pos[v] = 0;
 
-            while x[v] < CHUNK_SIZE as i32 {
-                x[u] = 0;
+            while voxel_pos[v] < CHUNK_SIZE as i32 {
+                voxel_pos[u] = 0;
 
-                while x[u] < CHUNK_SIZE as i32 {
+                while voxel_pos[u] < CHUNK_SIZE as i32 {
 
                     let block_current = {
-                        let r = x;
-                        let is_out_of_bounds =    r.x < 0
-                                               || r.y < 0
-                                               || r.z < 0;
-
-                        if is_out_of_bounds {
-                            let nchunk = &chunks[curr_nchunk];
-                            let pos = r;
-                            let voxel = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
-                            nchunk.as_ref().map(|c| c.get(voxel)).unwrap_or(Voxel::Air)
-                        } else {
-                            chunk.as_ref().map(|c| c.get(r)).unwrap_or(Voxel::Air)
-                        }
+                        chunks.get(voxel_pos)
                     };
 
                     let block_compare = {
-                        let mut r = x;
+                        let mut r = voxel_pos;
                         r[d] += 1;
-                        let is_out_of_bounds =    r.x == CHUNK_SIZE as i32
-                                               || r.y == CHUNK_SIZE as i32
-                                               || r.z == CHUNK_SIZE as i32;
-
-                        if is_out_of_bounds {
-                            let nchunk = &chunks[cmp_nchunk];
-                            let pos = r;
-                            let voxel = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
-                            nchunk.as_ref().map(|c| c.get(voxel)).unwrap_or(Voxel::Air)
-                        } else {
-                            chunk.as_ref().map(|c| c.get(r)).unwrap_or(Voxel::Air)
-                        }
+                        chunks.get(r)
                     };
 
                     // the mask is set to true if there is a visible face
                     // between two blocks, i.e. both aren't empty and both aren't blocks
-                    block_mask[n] = match (block_current.is_transparent(), block_compare.is_transparent()) {
+                    let (voxel, neg_d) = match (block_current.is_transparent(), block_compare.is_transparent()) {
                         (true, false) => (block_compare, true),
                         (false, true) => (block_current, false),
                         (_, _) => (Voxel::Air, false),
                     };
+
+                    fn vertex_ao(side1: bool, side2: bool, corner: bool) -> u32 {
+                        if side1 && side2 {
+                            return 0
+                        }
+
+                        return 3 - (side1 as u32 + side2 as u32 + corner as u32)
+                    }
+
+                    let mut meta = neg_d as u32;
+
+                    if voxel != Voxel::Air {
+                        let mut quad_ao = 0;
+                        let index = d + neg_d as usize * 3;
+                        let inc = if neg_d { 0 } else { 1 };
+                        for (i, offsets) in AO_OFFSETS[index].iter().enumerate() {
+                            let mut voxel_pos = voxel_pos;
+                            voxel_pos[d] += inc;
+
+
+                            let side1 = chunks.get(voxel_pos+offsets[0]).is_solid();
+                            let side2 = chunks.get(voxel_pos+offsets[1]).is_solid();
+                            let corner = chunks.get(voxel_pos+offsets[2]).is_solid();
+                            let ao = vertex_ao(side1, side2, corner);
+
+                            quad_ao |= ao << (i*2);
+                        }
+
+                        meta |= quad_ao << 1;
+                    }
+
+                    block_mask[n] = (voxel, meta);
                     n += 1;
 
-                    x[u] += 1;
-                }
+                    voxel_pos[u] += 1;
+               }
 
-                x[v] += 1;
+                voxel_pos[v] += 1;
             }
 
 
-            x[d] += 1;
+            voxel_pos[d] += 1;
 
 
             let mut n = 0;
@@ -431,13 +466,13 @@ impl VoxelWorld {
                         continue;
                     }
 
-                    let (kind, neg_d) = block_mask[n];
+                    let (kind, meta) = block_mask[n];
 
                     
                     // Compute the width of this quad and store it in w                        
                     //   This is done by searching along the current axis until mask[n + w] is false
                     let mut w = 1;
-                    while i + w < CHUNK_SIZE && block_mask[n + w] == (kind, neg_d) { w += 1; }
+                    while i + w < CHUNK_SIZE && block_mask[n + w] == (kind, meta) { w += 1; }
 
 
                     // Compute the height of this quad and store it in h                        
@@ -450,7 +485,7 @@ impl VoxelWorld {
                     while j + h < CHUNK_SIZE {
                         for k in 0..w {
                             // if there's a hole in the mask, exit
-                            if block_mask[n + k + h * CHUNK_SIZE] != (kind, neg_d) {
+                            if block_mask[n + k + h * CHUNK_SIZE] != (kind, meta) {
                                 done = true;
                                 break;
                             }
@@ -463,13 +498,16 @@ impl VoxelWorld {
                     }
 
 
-                    x[u] = i as _;
-                    x[v] = j as _;
+                    voxel_pos[u] = i as _;
+                    voxel_pos[v] = j as _;
 
-                    if neg_d {
-                        backward_vertices.push(ChunkQuadInstance::new(x, kind, h as _, w as _, d as u8 + 3, back_chunk_index));
+                    let neg_d = meta & 0x1;
+                    let ao = meta >> 1;
+
+                    if neg_d == 1 {
+                        backward_vertices.push(ChunkQuadInstance::new(voxel_pos, kind, h as _, w as _, d as u8 + 3, ao, back_chunk_index));
                     } else {
-                        forward_vertices.push(ChunkQuadInstance::new(x, kind, h as _, w as _, d as u8, front_chunk_index));
+                        forward_vertices.push(ChunkQuadInstance::new(voxel_pos, kind, h as _, w as _, d as u8, ao, front_chunk_index));
                     }
                     
                     // clear this part of the mask so we don't add duplicates

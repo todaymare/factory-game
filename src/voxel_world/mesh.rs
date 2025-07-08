@@ -1,13 +1,13 @@
-use std::{mem::offset_of, num::NonZeroU32, ptr::null_mut};
+use std::{mem::offset_of, num::NonZeroU32, ptr::null_mut, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec3, UVec3, UVec4, Vec3, Vec4};
 use sti::key::Key;
 use wgpu::{util::{DeviceExt, StagingBelt}, ShaderStages};
 
-use crate::{buddy_allocator::BuddyAllocator, directions::Direction, octree::NodeId, renderer::{gpu_allocator::{GPUAllocator, GpuPointer}, uniform::Uniform, MeshIndex}};
+use crate::{buddy_allocator::BuddyAllocator, constants::{CHUNK_SIZE, CHUNK_SIZE_I32}, directions::Direction, octree::NodeId, renderer::{gpu_allocator::{GPUAllocator, GpuPointer}, uniform::Uniform, MeshIndex}};
 
-use super::voxel::Voxel;
+use super::{chunk::ChunkData, voxel::Voxel};
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
 #[repr(C)]
@@ -19,8 +19,13 @@ pub struct ChunkQuadInstance {
     // height: 23..28
     // empty : 28..32
     p1: u32,
-
+    // texture id: 0..8
+    // vertex 1 ao: 8..10
+    // vertex 2 ao: 10..12
+    // vertex 3 ao: 12..14
+    // vertex 4 ao: 14..16
     id: u32,
+
     chunk_index: u32,
 }
 
@@ -47,6 +52,37 @@ pub struct ChunkMeshes {
 }
 
 
+pub struct ChunkDataRef {
+    chunks: [Option<Arc<ChunkData>>; 27],
+}
+
+
+impl<'a> ChunkDataRef {
+    pub fn new(chunks: [Option<Arc<ChunkData>>; 27]) -> Self {
+        Self {
+            chunks,
+        }
+    }
+
+
+    pub fn get(&self, mut pos: IVec3) -> Voxel {
+        pos += CHUNK_SIZE_I32;
+
+        let chunk = pos / CHUNK_SIZE_I32;
+
+        let chunk_idx =
+              9*chunk.x
+            + 3*chunk.y
+            + 1*chunk.z;
+
+        self.chunks[chunk_idx as usize]
+            .as_ref()
+            .map(|x| x.get(pos & (CHUNK_SIZE_I32-1)))
+            .unwrap_or(Voxel::Air)
+    }
+}
+
+
 impl ChunkFaceMesh {
     pub fn new(
         belt: &mut StagingBelt,
@@ -67,7 +103,7 @@ impl ChunkFaceMesh {
 
 
 impl ChunkQuadInstance {
-    pub fn new(pos: IVec3, ty: Voxel, h: u32, l: u32, normal: u8, chunk_index: MeshIndex) -> Self {
+    pub fn new(pos: IVec3, ty: Voxel, h: u32, l: u32, normal: u8, ao: u32, chunk_index: MeshIndex) -> Self {
         let UVec3 { x, y, z } = pos.as_uvec3();
 
         debug_assert!(x <= 32 && y <= 32 && z <= 32, "{x} {y} {z} {l}x{h} {normal}");
@@ -83,6 +119,11 @@ impl ChunkQuadInstance {
 
 
         let id = ty.texture_id(Direction::from_normal(normal));
+        debug_assert!(id < 256);
+        debug_assert_eq!(ao, ao & 0x1FF);
+
+        let id = (ao << 8)
+                 | id;
 
         Self { chunk_index: chunk_index.usize() as u32, p1: base, id }
     }
