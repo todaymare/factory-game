@@ -440,6 +440,15 @@ impl VoxelWorld {
                             quad_ao |= ao << (i*2);
                         }
 
+                        let a00 = quad_ao << 0 & 0x3;
+                        let a01 = quad_ao << 2 & 0x3;
+                        let a10 = quad_ao << 4 & 0x3;
+                        let a11 = quad_ao << 6 & 0x3;
+
+                        if a00 + a11 > a01 + a10 {
+                            quad_ao |= 1 << 8;
+                        }
+
                         meta |= quad_ao << 1;
                     }
 

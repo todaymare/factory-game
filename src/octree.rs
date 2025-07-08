@@ -1,9 +1,9 @@
 use glam::{DVec3, IVec3, UVec3};
 use sti::{define_key, vec::KVec};
 use tracing::warn;
-use wgpu::wgt::DrawIndexedIndirectArgs;
+use wgpu::wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs};
 
-use crate::{constants::{CHUNK_SIZE_I32, REGION_SIZE}, directions::Direction, frustum::Frustum, voxel_world::{chunker::ChunkPos, mesh::ChunkFaceMesh}, constants::{QUAD_INDICES, RENDER_DISTANCE}};
+use crate::{constants::{CHUNK_SIZE_I32, REGION_SIZE}, directions::Direction, frustum::Frustum, voxel_world::{chunker::ChunkPos, mesh::ChunkFaceMesh}, constants::{RENDER_DISTANCE}};
 
 
 #[derive(Debug)]
@@ -192,7 +192,7 @@ impl MeshOctree {
         region: IVec3,
         curr_pos: UVec3,
         player_chunk: IVec3,
-        buffer: &mut Vec<DrawIndexedIndirectArgs>,
+        buffer: &mut Vec<DrawIndirectArgs>,
         frustum: &Frustum,
         camera: DVec3,
         counter: &mut usize,
@@ -293,12 +293,11 @@ impl MeshOctree {
                     let vo = mesh.vertex.offset as u32;
                     let vs = mesh.vertex.size as u32;
 
-                    buffer.push(DrawIndexedIndirectArgs {
-                        index_count: QUAD_INDICES.len() as _,
+                    buffer.push(DrawIndirectArgs {
                         instance_count: vs,
-                        first_index: 0,
-                        base_vertex: 0,
                         first_instance: vo,
+                        vertex_count: 6,
+                        first_vertex: 0,
                     });
 
                 }

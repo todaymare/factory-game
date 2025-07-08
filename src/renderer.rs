@@ -13,10 +13,10 @@ use ssbo::{ResizableBuffer, SSBO};
 use sti::{alloc::default_realloc, define_key, static_assert_eq};
 use textures::TextureId;
 use uniform::Uniform;
-use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgt::DrawIndexedIndirectArgs, BufferUsages, TextureUsages, *};
+use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs}, BufferUsages, TextureUsages, *};
 use winit::window::Window;
 
-use crate::{constants::{MSAA_SAMPLE_COUNT, QUAD_INDICES, QUAD_VERTICES, VOXEL_TEXTURE_ATLAS_TILE_CAP, VOXEL_TEXTURE_ATLAS_TILE_SIZE}, free_list::FreeKVec, voxel_world::mesh::{ChunkMeshFramedata, ChunkQuadInstance}};
+use crate::{constants::{MSAA_SAMPLE_COUNT, QUAD_VERTICES, VOXEL_TEXTURE_ATLAS_TILE_CAP, VOXEL_TEXTURE_ATLAS_TILE_SIZE}, free_list::FreeKVec, voxel_world::mesh::{ChunkMeshFramedata, ChunkQuadInstance}};
 
 
 // the renderer is done,
@@ -100,9 +100,8 @@ pub struct VoxelPipeline {
 
     pub chunk_offsets: FreeKVec<MeshIndex, ChunkMeshFramedata>,
     pub instances: GPUAllocator<ChunkQuadInstance>,
-    pub indirect_buf: ResizableBuffer<DrawIndexedIndirectArgs>,
+    pub indirect_buf: ResizableBuffer<DrawIndirectArgs>,
     pub vertex_buf: Buffer,
-    pub index_buf: Buffer,
 
     pub texture: BindGroup,
 }
@@ -336,14 +335,19 @@ impl Renderer {
                     entry_point: Some("vs_main"), // 1.
                     buffers: &[
                         wgpu::VertexBufferLayout {
-                            array_stride: 12,
+                            array_stride: 16,
                             step_mode: wgpu::VertexStepMode::Vertex,
                             attributes: &[
                                 wgpu::VertexAttribute {
                                     format: wgpu::VertexFormat::Sint32x3,
                                     offset: 0,
                                     shader_location: 0,
-                                }
+                                },
+                                wgpu::VertexAttribute {
+                                    format: wgpu::VertexFormat::Uint32,
+                                    offset: 12,
+                                    shader_location: 1,
+                                },
                             ],
                         },
                         ChunkQuadInstance::desc(),
@@ -364,7 +368,7 @@ impl Renderer {
                     topology: wgpu::PrimitiveTopology::TriangleList, // 1.
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Ccw, // 2.
-                    cull_mode: Some(Face::Back),
+                    cull_mode: None,
                     //cull_mode: None,
                     // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
                     polygon_mode: wgpu::PolygonMode::Fill,
@@ -396,13 +400,6 @@ impl Renderer {
                     contents: bytemuck::cast_slice(QUAD_VERTICES),
                 });
 
-            let indices = device.create_buffer_init(&BufferInitDescriptor {
-                    label: Some("quad-indices"),
-                    usage: BufferUsages::INDEX,
-                    contents: bytemuck::cast_slice(QUAD_INDICES),
-                });
-
-
             let indirect = ResizableBuffer::new(
                 "voxel-shader-indirect-buffer",
                 &device,
@@ -416,7 +413,6 @@ impl Renderer {
                 model_uniform: ssbo,
                 depth_buffer: depth_texture,
                 vertex_buf: vertex,
-                index_buf: indices,
                 instances: GPUAllocator::new(&device, 1),
                 indirect_buf: indirect,
                 chunk_offsets: FreeKVec::new(),

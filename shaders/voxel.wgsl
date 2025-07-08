@@ -1,12 +1,13 @@
 struct VertexIn {
     @location(0) pos    : vec3<i32>,
+    @location(1) index  : u32,
 };
 
 
 struct InstanceIn {
-    @location(1) p1     : u32,
-    @location(2) id     : u32,
-    @location(3) offset : u32,
+    @location(2) p1     : u32,
+    @location(3) id     : u32,
+    @location(4) offset : u32,
 };
 
 
@@ -101,8 +102,17 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
 
     var o = offset.pos;
     let ao = input.id >> 8;
-    var ao_state = 3u;
+    let swap_diag = (ao >> 8 & 0x1) == 1;
 
+/*
+    if swap_diag {
+        if o.x == 0 && o.z == 0 { }
+        else if o.x == 1 && o.z == 0 { o.x = 0; o.z = 1; }
+        else if o.x == 0 && o.z == 1 { o.x = 1; o.z = 0; }
+        else if o.x == 1 && o.z == 1 { o.x = 1; o.z = 1; }
+    }*/
+
+    var ao_state = 3u;
     if o.x == 0 && o.z == 0 { ao_state = (ao >> 0 & 0x3); }
     if o.x == 0 && o.z == 1 { ao_state = (ao >> 2 & 0x3); }
     if o.x == 1 && o.z == 0 { ao_state = (ao >> 4 & 0x3); }

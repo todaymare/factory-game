@@ -42,7 +42,7 @@ use glam::{DVec2, DVec3, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
 use input::InputManager;
 use items::{DroppedItem, Item};
 use renderer::{create_multisampled_framebuffer, DepthBuffer, Renderer, VoxelShaderUniform};
-use wgpu::wgt::DrawIndexedIndirectArgs;
+use wgpu::wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs};
 use winit::{event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, window::{CursorGrabMode, Window, WindowId}};
 use winit::application::ApplicationHandler;
 
@@ -215,7 +215,7 @@ impl ApplicationHandler for App {
 
                     let (player_chunk, _) = split_world_pos(game.player.body.position.as_ivec3());
 
-                    let mut indirect : Vec<DrawIndexedIndirectArgs> = vec![];
+                    let mut indirect : Vec<DrawIndirectArgs> = vec![];
 
                     let frustum = match &game.lock_frustum {
                         Some(f) => f.clone(),
@@ -290,9 +290,7 @@ impl ApplicationHandler for App {
                     {
                         pass.set_vertex_buffer(0, voxel_pipeline.vertex_buf.slice(..));
                         pass.set_vertex_buffer(1, voxel_pipeline.instances.ssbo.buffer.slice(..));
-                        pass.set_index_buffer(voxel_pipeline.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-
-                        pass.multi_draw_indexed_indirect(&voxel_pipeline.indirect_buf.buffer, 0, indirect.len() as _);
+                        pass.multi_draw_indirect(&voxel_pipeline.indirect_buf.buffer, 0, indirect.len() as _);
                     }
                     drop(pass);
 

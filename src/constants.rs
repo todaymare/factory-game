@@ -44,12 +44,12 @@ pub const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32;
 
 
 pub const QUAD_VERTICES : &[i32] = &[
-     0,   0,  0,
-     1,   0,  0,
-     1,   0,  1,
-     0,   0,  1,
+     1,   0,  1, 0,
+     1,   0,  0, 1,
+     0,   0,  0, 2,
+     0,   0,  0, 3,
+     0,   0,  1, 4,
+     1,   0,  1, 5,
 ];
 
-
-pub const QUAD_INDICES : &[u32] = &[0, 1, 2, 2, 3, 0];
 

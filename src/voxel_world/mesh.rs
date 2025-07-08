@@ -131,7 +131,7 @@ impl ChunkQuadInstance {
 
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRS: &[wgpu::VertexAttribute] =
-            &wgpu::vertex_attr_array![1 => Uint32, 2 => Uint32, 3 => Uint32];
+            &wgpu::vertex_attr_array![2 => Uint32, 3 => Uint32, 4 => Uint32];
 
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<ChunkQuadInstance>() as wgpu::BufferAddress,
