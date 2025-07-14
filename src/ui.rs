@@ -1,7 +1,9 @@
+use glam::{DVec3, Vec2, Vec4};
 use glfw::CursorMode;
-use winit::keyboard::KeyCode;
+use winit::{event::MouseButton, keyboard::KeyCode};
+use std::{fmt::Write, ops::Bound};
 
-use crate::{input::InputManager, items::Item, structures::StructureId, Game};
+use crate::{commands::Command, constants::{PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND}, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{SlotKind, SlotMeta, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{split_world_pos, VoxelWorld}, Game, Player};
 
 pub enum UILayer {
     Inventory {
@@ -41,12 +43,12 @@ impl UILayer {
     }
 
 
-    pub fn capture_mode(&self) -> CursorMode {
+    pub fn is_mouse_locked(&self) -> bool {
         match self {
-            UILayer::Gameplay { .. } => CursorMode::Disabled,
-            UILayer::Inventory { .. } => CursorMode::Normal,
-            UILayer::Console { .. } => CursorMode::Normal,
-            UILayer::None => CursorMode::Normal,
+            UILayer::Gameplay { .. } => true,
+            UILayer::Inventory { .. } => false,
+            UILayer::Console { .. } => false,
+            UILayer::None => false,
         }
     }
 
@@ -85,17 +87,16 @@ impl UILayer {
     }
 
 
-    pub fn render(&mut self, game: &mut Game, input: &InputManager, dt: f32) {
-        /*
+    pub fn render(&mut self, game: &mut Game, input: &InputManager, renderer: &mut Renderer, dt: f32) {
         match self {
             UILayer::Console { text, backspace_cooldown, timer, cursor, just_opened, offset } => {
                 const TEXT_SIZE : f32 = 0.5;
-                let window = game.renderer.window_size();
-                let text_box = Vec2::new(window.x * 0.6, game.renderer.biggest_y_size * 0.6);
+                let window = renderer.window_size();
+                let text_box = Vec2::new(window.x * 0.6, renderer.line_size * 0.6);
                 let box_pos = Vec2::new(0.0, window.y - text_box.y * 0.95);
-                game.renderer.draw_rect(box_pos, text_box, Vec4::new(0.1, 0.1, 0.1, 0.5));
+                renderer.draw_rect(box_pos, text_box, Vec4::new(0.1, 0.1, 0.1, 0.5));
                 let text_pos = Vec2::new(box_pos.x, box_pos.y);
-                game.renderer.draw_text(&text, text_pos, TEXT_SIZE, Vec4::ONE);
+                renderer.draw_text(&text, text_pos, TEXT_SIZE, Vec4::ONE);
 
                 for key in input.current_chars() {
                     if !key.is_ascii() {
@@ -108,18 +109,18 @@ impl UILayer {
 
                 *timer -= dt;
 
-                if input.is_key_just_pressed(Key::Backspace)
-                    || input.is_key_just_pressed(Key::Left)
-                    || input.is_key_just_pressed(Key::Right)
+                if input.is_key_just_pressed(KeyCode::Backspace)
+                    || input.is_key_just_pressed(KeyCode::ArrowLeft)
+                    || input.is_key_just_pressed(KeyCode::ArrowRight)
                     || input.should_paste_now() {
 
                     *timer = 0.0;
                     *offset = 1;
-                } else if input.is_key_just_pressed(Key::Up) {
+                } else if input.is_key_just_pressed(KeyCode::ArrowUp) {
                     *timer = 0.0;
                 }
 
-                else if input.is_key_pressed(Key::Backspace) {
+                else if input.is_key_pressed(KeyCode::Backspace) {
                     while *timer <= 0.0 {
                         *backspace_cooldown = (*backspace_cooldown * 0.8).max(0.03);
                         *timer += *backspace_cooldown;
@@ -153,8 +154,9 @@ impl UILayer {
                         }
                     }
                 } 
+                /*
                 else if input.should_paste() {
-                    if let Some(cb) = game.renderer.window.get_clipboard_string() {
+                    if let Some(cb) = renderer.window) {
                         while *timer <= 0.0 {
                             *backspace_cooldown = (*backspace_cooldown * 0.8).max(0.03);
                             *timer += *backspace_cooldown;
@@ -169,8 +171,8 @@ impl UILayer {
                             }
                         }
                     }
-                }
-                else if input.is_key_pressed(Key::Left) {
+                }*/
+                else if input.is_key_pressed(KeyCode::ArrowLeft) {
                     while *timer <= 0.0 {
                         *backspace_cooldown = (*backspace_cooldown * 0.8).max(0.03);
                         *timer += *backspace_cooldown;
@@ -189,7 +191,7 @@ impl UILayer {
                         }
                     }
                 }
-                else if input.is_key_pressed(Key::Right) {
+                else if input.is_key_pressed(KeyCode::ArrowRight) {
                     while *timer <= 0.0 {
                         *backspace_cooldown = (*backspace_cooldown * 0.8).max(0.03);
                         *timer += *backspace_cooldown;
@@ -214,10 +216,10 @@ impl UILayer {
                     *timer = *backspace_cooldown;
                 }
 
-                let cursor_pos = Vec2::new(text_pos.x + game.renderer.text_size(&text[0..*cursor as usize], TEXT_SIZE).x, text_pos.y + game.renderer.biggest_y_size * 0.075);
-                game.renderer.draw_rect(cursor_pos, Vec2::new(game.renderer.biggest_y_size * 0.05, game.renderer.biggest_y_size * 0.45), Vec4::ONE);
+                let cursor_pos = Vec2::new(text_pos.x + renderer.text_size(&text[0..*cursor as usize], TEXT_SIZE).x, text_pos.y + renderer.line_size * 0.075);
+                renderer.draw_rect(cursor_pos, Vec2::new(renderer.line_size * 0.05, renderer.line_size * 0.45), Vec4::ONE);
 
-                if input.is_key_pressed(Key::Up) {
+                if input.is_key_pressed(KeyCode::ArrowUp) {
                     while *timer <= 0.0 {
                         *backspace_cooldown = (*backspace_cooldown * 0.8).max(0.03);
                         *timer += *backspace_cooldown;
@@ -234,7 +236,7 @@ impl UILayer {
 
 
 
-                if input.is_key_just_pressed(Key::Enter) && !*just_opened {
+                if input.is_key_just_pressed(KeyCode::Enter) && !*just_opened {
                     if !text.is_empty() {
                         let command = Command::parse(core::mem::take(text));
                         game.call_command(command);
@@ -249,8 +251,8 @@ impl UILayer {
 
 
             UILayer::Inventory { just_opened, holding_item, inventory_mode } => {
-                let window = game.renderer.window_size();
-                if input.is_key_just_pressed(Key::E) && !*just_opened {
+                let window = renderer.window_size();
+                if input.is_key_just_pressed(KeyCode::KeyE) && !*just_opened {
                     self.close(game, dt);
                     return;
                 } else {
@@ -258,8 +260,8 @@ impl UILayer {
                 }
 
 
-                game.renderer.draw_rect(Vec2::ZERO, window, Vec4::new(0.1, 0.1, 0.1, 0.5));
-                let window = game.renderer.window_size();
+                renderer.draw_rect(Vec2::ZERO, window, Vec4::new(0.1, 0.1, 0.1, 0.5));
+                let window = renderer.window_size();
 
                 let rows = PLAYER_ROW_SIZE;
                 let cols = PLAYER_HOTBAR_SIZE;
@@ -285,8 +287,8 @@ impl UILayer {
                         let structure = game.structures.get_mut(*structure);
                         let inventory = &mut structure.inventory.as_mut().unwrap().slots;
 
-                        game.renderer.draw_rect(corner, external_view_size, Vec4::ONE);
-                        draw_inventory(&mut game.renderer, &mut *inventory, game.player.body.position, &mut game.world, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
+                        renderer.draw_rect(corner, external_view_size, Vec4::ONE);
+                        draw_inventory(renderer, &mut *inventory, game.player.body.position, &mut game.world, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
 
                         other_inv = Some(inventory.as_mut_slice());
                     },
@@ -305,8 +307,8 @@ impl UILayer {
                         let structure = game.structures.get_mut(*structure);
                         let inventory = &mut structure.inventory.as_mut().unwrap().slots;
 
-                        game.renderer.draw_rect(corner, external_view_size, Vec4::ONE);
-                        draw_inventory(&mut game.renderer, inventory, game.player.body.position, &mut game.world, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
+                        renderer.draw_rect(corner, external_view_size, Vec4::ONE);
+                        draw_inventory(renderer, inventory, game.player.body.position, &mut game.world, Some(&mut game.player.inventory), input, holding_item, corner, cols, rows);
 
                         other_inv = Some(inventory.as_mut_slice());
                     },
@@ -322,10 +324,10 @@ impl UILayer {
 
                         let size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
 
-                        game.renderer.draw_rect(corner, size, Vec4::ONE);
+                        renderer.draw_rect(corner, size, Vec4::ONE);
 
                         let mut base = corner + padding * 0.5;
-                        let point = game.renderer.to_point(input.mouse_position());
+                        let point = renderer.to_point(input.mouse_position());
                         for col in 0..cols {
                             let mut pos = base;
                             for row in 0..rows {
@@ -340,12 +342,12 @@ impl UILayer {
                                     colour += Vec4::splat(0.4);
                                 }
                                
-                                game.renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
-                                game.renderer.draw_item_icon(curr_recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
-                                game.renderer.draw_text(format!("{}", curr_recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
+                                renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
+                                renderer.draw_item_icon(curr_recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
+                                renderer.draw_text(format!("{}", curr_recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
 
 
-                                if is_mouse_intersecting && input.is_button_just_pressed(glfw::MouseButton::Button1) {
+                                if is_mouse_intersecting && input.is_button_just_pressed(MouseButton::Left) {
                                     let structure = game.structures.get_mut(*structure);
                                     let StructureData::Assembler { recipe } = &mut structure.data
                                     else { unreachable!() };
@@ -394,7 +396,7 @@ impl UILayer {
                         corner.x += player_inv_size.x * 0.5;
                         corner.x += padding * 0.5;
 
-                        draw_recipes(game, input, holding_item, corner);
+                        draw_recipes(game, input, renderer, holding_item, corner);
                     },
                 }
                 }
@@ -403,7 +405,7 @@ impl UILayer {
                 corner.x -= player_inv_size.x * 0.5;
                 corner.x -= padding * 0.5;
 
-                draw_player_inventory(&mut game.renderer, &mut game.player, &mut game.world, &mut other_inv, input, holding_item, corner);
+                draw_player_inventory(renderer, &mut game.player, &mut game.world, &mut other_inv, input, holding_item, corner);
             }
 
             UILayer::Gameplay { smoothed_dt } => {
@@ -418,10 +420,10 @@ impl UILayer {
 
                     let _ = writeln!(text, "§eFPS: §{colour_code}{fps}§r");
                     let _ = writeln!(text, "§eTIME ELAPSED: §a{:.1}§r", game.current_tick.u32() as f64 / TICKS_PER_SECOND as f64);
-                    let _ = writeln!(text, "§eDRAW CALLCOUNT: §a{}§r", game.renderer.draw_count.get());
-                    let _ = writeln!(text, "§eTRIANGLE COUNT: §a{}§r", game.renderer.triangle_count.get());
-                    game.renderer.triangle_count.set(0);
-                    game.renderer.draw_count.set(0);
+                    let _ = writeln!(text, "§eDRAW CALLCOUNT: §a{}§r", renderer.draw_count.get());
+                    let _ = writeln!(text, "§eTRIANGLE COUNT: §a{}§r", renderer.triangle_count.get());
+                    renderer.triangle_count.set(0);
+                    renderer.draw_count.set(0);
 
                     let _ = writeln!(text, "§eRENDER WORLD TIME: §a{}ms§r", game.render_world_time);
                     let _ = writeln!(text, "§eRENDERED CHUNKS: §a{}§r", game.total_rendered_chunks);
@@ -432,7 +434,6 @@ impl UILayer {
                     let (chunk_pos, chunk_local_pos) = split_world_pos(game.player.body.position.floor().as_ivec3());
                     let _ = writeln!(text, "§eCHUNK POSITION: §a{}, {}, {}§r", chunk_pos.x, chunk_pos.y, chunk_pos.z);
                     let _ = writeln!(text, "§eCHUNK LOCAL POSITION: §a{}, {}, {}§r", chunk_local_pos.x, chunk_local_pos.y, chunk_local_pos.z);
-                    let _ = writeln!(text, "§eCHUNK COUNT: §a{}§r", game.world.chunks.len());
                     let _ = writeln!(text, "§eDIRECTION: §b{:?}§r", game.camera.compass_direction());
 
 
@@ -645,20 +646,19 @@ impl UILayer {
 
                     }
 
-                    game.renderer.draw_text(&text, Vec2::ZERO, 0.4, Vec4::ONE);
+                    renderer.draw_text(&text, Vec2::ZERO, 0.4, Vec4::ONE);
                 }
             },
 
 
             UILayer::None => unreachable!(),
-        }*/
+        }
     }
 }
 
 
 
-/*
-fn draw_recipes(game: &mut Game, input: &InputManager, _: &mut Option<Item>, corner: Vec2) {
+fn draw_recipes(game: &mut Game, input: &InputManager, renderer: &mut Renderer, _: &mut Option<Item>, corner: Vec2) {
     let rows = PLAYER_HOTBAR_SIZE;
     let cols = PLAYER_ROW_SIZE;
 
@@ -667,10 +667,10 @@ fn draw_recipes(game: &mut Game, input: &InputManager, _: &mut Option<Item>, cor
 
     let size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
 
-    game.renderer.draw_rect(corner, size, Vec4::ONE);
+    renderer.draw_rect(corner, size, Vec4::ONE);
 
     let mut base = corner + padding * 0.5;
-    let point = game.renderer.to_point(input.mouse_position());
+    let point = renderer.to_point(input.mouse_position());
     for col in 0..cols {
         let mut pos = base;
         for row in 0..rows {
@@ -681,7 +681,7 @@ fn draw_recipes(game: &mut Game, input: &InputManager, _: &mut Option<Item>, cor
             let (can_craft, mut rc) = RecipeCraft::try_craft(game.player.inventory, recipe);
             let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(slot_size));
 
-            if is_mouse_intersecting && can_craft && input.is_button_just_pressed(glfw::MouseButton::Button1) {
+            if is_mouse_intersecting && can_craft && input.is_button_just_pressed(MouseButton::Left) {
                 game.player.inventory = rc.inv;
                 assert!(can_craft);
 
@@ -712,14 +712,14 @@ fn draw_recipes(game: &mut Game, input: &InputManager, _: &mut Option<Item>, cor
                 colour += Vec4::splat(0.4);
             }
            
-            game.renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
-            game.renderer.draw_item_icon(recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
-            game.renderer.draw_text(format!("{}", recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
+            renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
+            renderer.draw_item_icon(recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
+            renderer.draw_text(format!("{}", recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
 
 
             if is_mouse_intersecting {
                 let size = Vec2::new(recipe.requirements.len() as f32, 1.0) * (padding + slot_size);
-                game.renderer.with_z(1.0, |renderer| {
+                renderer.with_z(1.0, |renderer| {
                 renderer.draw_rect(point, size, Vec4::new(0.2, 0.2, 0.2, 1.0));
                 let mut base = point + padding*0.5;
                 for item in recipe.requirements.iter() {
@@ -1049,7 +1049,7 @@ fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
 
     if !is_mouse_intersecting { return }
 
-    if input.is_button_pressed(glfw::MouseButton::Button1) && input.is_key_pressed(Key::LeftShift) {
+    if input.is_button_pressed(MouseButton::Left) && input.is_key_pressed(KeyCode::ShiftLeft) {
         if let Some(inv_item) = slot && let Some(other_inv) = &mut other_inv {
             for slot in other_inv.iter_mut() {
                 let Some(item) = slot
@@ -1086,7 +1086,7 @@ fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
 
         }
 
-    } else if input.is_button_just_pressed(glfw::MouseButton::Button1) {
+    } else if input.is_button_just_pressed(MouseButton::Left) {
         if let Some(inv_item) = slot
            && let Some(item) = holding_item
            && inv_item.kind == item.kind {
@@ -1106,7 +1106,7 @@ fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
         *slot = *holding_item;
         *holding_item = item;
         return;
-    } else if input.is_button_just_pressed(glfw::MouseButton::Button2) {
+    } else if input.is_button_just_pressed(MouseButton::Right) {
         if let Some(item) = slot && holding_item.is_none() {
             let amount = item.amount;
             item.amount -= amount / 2;
@@ -1123,7 +1123,7 @@ fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
         *slot = *holding_item;
         *holding_item = item;
         return;
-    } else if input.is_key_just_pressed(glfw::Key::Q)
+    } else if input.is_key_just_pressed(KeyCode::KeyQ)
         && let Some(item) = slot {
         let mut drop_item = *item;
         if input.is_alt_pressed() {
@@ -1140,4 +1140,4 @@ fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
 
     }
 
-}*/
+}

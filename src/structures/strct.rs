@@ -421,16 +421,16 @@ impl StructureKind {
     }
 
 
-    pub fn mesh(self) -> Mesh {
+    pub fn create_mesh(self, device: &wgpu::Device) -> Mesh {
         match self {
-            StructureKind::Quarry => Mesh::from_vmf("assets/models/quarry.vmf"),
-            StructureKind::Inserter => Mesh::from_vmf("assets/models/inserter.vmf"),
-            StructureKind::Chest => Mesh::from_vmf("assets/models/chest.vmf"),
-            StructureKind::Silo => Mesh::from_vmf("assets/models/silo.vmf"),
-            StructureKind::Belt => Mesh::from_vmf("assets/models/belt.vmf"),
-            StructureKind::Splitter => Mesh::from_vmf("assets/models/splitter.vmf"),
-            StructureKind::Assembler => Mesh::from_vmf("assets/models/assembler.vmf"),
-            StructureKind::Furnace => Mesh::from_vmf("assets/models/furnace.vmf"),
+            StructureKind::Quarry => Mesh::from_vmf(device, "assets/models/quarry.vmf"),
+            StructureKind::Inserter => Mesh::from_vmf(device, "assets/models/inserter.vmf"),
+            StructureKind::Chest => Mesh::from_vmf(device, "assets/models/chest.vmf"),
+            StructureKind::Silo => Mesh::from_vmf(device, "assets/models/silo.vmf"),
+            StructureKind::Belt => Mesh::from_vmf(device, "assets/models/belt.vmf"),
+            StructureKind::Splitter => Mesh::from_vmf(device, "assets/models/splitter.vmf"),
+            StructureKind::Assembler => Mesh::from_vmf(device, "assets/models/assembler.vmf"),
+            StructureKind::Furnace => Mesh::from_vmf(device, "assets/models/furnace.vmf"),
         }
     }
 }

@@ -1,17 +1,17 @@
-use std::{collections::HashSet, num::NonZeroU32, sync::{mpsc::{Receiver, Sender}, Arc}, time::Instant};
+use std::{collections::{HashMap, HashSet}, num::NonZeroU32, sync::{atomic::AtomicU32, mpsc::{Receiver, Sender}, Arc}, time::Instant};
 
 use bytemuck::Zeroable;
 use glam::{IVec3, UVec3};
 use glfw::ffi::CENTER_CURSOR;
 use rand::seq::IndexedRandom;
-use save_format::byte::ByteReader;
+use save_format::byte::{ByteReader, ByteWriter};
 use sti::key::Key;
 use tracing::{error, info, trace, warn};
 use wgpu::util::StagingBelt;
 
-use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_I32, REGION_SIZE, REGION_SIZE_P3}, free_list::FreeKVec, octree::MeshOctree, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO, MeshIndex}};
+use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_P3, REGION_SIZE, REGION_SIZE_P3}, free_list::FreeKVec, octree::MeshOctree, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO}, voxel_world::voxel::Voxel};
 
-use super::{chunk::{Chunk, ChunkData, Noise}, mesh::{ChunkDataRef, ChunkFaceMesh, ChunkMeshFramedata, ChunkMeshes, ChunkQuadInstance}, VoxelWorld, SURROUNDING_OFFSETS};
+use super::{chunk::{Chunk, ChunkData, Noise}, mesh::{ChunkDataRef, ChunkFaceMesh, ChunkMeshFramedata, ChunkMeshes, ChunkQuadInstance, VoxelMeshIndex}, VoxelWorld, SURROUNDING_OFFSETS};
 
 pub struct Chunker {
     regions: sti::hash::HashMap<RegionPos, Region>,
@@ -20,7 +20,7 @@ pub struct Chunker {
     chunk_sender: Sender<ChunkMPSC>,
     chunk_reciever: Receiver<ChunkMPSC>,
     chunk_active_jobs: u32,
-
+    pub chunk_save_jobs: Arc<AtomicU32>,
 
     mesh_load_queue: HashSet<WorldChunkPos>,
     mesh_active_jobs: HashSet<WorldChunkPos>,
@@ -32,7 +32,7 @@ pub struct Chunker {
 }
 
 type ChunkMPSC = (WorldChunkPos, Chunk);
-type MeshMPSC = (WorldChunkPos, [MeshIndex; 6], [Vec<ChunkQuadInstance>; 6], NonZeroU32);
+type MeshMPSC = (WorldChunkPos, [VoxelMeshIndex; 6], [Vec<ChunkQuadInstance>; 6], NonZeroU32);
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
 pub struct RegionPos(pub IVec3);
@@ -52,7 +52,7 @@ pub struct Region {
 
 pub struct MeshTaskData {
     version: NonZeroU32,
-    offsets: [MeshIndex; 6],
+    offsets: [VoxelMeshIndex; 6],
     chunks: ChunkDataRef,
     pos: WorldChunkPos,
 }
@@ -96,6 +96,7 @@ impl Chunker {
             chunk_sender: cs,
             chunk_reciever: cr,
             chunk_active_jobs: 0,
+            chunk_save_jobs: Arc::new(AtomicU32::new(0)),
 
             mesh_load_queue: HashSet::new(),
             mesh_unload_queue: HashSet::new(),
@@ -110,7 +111,7 @@ impl Chunker {
     pub fn process_mesh_queue(
         &mut self,
         timeout: u32,
-        framedata: &mut FreeKVec<MeshIndex, ChunkMeshFramedata>,
+        framedata: &mut FreeKVec<VoxelMeshIndex, ChunkMeshFramedata>,
     ) {
         let timeout = timeout as u128;
         let start = Instant::now();
@@ -152,7 +153,7 @@ impl Chunker {
     pub fn process_mesh_unload_queue(
         &mut self,
         timeout: u32,
-        framedata: &mut FreeKVec<MeshIndex, ChunkMeshFramedata>,
+        framedata: &mut FreeKVec<VoxelMeshIndex, ChunkMeshFramedata>,
         instance_allocator: &mut GPUAllocator<ChunkQuadInstance>,
     ) {
         let timeout = timeout as u128;
@@ -189,7 +190,7 @@ impl Chunker {
                             else { continue };
 
                             framedata.remove(mesh.chunk_mesh_data_index);
-                            instance_allocator.free(mesh.vertex);
+                            instance_allocator.free(mesh.quads);
                         }
 
                     }
@@ -273,7 +274,7 @@ impl Chunker {
         encoder: &mut wgpu::CommandEncoder,
         belt: &mut StagingBelt,
         instance_allocator: &mut GPUAllocator<ChunkQuadInstance>,
-        free_list: &mut FreeKVec<MeshIndex, ChunkMeshFramedata>,
+        free_list: &mut FreeKVec<VoxelMeshIndex, ChunkMeshFramedata>,
         gpu_mesh_data: &mut SSBO<ChunkMeshFramedata>,
     ) {
 
@@ -350,7 +351,7 @@ impl Chunker {
                             else { continue };
 
                             free_list.remove(mesh.chunk_mesh_data_index);
-                            instance_allocator.free(mesh.vertex);
+                            instance_allocator.free(mesh.quads);
                         }
 
 
@@ -381,7 +382,7 @@ impl Chunker {
         let sender = self.mesh_sender.clone();
         rayon::spawn(move || {
             for item in batch {
-                let mesh = VoxelWorld::greedy_mesh(item.offsets, item.chunks);
+                let mesh = VoxelWorld::greedy_mesh(item.offsets, item.pos.0, item.chunks);
                 if let Err(e) = sender.send((item.pos, item.offsets, mesh, item.version)) {
                     error!("mesh-task: {e}");
                     break;
@@ -393,7 +394,7 @@ impl Chunker {
 
     fn try_prepare_mesh_task(
         &mut self,
-        free_list: &mut FreeKVec<MeshIndex, ChunkMeshFramedata>,
+        free_list: &mut FreeKVec<VoxelMeshIndex, ChunkMeshFramedata>,
         task_queue: &mut Vec<MeshTaskData>,
         pos: WorldChunkPos,
     ) -> bool {
@@ -515,7 +516,7 @@ impl Chunker {
 
         match entry {
             ChunkEntry::Loaded(_) => {
-                *entry = ChunkEntry::None;
+                self.save_chunk(pos);
             },
 
 
@@ -526,6 +527,57 @@ impl Chunker {
             ChunkEntry::None =>
                 warn!("tried to unload voxel data from a chunk that was already unloaded"),
         }
+    }
+
+
+    pub fn save_chunk(&mut self, pos: WorldChunkPos) {
+        let entry = self.get_chunk_entry(pos);
+
+        let ChunkEntry::Loaded(chunk) = entry
+        else {
+            warn!("save-chunk: chunk at '{}' is not loaded", pos.0);
+            return;
+        };
+
+
+        if !chunk.is_dirty {
+            warn!("save-chunk: chunk at '{}' is not dirty", pos.0);
+            *entry = ChunkEntry::None;
+            return;
+        }
+
+
+        let data = chunk.data.clone();
+        *entry = ChunkEntry::None;
+        self.chunk_save_jobs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let counter = self.chunk_save_jobs.clone();
+
+        rayon::spawn(move || {
+            let time = Instant::now();
+            let mut byte_writer = ByteWriter::new();
+
+            let path = format!("saves/chunks/{}.chunk", pos.0);
+            let Some(data) = data
+            else {
+                byte_writer.write([Voxel::Air as u8; CHUNK_SIZE_P3]);
+                std::fs::write(path, byte_writer.finish()).unwrap();
+                info!("save-chunk: saved empty chunk at '{}' in {:?}", pos.0, time.elapsed());
+                return;
+            };
+
+            let mut bytes = *data.as_bytes();
+            for byte in &mut bytes {
+                if *byte == Voxel::StructureBlock as u8 {
+                    *byte = Voxel::Air as u8;
+                }
+            }
+
+            byte_writer.write(bytes);
+
+            std::fs::write(path, byte_writer.finish()).unwrap();
+            counter.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            info!("save-chunk: saved chunk at '{}' in {:?}", pos.0, time.elapsed());
+        });
     }
 
 

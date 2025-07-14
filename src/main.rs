@@ -42,9 +42,11 @@ use glam::{DVec2, DVec3, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
 use input::InputManager;
 use items::{DroppedItem, Item};
 use renderer::{create_multisampled_framebuffer, DepthBuffer, Renderer, VoxelShaderUniform};
-use wgpu::wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs};
-use winit::{event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, window::{CursorGrabMode, Window, WindowId}};
+use wgpu::wgt::DrawIndirectArgs;
+use winit::{dpi::LogicalSize, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, window::{CursorGrabMode, Window, WindowId}};
 use winit::application::ApplicationHandler;
+
+use crate::constants::MSAA_SAMPLE_COUNT;
 
 
 
@@ -68,16 +70,14 @@ struct App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        self.window = Some(event_loop.create_window(Window::default_attributes()).unwrap());
-        let window = self.window.as_ref().unwrap();
+        let window = event_loop.create_window(Window::default_attributes().with_inner_size(LogicalSize::new(960, 540))).unwrap();
 
         window.set_cursor_visible(false);
         window.set_cursor_grab(CursorGrabMode::Confined) // or Locked
             .or_else(|_| window.set_cursor_grab(CursorGrabMode::Locked))
             .unwrap();
 
-        let static_window = unsafe { core::mem::transmute::<&Window, &'static Window>(window) };
-        self.renderer = Some(pollster::block_on(Renderer::new(static_window)));
+        self.renderer = Some(pollster::block_on(Renderer::new(window)));
     }
 
 
@@ -100,6 +100,8 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
+                println!("closing");
+                self.game.save();
                 event_loop.exit();
             },
 
@@ -128,7 +130,17 @@ impl ApplicationHandler for App {
 
             WindowEvent::KeyboardInput { event, .. } => {
                 match event.state {
-                    winit::event::ElementState::Pressed => self.input.set_pressed_key(event.physical_key),
+                    winit::event::ElementState::Pressed => {
+                        self.input.set_pressed_key(event.physical_key);
+                        if let Some(txt) = event.text {
+                            for char in txt.chars() {
+                                if char.is_ascii_control() {
+                                    continue;
+                                }
+                                self.input.new_char(char);
+                            }
+                        }
+                    },
                     winit::event::ElementState::Released => self.input.set_unpressed_key(event.physical_key),
                 }
             }
@@ -148,7 +160,7 @@ impl ApplicationHandler for App {
                 self.time_since_last_simulation += dt;
 
                 game.handle_input(dt, &mut self.input);
-                self.input.update();
+                
                 if !game.camera.front.is_normalized() { panic!("{:?}", self.game.camera.front); }
 
                 while self.time_since_last_simulation > game.settings.delta_tick {
@@ -159,9 +171,6 @@ impl ApplicationHandler for App {
                 game.world.process(&mut renderer.voxel_pipeline.chunk_offsets, &mut renderer.voxel_pipeline.instances);
 
 
-                let output = renderer.surface.get_current_texture().unwrap();
-                let output_texture = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let view = &renderer.framebuffer;
                 let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("voxel-command-encoder"),
                 });
@@ -180,6 +189,15 @@ impl ApplicationHandler for App {
 
                 //
                 // render
+                //
+                
+                game.render(renderer, &mut self.input, dt);
+                self.input.update();
+
+                let output = renderer.surface.get_current_texture().unwrap();
+                let output_texture = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let view = &renderer.framebuffer;
+
                 let c = game.sky_colour.as_dvec4();
                 let camera = game.camera.position;
                 let projection = game.camera.perspective_matrix();
@@ -263,8 +281,9 @@ impl ApplicationHandler for App {
                                 resolve_target: Some(&output_texture),
                                 ops: wgpu::Operations {
                                     load: wgpu::LoadOp::Clear(wgpu::Color { r: c.x, g: c.y, b: c.z, a: c.w }),
-                                    store: wgpu::StoreOp::Store,
+                                    store: wgpu::StoreOp::Discard,
                                 },
+                                depth_slice: None,
                             }),
                         ],
 
@@ -272,8 +291,9 @@ impl ApplicationHandler for App {
                             view: &voxel_pipeline.depth_buffer.view,
                             depth_ops: Some(wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(1.0),
-                                store: wgpu::StoreOp::Store,
+                                store: wgpu::StoreOp::Discard,
                             }),
+
                             stencil_ops: None,
                         }),
 
@@ -281,7 +301,7 @@ impl ApplicationHandler for App {
                     });
 
 
-                    pass.set_pipeline(&voxel_pipeline.pipeline);
+                    pass.set_pipeline(if self.game.settings.lines { &voxel_pipeline.line_pipeline } else { &voxel_pipeline.pipeline });
                     voxel_pipeline.frame_uniform.update(&renderer.queue, &uniform);
                     voxel_pipeline.frame_uniform.use_uniform(&mut pass);
                     pass.set_bind_group(1, voxel_pipeline.model_uniform.bind_group(), &[]);
@@ -294,14 +314,18 @@ impl ApplicationHandler for App {
                     }
                     drop(pass);
 
+                    renderer.end(&mut encoder, &output_texture);
                     renderer.staging_buffer.finish();
                     renderer.queue.submit(std::iter::once(encoder.finish()));
 
                 }
 
+
+
+
                 output.present();
 
-                self.window.as_ref().unwrap().request_redraw();
+                renderer.window.request_redraw();
             }
 
 
@@ -313,7 +337,8 @@ impl ApplicationHandler for App {
                 renderer.config.height = size.height;
                 renderer.surface.configure(&renderer.device, &renderer.config);
                 renderer.framebuffer = create_multisampled_framebuffer(&renderer.device, &renderer.config);
-                renderer.voxel_pipeline.depth_buffer = DepthBuffer::new(&renderer.device, renderer.config.width, renderer.config.height);
+                renderer.voxel_pipeline.depth_buffer = DepthBuffer::new(&renderer.device, renderer.config.width, renderer.config.height, MSAA_SAMPLE_COUNT);
+                renderer.ui_depth_texture = DepthBuffer::new(&renderer.device, renderer.config.width, renderer.config.height, 1);
 
             }
             _ => (),
@@ -347,7 +372,6 @@ fn main() {
     }
 
     game.load();
-
 
     let mut app = App {
         window: None,

@@ -5,7 +5,7 @@ use libnoise::{Generator, ImprovedPerlin, Simplex, Source};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use sti::{hash::fxhash::FxHasher64, key::Key};
 
-use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_P3}, octree::NodeId, renderer::MeshIndex, voxel_world::voxel::Voxel};
+use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_P3}, octree::NodeId, voxel_world::voxel::Voxel};
 
 use super::mesh::ChunkFaceMesh;
 
@@ -242,6 +242,20 @@ impl Chunk {
 
     pub fn get_usize(&self, x: usize, y: usize, z: usize) -> Voxel {
         self.data.as_ref().map(|c| c.get_usize(x, y, z)).unwrap_or(Voxel::Air)
+    }
+
+
+    pub fn set_chunk_data(&mut self, data: ChunkData) {
+        let bytes : &[u8; CHUNK_SIZE_P3] = unsafe { core::mem::transmute(&data.data) };
+        if is_all_zero_simd(bytes) {
+            self.data = None;
+            return;
+        }
+
+        match &mut self.data {
+            Some(v) => *Arc::make_mut(v) = data,
+            None => self.data = Some(Arc::new(data)),
+        }
     }
 
 }

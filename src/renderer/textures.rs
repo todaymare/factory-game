@@ -1,23 +1,23 @@
 use std::collections::HashMap;
 
-use glam::{IVec2, Vec4};
+use bytemuck::{Pod, Zeroable};
+use glam::{IVec2, Mat4, Vec4};
 use sti::{define_key, vec::KVec};
+use wgpu::{BindGroup, Extent3d, RenderPipeline, Sampler, ShaderStages, TextureDimension, TextureFormat, TextureView};
 
-use crate::shader::ShaderProgram;
-
-use super::{GpuTexture, GpuTextureFormat, UIVertex};
+use super::{uniform::Uniform, UIVertex};
 
 define_key!(TextureListId(u32));
 
 
 #[derive(Clone, Copy, Debug)]
-pub struct TextureId(GpuTextureFormat, TextureListId);
+pub struct TextureId(TextureFormat, TextureListId);
 
 
 pub struct TextureAtlasBuilder {
     arena: sti::arena::Arena,
     max_dims: IVec2,
-    data_format: GpuTextureFormat,
+    data_format: TextureFormat,
 
     textures: KVec<TextureListId, (&'static [u8], IVec2)>
 }
@@ -26,25 +26,37 @@ pub struct TextureAtlasBuilder {
 #[derive(Debug)]
 pub struct TextureAtlas {
     uvs: KVec<TextureListId, Vec4>,
-    pub(super) gpu_texture: GpuTexture,
+    pub view: TextureView,
+    pub sampler: Sampler,
+    format: TextureFormat,
 }
 
 
-pub struct TextureAtlasManager {
-    pub(super) atlases: HashMap<GpuTextureFormat, (TextureAtlas, ShaderProgram, Vec<UIVertex>)>,
+pub struct UiTextureAtlasManager {
+    pub(super) atlases: HashMap<TextureFormat, (TextureAtlas, RenderPipeline, BindGroup, Vec<UIVertex>)>,
+    pub ui_shader_uniform: Uniform<UiShaderUniform>
 }
 
 
-impl TextureAtlasManager {
-    pub fn new() -> Self {
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct UiShaderUniform {
+    pub projection: Mat4,
+    pub view: Vec4,
+}
+
+
+impl UiTextureAtlasManager {
+    pub fn new(device: &wgpu::Device) -> Self {
         Self {
             atlases: HashMap::new(),
+            ui_shader_uniform: Uniform::new("ui-texture-atlas-uniform", device, 0, ShaderStages::VERTEX_FRAGMENT),
         }
     }
 
 
-    pub fn register(&mut self, atlas: TextureAtlas, shader: ShaderProgram) {
-        let prev = self.atlases.insert(atlas.gpu_texture.format, (atlas, shader, vec![]));
+    pub fn register(&mut self, atlas: TextureAtlas, shader: RenderPipeline, bg: BindGroup) {
+        let prev = self.atlases.insert(atlas.format, (atlas, shader, bg, vec![]));
         assert!(prev.is_none());
     }
 
@@ -55,7 +67,7 @@ impl TextureAtlasManager {
 
 
     pub fn buf(&mut self, texture: TextureId) -> &mut Vec<UIVertex> {
-        &mut self.atlases.get_mut(&texture.0).unwrap().2
+        &mut self.atlases.get_mut(&texture.0).unwrap().3
     }
 
 }
@@ -63,12 +75,15 @@ impl TextureAtlasManager {
 
 
 impl TextureAtlasBuilder {
-    pub fn new(format: GpuTextureFormat) -> Self {
+    pub fn new(format: TextureFormat) -> Self {
         Self { max_dims: IVec2::ZERO, arena: sti::arena::Arena::new(), data_format: format, textures: KVec::new() }
     }
 
 
     pub fn register(&mut self, dim: IVec2, data: &[u8]) -> TextureId {
+        let pixel_size = self.data_format.block_copy_size(Some(wgpu::TextureAspect::All)).unwrap();
+        assert_eq!(dim.x * dim.y * pixel_size as i32, data.len() as i32,
+                   "format: {:?}, pixel_size: {pixel_size}, dims: {dim}", self.data_format);
         self.max_dims = self.max_dims.max(dim);
         let mut buf = sti::vec::Vec::from_value_in(&self.arena, data.len(), 0);
         buf.copy_from_slice(data);
@@ -81,15 +96,13 @@ impl TextureAtlasBuilder {
     }
 
 
-    pub fn build(self) -> TextureAtlas {
-        let maximum_texture_size = unsafe {
-            let mut maximum_texture_size = 0;
-            gl::GetIntegerv(gl::MAX_TEXTURE_SIZE, &mut maximum_texture_size);
-            maximum_texture_size
-        };
+    pub fn build(self, device: &wgpu::Device, queue: &wgpu::Queue) -> TextureAtlas {
+        let maximum_texture_size = device.limits().max_texture_dimension_2d;
 
+        let pixel_size = self.data_format.target_pixel_byte_cost().unwrap();
+        let pixel_size = self.data_format.block_copy_size(Some(wgpu::TextureAspect::All)).unwrap();
         let used_area = self.textures.len() as i32 * self.max_dims.y * self.max_dims.x;
-        let used_area = used_area as u32 * self.data_format.pixel_size();
+        let used_area = used_area as u32 * pixel_size;
 
         let maximum_texture_size_ilog2 = maximum_texture_size.ilog2();
 
@@ -115,25 +128,25 @@ impl TextureAtlasBuilder {
         let cols = (line as f32 / self.max_dims.x as f32).floor() as u32;
         let rows = (line as f32 / self.max_dims.y as f32).floor() as u32;
 
-        let mut buffer : KVec<u32, u8> = sti::vec::Vec::from_value((line*line) as usize, 0u8);
+        let mut buffer : KVec<u32, u8> = sti::vec::Vec::from_value((line*line*pixel_size) as usize, 0u8);
         let mut uvs = KVec::with_cap(self.textures.len());
 
         let uv_pixel_size = 1.0 / line as f32;
 
         let mut i = TextureListId(0);
         'l: for row in 0..rows {
-            let row_offset = row * line * self.max_dims.y as u32 * self.data_format.pixel_size();
+            let row_offset = row * line * self.max_dims.y as u32 * pixel_size;
             for col in 0..cols {
-                let col_offset = col * self.max_dims.x as u32 * self.data_format.pixel_size();
+                let col_offset = col * self.max_dims.x as u32 * pixel_size;
                 let base = row_offset + col_offset;
 
                 let (texture, dims) = self.textures[i];
 
                 for y in 0..dims.y as u32 {
-                    let offset = base + y * line * self.data_format.pixel_size();
-                    let slice = &mut buffer[offset..offset + dims.x as u32 * self.data_format.pixel_size()];
-                    let stride = (y * dims.x as u32 * self.data_format.pixel_size()) as usize;
-                    slice.copy_from_slice(&texture[stride..stride + (dims.x as u32 * self.data_format.pixel_size()) as usize]);
+                    let offset = base + y * line * pixel_size;
+                    let slice = &mut buffer[offset..offset + dims.x as u32 * pixel_size];
+                    let stride = (y * dims.x as u32 * pixel_size) as usize;
+                    slice.copy_from_slice(&texture[stride..stride + (dims.x as u32 * pixel_size) as usize]);
                 }
 
                 let uv = Vec4::new(
@@ -153,12 +166,60 @@ impl TextureAtlasBuilder {
         }
 
 
-        let gpu_texture = GpuTexture::new(self.data_format);
-        gpu_texture.set_data(IVec2::splat(line as i32), &buffer);
+        let texture_size = Extent3d {
+            width: line,
+            height: line,
+            depth_or_array_layers: 1,
+        };
+
+        let diffuse_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("texture-atlas-texture"),
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: self.data_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let diffuse_texture_view = diffuse_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("texture-atlas-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        dbg!(pixel_size, &diffuse_texture);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &diffuse_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &buffer,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(pixel_size*line),
+                rows_per_image: Some(line),
+            },
+
+            texture_size
+        );
+
 
         TextureAtlas {
             uvs,
-            gpu_texture,
+            view: diffuse_texture_view,
+            sampler: diffuse_sampler,
+            format: self.data_format,
         }
     }
 }

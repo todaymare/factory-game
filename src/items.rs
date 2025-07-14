@@ -3,9 +3,10 @@ use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 use glam::{DVec3, IVec2, IVec3, Vec3};
 use image::{codecs::png::PngDecoder, ImageDecoder};
 use rand::random;
+use sti::{define_key, vec::KVec};
 use tracing::error;
 
-use crate::{mesh::Mesh, renderer::textures::{TextureAtlasBuilder, TextureId}, structures::strct::StructureKind, voxel_world::voxel::Voxel, PhysicsBody, Tick, constants::DROPPED_ITEM_SCALE};
+use crate::{constants::DROPPED_ITEM_SCALE, mesh::Mesh, renderer::{textures::{TextureAtlasBuilder, TextureId}}, structures::strct::StructureKind, voxel_world::voxel::Voxel, PhysicsBody, Tick};
 
 #[derive(Clone)]
 pub struct DroppedItem {
@@ -44,10 +45,14 @@ pub enum ItemKind {
 }
 
 
+define_key!(pub MeshIndex(u32));
+
+
 pub struct Assets {
     textures: HashMap<ItemKind, TextureId>,
-    models: HashMap<ItemKind, Mesh>,
-    pub cube: Mesh,
+    models: HashMap<ItemKind, MeshIndex>,
+    meshes: KVec<MeshIndex, Mesh>,
+    pub cube: MeshIndex,
 }
 
 
@@ -168,11 +173,12 @@ impl DroppedItem {
 
 
 impl Assets {
-    pub fn new(texture_atlas: &mut TextureAtlasBuilder) -> Self {
+    pub fn new(device: &wgpu::Device, texture_atlas: &mut TextureAtlasBuilder) -> Self {
         let textures_dir = Path::new("assets/textures");
 
         let mut textures = HashMap::with_capacity(ItemKind::ALL.len());
         let mut models = HashMap::with_capacity(ItemKind::ALL.len());
+        let mut meshes : KVec<MeshIndex, Mesh> = KVec::new();
 
         let white_texture = texture_atlas.register(IVec2::new(1, 1), &[255, 255, 255, 255]);
         let white_mesh = {
@@ -181,7 +187,7 @@ impl Assets {
             let mut indices = vec![];
 
             voxel_mesher::greedy_mesh(&*data, IVec3::new(1, 1, 1), &mut vertices, &mut indices, Vec3::ONE);
-            Mesh::new(&vertices, &indices)
+            meshes.push(Mesh::new(device, &vertices, &indices))
         };
 
         for &item in ItemKind::ALL {
@@ -201,7 +207,7 @@ impl Assets {
                     let id = texture_atlas.register(dims, &data);
 
                     if let ItemKind::Structure(kind) = item {
-                        models.insert(item, kind.mesh());
+                        models.insert(item, meshes.push(kind.create_mesh(device)));
                     } else {
                         let mut vertices = vec![];
                         let mut indices = vec![];
@@ -217,7 +223,7 @@ impl Assets {
                         };
 
                         voxel_mesher::greedy_mesh(&data, IVec3::new(dims.x, dims.y, 1), &mut vertices, &mut indices, 1.0/Vec3::new(dims.x as _, dims.y as _, 8.0));
-                        let mesh = Mesh::new(&vertices, &indices);
+                        let mesh = meshes.push(Mesh::new(device, &vertices, &indices));
                         models.insert(item, mesh);
                     }
 
@@ -232,10 +238,6 @@ impl Assets {
             };
 
             textures.insert(item, texture);
-
-
-            // create mesh
-
         }
 
 
@@ -243,12 +245,13 @@ impl Assets {
             models,
             textures,
             cube: white_mesh,
+            meshes,
         }
     }
 
 
     pub fn get(&self, kind: ItemKind) -> &Mesh {
-        self.models.get(&kind).unwrap()
+        &self.meshes[*self.models.get(&kind).unwrap()]
     }
 
     pub fn get_ico(&self, kind: ItemKind) -> TextureId {
@@ -263,10 +266,3 @@ impl core::fmt::Debug for Item {
     }
 }
 
-
-impl Drop for Assets {
-    fn drop(&mut self) {
-        self.cube.destroy();
-        self.models.iter_mut().for_each(|x| x.1.destroy());
-    }
-}

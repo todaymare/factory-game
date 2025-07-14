@@ -2,10 +2,10 @@ use std::{mem::offset_of, num::NonZeroU32, ptr::null_mut, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec3, UVec3, UVec4, Vec3, Vec4};
-use sti::key::Key;
+use sti::{define_key, key::Key};
 use wgpu::{util::{DeviceExt, StagingBelt}, ShaderStages};
 
-use crate::{buddy_allocator::BuddyAllocator, constants::{CHUNK_SIZE, CHUNK_SIZE_I32}, directions::Direction, octree::NodeId, renderer::{gpu_allocator::{GPUAllocator, GpuPointer}, uniform::Uniform, MeshIndex}};
+use crate::{buddy_allocator::BuddyAllocator, constants::{CHUNK_SIZE, CHUNK_SIZE_I32}, directions::Direction, octree::NodeId, renderer::{gpu_allocator::{GPUAllocator, GpuPointer}, uniform::Uniform}};
 
 use super::{chunk::ChunkData, voxel::Voxel};
 
@@ -30,6 +30,9 @@ pub struct ChunkQuadInstance {
 }
 
 
+define_key!(pub VoxelMeshIndex(u32));
+
+
 #[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
 #[repr(C)]
 pub struct ChunkMeshFramedata {
@@ -40,9 +43,9 @@ pub struct ChunkMeshFramedata {
 
 #[derive(Debug)]
 pub struct ChunkFaceMesh {
-    pub vertex: GpuPointer<ChunkQuadInstance>,
+    pub quads: GpuPointer<ChunkQuadInstance>,
     pub index_count: u32,
-    pub chunk_mesh_data_index: MeshIndex, 
+    pub chunk_mesh_data_index: VoxelMeshIndex, 
 }
 
 
@@ -80,6 +83,18 @@ impl<'a> ChunkDataRef {
             .map(|x| x.get(pos & (CHUNK_SIZE_I32-1)))
             .unwrap_or(Voxel::Air)
     }
+
+    pub fn is_neighbour(&self, mut pos: IVec3) -> bool {
+        pos += CHUNK_SIZE_I32;
+
+        let chunk = pos / CHUNK_SIZE_I32;
+
+        let chunk_idx =
+              9*chunk.x
+            + 3*chunk.y
+            + 1*chunk.z;
+        chunk_idx == 5
+    }
 }
 
 
@@ -91,19 +106,19 @@ impl ChunkFaceMesh {
         vertex_allocator: &mut GPUAllocator<ChunkQuadInstance>,
 
         vertices: &[ChunkQuadInstance], 
-        index: MeshIndex,
+        index: VoxelMeshIndex,
    ) -> Self {
         debug_assert!(vertices.iter().all(|x| x.chunk_index == index.usize() as u32));
 
         let vertex = vertex_allocator.allocate_slice(belt, encoder, device, vertices);
 
-        Self { vertex, index_count: vertices.len() as u32, chunk_mesh_data_index: index }
+        Self { quads: vertex, index_count: vertices.len() as u32, chunk_mesh_data_index: index }
     }
 }
 
 
 impl ChunkQuadInstance {
-    pub fn new(pos: IVec3, ty: Voxel, h: u32, l: u32, normal: u8, ao: u32, chunk_index: MeshIndex) -> Self {
+    pub fn new(pos: IVec3, ty: Voxel, h: u32, l: u32, normal: u8, ao: u32, chunk_index: VoxelMeshIndex) -> Self {
         let UVec3 { x, y, z } = pos.as_uvec3();
 
         debug_assert!(x <= 32 && y <= 32 && z <= 32, "{x} {y} {z} {l}x{h} {normal}");

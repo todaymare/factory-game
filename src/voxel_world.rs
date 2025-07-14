@@ -3,18 +3,18 @@ pub mod voxel;
 pub mod mesh;
 pub mod chunker;
 
-use std::{fs::{self}, ops::Bound, sync::Arc, time::Instant};
+use std::{fs::{self}, hint::spin_loop, ops::Bound, sync::Arc, time::Instant};
 
 use chunk::{ChunkData, Noise};
 use chunker::{Chunker, WorldChunkPos};
 use glam::{DVec3, IVec3, UVec3, Vec3};
-use mesh::{ChunkDataRef, ChunkFaceMesh, ChunkMeshFramedata, ChunkMeshes, ChunkQuadInstance};
+use mesh::{ChunkDataRef, ChunkFaceMesh, ChunkMeshFramedata, ChunkMeshes, ChunkQuadInstance, VoxelMeshIndex};
 use save_format::byte::ByteReader;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use voxel::Voxel;
 use wgpu::util::StagingBelt;
 
-use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_I32, REGION_SIZE}, free_list::FreeKVec, items::{DroppedItem, Item}, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO, MeshIndex}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
+use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_I32, REGION_SIZE}, free_list::FreeKVec, items::{DroppedItem, Item}, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
 
 
 pub struct VoxelWorld {
@@ -46,7 +46,7 @@ impl VoxelWorld {
     }
 
 
-    pub fn process(&mut self, free_list: &mut FreeKVec<MeshIndex, ChunkMeshFramedata>, instance_allocator: &mut GPUAllocator<ChunkQuadInstance>) {
+    pub fn process(&mut self, free_list: &mut FreeKVec<VoxelMeshIndex, ChunkMeshFramedata>, instance_allocator: &mut GPUAllocator<ChunkQuadInstance>) {
         self.chunker.process_mesh_queue(3, free_list);
         self.chunker.process_chunk_queue(3);
         self.chunker.process_chunk_jobs(3);
@@ -82,7 +82,7 @@ impl VoxelWorld {
                 let mut chunk = Chunk::empty_chunk();
                 let data = ChunkData::from_bytes(byte_reader.read().unwrap());
                 if !data.is_empty() {
-                    chunk.data = Some(Arc::new(data));
+                    chunk.set_chunk_data(data);
                 }
 
                 chunk.is_dirty = false;
@@ -311,23 +311,31 @@ impl VoxelWorld {
     pub fn save(&mut self) {
         warn!("voxel-save-system: saving the world..");
         let time = Instant::now();
+        while self.chunker.chunk_load_queue_len() > 0 { self.chunker.process_chunk_queue(128); }
+        while self.chunker.chunk_active_jobs_len() > 0 { self.chunker.process_chunk_jobs(512); }
+
+        let chunks = self.chunker.iter_chunks().map(|x| x.0).collect::<Vec<_>>();
+        for pos in chunks { self.chunker.save_chunk(pos); }
+        while self.chunker.chunk_save_jobs.fetch_add(0, std::sync::atomic::Ordering::SeqCst) > 0 { spin_loop(); }
+
         info!("voxel-save-system: saved the world in {:?}", time.elapsed());
     }
 
 
 
-    pub fn greedy_mesh(c: [MeshIndex; 6], chunks: ChunkDataRef) -> [Vec<ChunkQuadInstance>; 6]{
-        let [west, east] = Self::greedy_mesh_dir(c[0], c[3], &chunks, 0);
-        let [up, down] = Self::greedy_mesh_dir(c[1], c[4], &chunks, 1);
-        let [north, south] = Self::greedy_mesh_dir(c[2], c[5], &chunks, 2);
+    pub fn greedy_mesh(c: [VoxelMeshIndex; 6], pos: IVec3, chunks: ChunkDataRef) -> [Vec<ChunkQuadInstance>; 6]{
+        let [west, east] = Self::greedy_mesh_dir(c[0], c[3], &chunks, pos, 0);
+        let [up, down] = Self::greedy_mesh_dir(c[1], c[4], &chunks, pos, 1);
+        let [north, south] = Self::greedy_mesh_dir(c[2], c[5], &chunks, pos, 2);
         [west, up, north, east, down, south]
     }
 
 
     pub fn greedy_mesh_dir(
-        front_chunk_index: MeshIndex,
-        back_chunk_index: MeshIndex,
+        front_chunk_index: VoxelMeshIndex,
+        back_chunk_index: VoxelMeshIndex,
         chunks: &ChunkDataRef,
+        pos: IVec3,
         d: usize
     ) -> [Vec<ChunkQuadInstance>; 2] {
         // offsets of corners per vertex per direction
@@ -399,16 +407,16 @@ impl VoxelWorld {
                         chunks.get(voxel_pos)
                     };
 
-                    let block_compare = {
+                    let (block_compare, neigh) = {
                         let mut r = voxel_pos;
                         r[d] += 1;
-                        chunks.get(r)
+                        (chunks.get(r), chunks.is_neighbour(r))
                     };
 
                     // the mask is set to true if there is a visible face
                     // between two blocks, i.e. both aren't empty and both aren't blocks
                     let (voxel, neg_d) = match (block_current.is_transparent(), block_compare.is_transparent()) {
-                        (true, false) => (block_compare, true),
+                        (true, false) if !neigh => (block_compare, true),
                         (false, true) => (block_current, false),
                         (_, _) => (Voxel::Air, false),
                     };
@@ -440,15 +448,30 @@ impl VoxelWorld {
                             quad_ao |= ao << (i*2);
                         }
 
-                        let a00 = quad_ao << 0 & 0x3;
-                        let a01 = quad_ao << 2 & 0x3;
-                        let a10 = quad_ao << 4 & 0x3;
-                        let a11 = quad_ao << 6 & 0x3;
+                        let a00 = quad_ao >> 0 & 0x3;
+                        let a01 = quad_ao >> 2 & 0x3;
+                        let a10 = quad_ao >> 4 & 0x3;
+                        let a11 = quad_ao >> 6 & 0x3;
 
-                        if a00 + a11 > a01 + a10 {
-                            quad_ao |= 1 << 8;
+                        let mut flip = a00 + a11 < a01 + a10;
+                        if voxel_pos == IVec3::new(23, 5, 0) && d == 1 {
+                            dbg!(a00, a01, a11, a10);
                         }
 
+                        if a00 == 3 && a01 == 2 && a10 == 2 && a11 == 0 {
+                            flip = !flip;
+                        }
+                        else if a00 == 0 && a01 == 2 && a10 == 2 && a11 == 3 {
+                            flip = !flip;
+                        }
+                        else if a00 == 2 && a01 == 0 && a10 == 3 && a11 == 2 {
+                            flip = !flip;
+                        }
+                        else if a00 == 2 && a01 == 3 && a10 == 0 && a11 == 2 {
+                            flip = !flip;
+                        }
+
+                        quad_ao |= (flip as u32) << 8;
                         meta |= quad_ao << 1;
                     }
 
@@ -523,6 +546,7 @@ impl VoxelWorld {
                     for l in 0..h  {
                         for k in 0..w {
                             block_mask[n+k+l*CHUNK_SIZE].0 = Voxel::Air;
+                            block_mask[n+k+l*CHUNK_SIZE].1 = u32::MAX;
                         }
                     }
 

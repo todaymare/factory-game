@@ -13,12 +13,12 @@ struct InstanceIn {
 
 struct VertexOut {
     @builtin(position) position  : vec4<f32>,
-    @location(1)      normal    : vec3<f32>,
-    @location(2)      frag_pos  : vec3<f32>,
-    @location(3)      v_distance: f32,
-    @location(4)      tex_coords: vec2<f32>,
-    @location(5)      id        : u32,
-    @location(6) colour    : vec3<f32>,
+    @location(1)       normal    : vec3<f32>,
+    @location(2)       frag_pos  : vec3<f32>,
+    @location(3)       v_distance: f32,
+    @location(4)       tex_coords: vec2<f32>,
+    @location(5)       id        : u32,
+    @location(6)       colour    : vec3<f32>,
 };
 
 
@@ -66,7 +66,6 @@ var t_diffuse: texture_2d<f32>;
 @group(2) @binding(1)
 var s_diffuse: sampler;
 
-
 const NORMAL_LOOKUP : array<vec3<f32>, 6> = array<vec3<f32>, 6>(
     vec3<f32>( 1.0, 0.0, 0.0),
     vec3<f32>( 0.0, 1.0, 0.0),
@@ -77,8 +76,10 @@ const NORMAL_LOOKUP : array<vec3<f32>, 6> = array<vec3<f32>, 6>(
 );
 
 
+
+
 @vertex
-fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
+fn vs_main(vertex: VertexIn, input: InstanceIn) -> VertexOut {
     var output: VertexOut;
 
     // unpacking
@@ -98,30 +99,38 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
     let normal_index : u32 = mesh_data.normal;
     let model = vec3<f32>(mesh_data.offset.xyz*32-u.camera_block) - u.camera_offset;
 
-    let normal = NORMAL_LOOKUP[normal_index];
+    var normal = vec3<f32>(0.0);
 
-    var o = offset.pos;
-    let ao = input.id >> 8;
-    let swap_diag = (ao >> 8 & 0x1) == 1;
+    switch normal_index {
+        case 0u: { normal = NORMAL_LOOKUP[0]; }
+        case 1u: { normal = NORMAL_LOOKUP[1]; }
+        case 2u: { normal = NORMAL_LOOKUP[2]; }
+        case 3u: { normal = NORMAL_LOOKUP[3]; }
+        case 4u: { normal = NORMAL_LOOKUP[4]; }
+        case 5u: { normal = NORMAL_LOOKUP[5]; }
+        default: {}
+    }
 
-/*
+    var o = vertex.pos;
+
+    let ao = input.id >> 8u;
+    let swap_diag = ((ao >> 8u) & 0x1u) == 1u;
+
     if swap_diag {
-        if o.x == 0 && o.z == 0 { }
-        else if o.x == 1 && o.z == 0 { o.x = 0; o.z = 1; }
-        else if o.x == 0 && o.z == 1 { o.x = 1; o.z = 0; }
-        else if o.x == 1 && o.z == 1 { o.x = 1; o.z = 1; }
-    }*/
+        if vertex.index == 2u { o.x = 0; o.z = 1; }
+        if vertex.index == 5u { o.x = 1; o.z = 0; }
+    }
 
     var ao_state = 3u;
-    if o.x == 0 && o.z == 0 { ao_state = (ao >> 0 & 0x3); }
-    if o.x == 0 && o.z == 1 { ao_state = (ao >> 2 & 0x3); }
-    if o.x == 1 && o.z == 0 { ao_state = (ao >> 4 & 0x3); }
-    if o.x == 1 && o.z == 1 { ao_state = (ao >> 6 & 0x3); }
+    if o.x == 0 && o.z == 0 { ao_state = ((ao >> 0u) & 0x3u); }
+    if o.x == 0 && o.z == 1 { ao_state = ((ao >> 2u) & 0x3u); }
+    if o.x == 1 && o.z == 0 { ao_state = ((ao >> 4u) & 0x3u); }
+    if o.x == 1 && o.z == 1 { ao_state = ((ao >> 6u) & 0x3u); }
     
 
     // for the up and down faces width and height are flipped for some reason
-    if (normal_index == 1 || normal_index == 4) {
-        if normal_index == 1 { o = o.zyx; }
+    if (normal_index == 1u || normal_index == 4u) {
+        if normal_index == 1u { o = o.zyx; }
 
         if o.x == 1 { o.x += i32(height); }
         if o.z == 1 { o.z += i32(width); }
@@ -131,8 +140,8 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
 
     else {
         switch normal_index {
-            case 3: { o = o.zyx; } // X-
-            case 5: { o = o.zyx; } // Z-
+            case 3u: { o = o.zyx; } // X-
+            case 5u: { o = o.zyx; } // Z-
             default: {}
         }
 
@@ -142,18 +151,16 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
         let uv = vec2<f32>(f32(o.x), f32(o.z));
 
         switch normal_index {
-            case 0: { o = o.yxz; output.tex_coords = uv.yx; } // X+
-            case 3: { o = o.yxz; output.tex_coords = uv.yx; } // X-
-            case 5: { o = o.xzy; output.tex_coords = uv.xy; } // Z+
-            case 2: { o = o.xzy; output.tex_coords = uv.xy; } // Z-
+            case 0u: { o = o.yxz; output.tex_coords = uv.yx; } // X+
+            case 3u: { o = o.yxz; output.tex_coords = uv.yx; } // X-
+            case 5u: { o = o.xzy; output.tex_coords = uv.xy; } // Z+
+            case 2u: { o = o.xzy; output.tex_coords = uv.xy; } // Z-
             default: {}
         }
 
     };
 
-    output.colour = vec3(0);
-    //let ao_colours = vec4<f32>(1.0,0.7,0.5,0.15);
-    let ao_colours = vec4<f32>(0.0,0.3,0.5,1.0);
+    let ao_colours = vec4<f32>(0.0,0.05,0.1,1.0);
     output.colour = vec3(ao_colours[ao_state]);
 
     let world_pos = pos + model.xyz + vec3<f32>(o);
@@ -165,7 +172,7 @@ fn vs_main(offset: VertexIn, input: InstanceIn) -> VertexOut {
     output.position = u.projection * u.view * vec4<f32>(world_pos, 1.0);
     output.v_distance = length(world_pos);
     output.frag_pos = world_pos;
-    output.id = input.id & 0xFF;
+    output.id = input.id & 0xFFu;
 
     return output;
 }

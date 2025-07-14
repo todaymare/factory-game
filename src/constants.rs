@@ -36,6 +36,10 @@ pub const PLAYER_ROW_SIZE : usize = 6;
 pub const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
 pub const RENDER_DISTANCE : i32 = 4;
+pub const LOAD_DISTANCE : i32 = 4;
+
+
+pub const FONT_SIZE : u32 = 48;
 
 pub const DROPPED_ITEM_SCALE : f32 = 0.5;
 
@@ -50,6 +54,5 @@ pub const QUAD_VERTICES : &[i32] = &[
      0,   0,  0, 3,
      0,   0,  1, 4,
      1,   0,  1, 5,
+
 ];
-
-

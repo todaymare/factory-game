@@ -3,20 +3,23 @@ pub mod uniform;
 pub mod ssbo;
 pub mod gpu_allocator;
 
-use std::cell::Cell;
+use std::{cell::Cell, collections::HashMap, mem::offset_of, ptr::null_mut, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 
 use bytemuck::{Pod, Zeroable};
-use glam::{IVec2, IVec3, Mat4, Vec2, Vec3, Vec4};
+use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
+use glam::{DVec3, IVec2, IVec3, Mat4, Vec2, Vec3, Vec4};
 use gpu_allocator::GPUAllocator;
-use image::{DynamicImage, EncodableLayout, GenericImage, GenericImageView, RgbaImage};
+use image::{DynamicImage, EncodableLayout, GenericImage, GenericImageView, Rgba32FImage, RgbaImage};
+use rand::seq::IndexedRandom;
 use ssbo::{ResizableBuffer, SSBO};
-use sti::{alloc::default_realloc, define_key, static_assert_eq};
-use textures::TextureId;
+use sti::{alloc::default_realloc, define_key, key::Key, static_assert_eq, vec::KVec};
+use textures::{TextureAtlasBuilder, TextureId, UiShaderUniform, UiTextureAtlasManager};
+use tracing::warn;
 use uniform::Uniform;
-use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs}, BufferUsages, TextureUsages, *};
+use wgpu::{util::{BufferInitDescriptor, DeviceExt, RenderEncoder, StagingBelt}, wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs}, BufferUsages, TextureUsages, *};
 use winit::window::Window;
 
-use crate::{constants::{MSAA_SAMPLE_COUNT, QUAD_VERTICES, VOXEL_TEXTURE_ATLAS_TILE_CAP, VOXEL_TEXTURE_ATLAS_TILE_SIZE}, free_list::FreeKVec, voxel_world::mesh::{ChunkMeshFramedata, ChunkQuadInstance}};
+use crate::{constants::{FONT_SIZE, MSAA_SAMPLE_COUNT, QUAD_VERTICES, VOXEL_TEXTURE_ATLAS_TILE_CAP, VOXEL_TEXTURE_ATLAS_TILE_SIZE}, free_list::FreeKVec, items::{Assets, ItemKind, MeshIndex}, mesh::MeshInstance, voxel_world::mesh::{ChunkMeshFramedata, ChunkQuadInstance, VoxelMeshIndex}};
 
 
 // the renderer is done,
@@ -29,8 +32,13 @@ pub struct Renderer {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
+    pub window: &'static Window,
+
     pub framebuffer: wgpu::TextureView,
+    pub ui_depth_texture: DepthBuffer,
+
     pub voxel_pipeline: VoxelPipeline,
+    pub mesh_pipeline: MeshPipeline,
     pub staging_buffer: StagingBelt,
 
 
@@ -39,6 +47,16 @@ pub struct Renderer {
 
     pub draw_count: Cell<u32>,
     pub triangle_count: Cell<u32>,
+
+    pub ui_atlases: UiTextureAtlasManager,
+
+    pub line_size: f32,
+    pub characters: HashMap<char, Character>,
+    pub white_texture: TextureId,
+    pub ui_vertex_buff: ResizableBuffer<UIVertex>,
+
+    pub mesh_draws: KVec<MeshIndex, Vec<MeshInstance>>,
+    pub assets: Assets,
 }
 
 
@@ -57,14 +75,6 @@ pub struct Character {
     pub size: IVec2,
     pub bearing: IVec2,
     pub advance: u32,
-}
-
-
-#[derive(Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-struct MeshShaderUniform {
-    model: Mat4,
-    modulate: Vec4,
 }
 
 
@@ -89,16 +99,22 @@ pub struct VoxelShaderUniform {
 static_assert_eq!(size_of::<VoxelShaderUniform>(), 208);
 
 
-define_key!(pub MeshIndex(u32));
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct MeshShaderUniform {
+    pub view: Mat4,
+    pub projection: Mat4,
+}
 
 
 pub struct VoxelPipeline {
     pub pipeline: RenderPipeline,
+    pub line_pipeline: RenderPipeline,
     pub frame_uniform: Uniform<VoxelShaderUniform>,
     pub model_uniform: SSBO<ChunkMeshFramedata>,
     pub depth_buffer: DepthBuffer,
 
-    pub chunk_offsets: FreeKVec<MeshIndex, ChunkMeshFramedata>,
+    pub chunk_offsets: FreeKVec<VoxelMeshIndex, ChunkMeshFramedata>,
     pub instances: GPUAllocator<ChunkQuadInstance>,
     pub indirect_buf: ResizableBuffer<DrawIndirectArgs>,
     pub vertex_buf: Buffer,
@@ -107,8 +123,18 @@ pub struct VoxelPipeline {
 }
 
 
+pub struct MeshPipeline {
+    pub pipeline: RenderPipeline,
+    pub line_pipeline: RenderPipeline,
+    pub frame_uniform: Uniform<MeshShaderUniform>,
+
+    pub instance_buffer: ResizableBuffer<MeshInstance>,
+}
+
+
 impl Renderer {
-    pub async fn new(window: &'static Window) -> Self {
+    pub async fn new(window: Window) -> Self {
+        let window = Box::leak(Box::new(window));
 
         let size = window.inner_size();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -116,7 +142,7 @@ impl Renderer {
             ..Default::default()
         });
 
-        let surface = instance.create_surface(window).unwrap();
+        let surface = instance.create_surface(&*window).unwrap();
 
         let adapter = instance.request_adapter(
             &wgpu::RequestAdapterOptions {
@@ -168,6 +194,94 @@ impl Renderer {
         };
 
         surface.configure(&device, &config);
+
+
+        let mesh_pipeline = {
+            let mesh_shader_uniform = Uniform::<MeshShaderUniform>::new("mesh-shader-frame-uniform", &device, 0, ShaderStages::VERTEX_FRAGMENT);
+
+            let shader = device.create_shader_module(
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("mesh-shader"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/mesh.wgsl").into()),
+                }
+            );
+
+            let rpl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("mesh-render-pipeline-layout"),
+                bind_group_layouts: &[mesh_shader_uniform.bind_group_layout()],
+                push_constant_ranges: &[],
+            });
+
+
+            let targets = &[Some(wgpu::ColorTargetState { // 4.
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })];
+
+            let mut desc = wgpu::RenderPipelineDescriptor {
+                label: Some("mesh-render-pipeline"),
+                layout: Some(&rpl),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"), // 1.
+                    buffers: &[
+                        crate::mesh::vertex_desc(),
+                        MeshInstance::desc(),
+                    ], 
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState { // 3.
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw, // 2.
+                    cull_mode: None,
+                    //cull_mode: None,
+                    // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    // Requires Features::DEPTH_CLIP_CONTROL
+                    unclipped_depth: false,
+                    // Requires Features::CONSERVATIVE_RASTERIZATION
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: MSAA_SAMPLE_COUNT, // 2.
+                    mask: !0, // 3.
+                    alpha_to_coverage_enabled: false, // 4.
+                },
+                multiview: None, // 5.
+                cache: None, // 6.
+            };
+
+
+            let render_pipeline = device.create_render_pipeline(&desc);
+            desc.primitive.polygon_mode = wgpu::PolygonMode::Line;
+            let line_render_pipeline = device.create_render_pipeline(&desc);
+
+            let instance_buffer = ResizableBuffer::new("mesh-instance-buffer", &device, BufferUsages::COPY_SRC | BufferUsages::COPY_DST | BufferUsages::VERTEX, 128);
+
+            MeshPipeline {
+                pipeline: render_pipeline,
+                line_pipeline: line_render_pipeline,
+                frame_uniform: mesh_shader_uniform,
+                instance_buffer,
+            }
+        };
+
+
 
 
         let voxel_pipeline = {
@@ -324,10 +438,16 @@ impl Renderer {
             });
 
 
-            let depth_texture = DepthBuffer::new(&device, config.width, config.height); 
+            let depth_texture = DepthBuffer::new(&device, config.width, config.height, MSAA_SAMPLE_COUNT); 
 
 
-            let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+
+            let targets = &[Some(wgpu::ColorTargetState { // 4.
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })];
+            let mut desc = wgpu::RenderPipelineDescriptor {
                 label: Some("voxel-render-pipeline"),
                 layout: Some(&rpl),
                 vertex: wgpu::VertexState {
@@ -357,11 +477,7 @@ impl Renderer {
                 fragment: Some(wgpu::FragmentState { // 3.
                     module: &shader,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState { // 4.
-                        format: config.format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
@@ -391,7 +507,12 @@ impl Renderer {
                 },
                 multiview: None, // 5.
                 cache: None, // 6.
-            });
+            };
+
+
+            let render_pipeline = device.create_render_pipeline(&desc);
+            desc.primitive.polygon_mode = wgpu::PolygonMode::Line;
+            let line_render_pipeline = device.create_render_pipeline(&desc);
 
 
             let vertex = device.create_buffer_init(&BufferInitDescriptor {
@@ -409,6 +530,7 @@ impl Renderer {
 
             VoxelPipeline {
                 pipeline: render_pipeline,
+                line_pipeline: line_render_pipeline,
                 frame_uniform: voxel_shader_uniform,
                 model_uniform: ssbo,
                 depth_buffer: depth_texture,
@@ -421,171 +543,309 @@ impl Renderer {
         };
 
 
-        /*
-        let mut glfw = glfw::init(|error, str| error!("glfw error {str}: {error}"))
-            .unwrap();
 
-        glfw.window_hint(glfw::WindowHint::ContextVersion(3, 3));
-        glfw.window_hint(glfw::WindowHint::OpenGlProfile(glfw::OpenGlProfileHint::Core));
-        glfw.window_hint(glfw::WindowHint::OpenGlForwardCompat(true));
+        let mut ui_atlases = UiTextureAtlasManager::new(&device);
+        let line_size;
+        let characters;
+        let white;
+        let ui_depth_texture = DepthBuffer::new(&device, config.width, config.height, 1); 
 
-        let (mut window, window_events) = glfw.create_window(window_size.0 as u32, window_size.1 as u32, "factory game", glfw::WindowMode::Windowed)
-            .unwrap();
-
-        window.set_all_polling(true);
-
-        glfw.make_context_current(Some(&window));
-        unsafe {
-            gl::load_with(|s| {
-                let cstr = CString::new(s).unwrap();
-                let result = glfwGetProcAddress(cstr.as_ptr());
-
-                if result.is_null() {
-                    warn!("failed to load gl function '{s}'");
-                }
-                result
-            });
-        }
-
-        let fragment = Shader::new(&fs::read("shaders/text.fs").unwrap(), ShaderType::Fragment).unwrap();
-        let vertex = Shader::new(&fs::read("shaders/text.vs").unwrap(), ShaderType::Vertex).unwrap();
-        let text_shader = ShaderProgram::new(fragment, vertex).unwrap();
-
-        let fragment = Shader::new(&fs::read("shaders/ui.fs").unwrap(), ShaderType::Fragment).unwrap();
-        let vertex = Shader::new(&fs::read("shaders/ui.vs").unwrap(), ShaderType::Vertex).unwrap();
-        let ui_shader = ShaderProgram::new(fragment, vertex).unwrap();
-
-        //unsafe { gl::Enable(gl::DEPTH_TEST) };
-        unsafe { gl::Enable(gl::BLEND) };
-        unsafe { gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA); };
-
-        let mut ft = null_mut();
-        if unsafe { freetype::freetype::FT_Init_FreeType(&mut ft) } != 0 {
-            panic!("failed to init freetype library");
-        }
-
-
-        let mut face = null_mut();
-        if unsafe { freetype::freetype::FT_New_Face(ft, c"font.ttf".as_ptr(), 0, &mut face) } != 0 {
-            panic!("failed to load font");
-        }
-
-        unsafe { FT_Set_Pixel_Sizes(face, FONT_SIZE, FONT_SIZE) };
-
-        let mut characters = HashMap::new();
-        let mut texture_atlas = TextureAtlasBuilder::new(GpuTextureFormat::Red);
-
-        unsafe { gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1) };
-
-        let mut biggest_y_size : f32 = 0.0;
-        for c in 0..128 {
-            if unsafe { FT_Load_Char(face, c as u64, FT_LOAD_RENDER as _) } != 0 {
-                panic!("failed to load glyph '{}'", char::from_u32(c).unwrap());
+        {
+            let mut ft = null_mut();
+            if unsafe { freetype::freetype::FT_Init_FreeType(&mut ft) } != 0 {
+                panic!("failed to init freetype library");
             }
 
 
-            unsafe {
-                let dims = IVec2::new(
-                    (*(*face).glyph).bitmap.width as _,
-                    (*(*face).glyph).bitmap.rows as _,
-                );
+            let mut face = null_mut();
+            if unsafe { freetype::freetype::FT_New_Face(ft, c"font.ttf".as_ptr(), 0, &mut face) } != 0 {
+                panic!("failed to load font");
+            }
 
-                let slice = if dims != IVec2::ZERO { core::slice::from_raw_parts((*(*face).glyph).bitmap.buffer, (dims.x * dims.y) as usize) }
-                            else { &[] };
-                let texture = texture_atlas.register(dims, slice);
+            unsafe { FT_Set_Pixel_Sizes(face, FONT_SIZE, FONT_SIZE) };
 
-                let character = Character {
-                    texture,
-                    size: IVec2::new(
+            let mut chars = HashMap::new();
+            let mut atlas = TextureAtlasBuilder::new(TextureFormat::R8Unorm);
+
+            let mut biggest_y_size : f32 = 0.0;
+
+            for c in 0..128 {
+                if unsafe { FT_Load_Char(face, c as u64, FT_LOAD_RENDER as _) } != 0 {
+                    panic!("failed to load glyph '{}'", char::from_u32(c).unwrap());
+                }
+
+
+                unsafe {
+                    let dims = IVec2::new(
                         (*(*face).glyph).bitmap.width as _,
                         (*(*face).glyph).bitmap.rows as _,
-                    ),
-                    bearing: IVec2::new(
-                        (*(*face).glyph).bitmap_left as _,
-                        (*(*face).glyph).bitmap_top as _,
-                    ),
-                    advance: (*(*face).glyph).advance.x as _,
-                };
+                    );
 
-                let h = character.size.y as f32;
-                biggest_y_size = biggest_y_size.max(h);
+                    let slice = if dims != IVec2::ZERO { core::slice::from_raw_parts((*(*face).glyph).bitmap.buffer, (dims.x * dims.y) as usize) }
+                                else { &[] };
+                    let texture = atlas.register(dims, slice);
 
-                characters.insert(char::from_u32(c).unwrap(), character);
+                    let character = Character {
+                        texture,
+                        size: IVec2::new(
+                            (*(*face).glyph).bitmap.width as _,
+                            (*(*face).glyph).bitmap.rows as _,
+                        ),
+                        bearing: IVec2::new(
+                            (*(*face).glyph).bitmap_left as _,
+                            (*(*face).glyph).bitmap_top as _,
+                        ),
+                        advance: (*(*face).glyph).advance.x as _,
+                    };
+
+                    let h = character.size.y as f32;
+                    biggest_y_size = biggest_y_size.max(h);
+
+                    chars.insert(char::from_u32(c).unwrap(), character);
+                }
             }
+
+            white = atlas.register(IVec2::new(32, 32), &[255; 32*32]);
+            line_size = biggest_y_size;
+            characters = chars;
+            let atlas = atlas.build(&device, &queue);
+
+            unsafe {
+                FT_Done_Face(face);
+                FT_Done_FreeType(ft);
+            }
+
+
+            let shader = device.create_shader_module(
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("font-shader"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/text.wgsl").into()),
+                }
+            );
+
+
+            let bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("font-texture-atlas-bind-group-layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+
+            let bg = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("font-texture-bind-group"),
+                layout: &bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&atlas.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&atlas.sampler),
+                    }
+                ]
+            });
+
+
+            let rpl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("font-render-pipeline-layout"),
+                bind_group_layouts: &[ui_atlases.ui_shader_uniform.bind_group_layout(), &bgl],
+                push_constant_ranges: &[],
+            });
+
+            let targets = [Some(wgpu::ColorTargetState {
+                format: config.format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })];
+
+            let desc = wgpu::RenderPipelineDescriptor{
+                label: Some("font-render-pipeline-descriptor"),
+                layout: Some(&rpl),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[
+                        UIVertex::desc(),
+                    ],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &targets,
+                }),
+
+                primitive: PrimitiveState {
+                    topology: PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: FrontFace::Cw,
+                    cull_mode: None,
+                    unclipped_depth: false,
+                    polygon_mode: PolygonMode::Fill,
+                    conservative: false,
+                },
+
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+
+                multisample: wgpu::MultisampleState {
+                    count: 1, // 2.
+                    mask: !0, // 3.
+                    alpha_to_coverage_enabled: false, // 4.
+                },
+                multiview: None,
+                cache: None,
+            };
+
+            let render_pipeline = device.create_render_pipeline(&desc);
+            ui_atlases.register(atlas, render_pipeline, bg);
         }
-
-        let white = texture_atlas.register(IVec2::new(32, 32), &[255; 32*32]);
-        let font_ta = texture_atlas.build();
-
-        unsafe {
-            FT_Done_Face(face);
-            FT_Done_FreeType(ft);
-        }
-
-
-        let mut quad_texture = 0;
-        unsafe {
-            gl::GenTextures(1, &mut quad_texture);
-            gl::BindTexture(gl::TEXTURE_2D, quad_texture);
-
-            gl::TexImage2D(gl::TEXTURE_2D,
-                           0,
-                           gl::RED as _,
-                           1, 
-                           1,
-                           0,
-                           gl::RED,
-                           gl::UNSIGNED_BYTE,
-                           (&[255u8]).as_ptr().cast());
-        }
-
-
-     
-        let (quad_vao, quad_vbo) = unsafe {
-            let mut vao = 0;
-            let mut vbo = 0;
-            gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut vbo);
-            gl::BindVertexArray(vao);
-
-            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
-
-            gl::EnableVertexAttribArray(0);
-            gl::VertexAttribPointer(0, 3,
-                                    gl::FLOAT, gl::FALSE, size_of::<UIVertex>() as i32,
-                                    offset_of!(UIVertex, position) as _);
-
-
-            gl::EnableVertexAttribArray(1);
-            gl::VertexAttribPointer(1, 2,
-                                    gl::FLOAT, gl::FALSE, size_of::<UIVertex>() as i32,
-                                    offset_of!(UIVertex, uv) as _);
-
-
-            gl::EnableVertexAttribArray(2);
-            gl::VertexAttribPointer(2, 4,
-                                    gl::FLOAT, gl::FALSE, size_of::<UIVertex>() as i32,
-                                    offset_of!(UIVertex, modulate) as _);
-
-            gl::BindVertexArray(0);
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-
-            (vao, vbo)
-        };
-
-        let mut assets_ta = TextureAtlasBuilder::new(GpuTextureFormat::RGBA);
-        let assets = Assets::new(&mut assets_ta);
-
-        let mut atlases = TextureAtlasManager::new();
-        atlases.register(assets_ta.build(), ui_shader);
-        atlases.register(font_ta, text_shader);
-
-        glfw.set_swap_interval(glfw::SwapInterval::None);
-*/
 
         let framebuffer = create_multisampled_framebuffer(&device, &config);
 
+
+        let mut assets_ta = TextureAtlasBuilder::new(TextureFormat::Rgba8UnormSrgb);
+        let assets = Assets::new(&device, &mut assets_ta);
+        let assets_ta = assets_ta.build(&device, &queue);
+
+
+        {
+            let shader = device.create_shader_module(
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("ui-shader"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/ui.wgsl").into()),
+                }
+            );
+
+
+            let bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("ui-texture-atlas-bind-group-layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+
+            let bg = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("ui-texture-bind-group"),
+                layout: &bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&assets_ta.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&assets_ta.sampler),
+                    }
+                ]
+            });
+
+
+            let rpl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("ui-render-pipeline-layout"),
+                bind_group_layouts: &[ui_atlases.ui_shader_uniform.bind_group_layout(), &bgl],
+                push_constant_ranges: &[],
+            });
+
+            let targets = [Some(wgpu::ColorTargetState {
+                format: config.format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })];
+
+            let desc = wgpu::RenderPipelineDescriptor{
+                label: Some("ui-render-pipeline-descriptor"),
+                layout: Some(&rpl),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[
+                        UIVertex::desc(),
+                    ],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &targets,
+                }),
+
+                primitive: PrimitiveState {
+                    topology: PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: FrontFace::Cw,
+                    cull_mode: None,
+                    unclipped_depth: false,
+                    polygon_mode: PolygonMode::Fill,
+                    conservative: false,
+                },
+
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+
+                multisample: wgpu::MultisampleState {
+                    count: 1, // 2.
+                    mask: !0, // 3.
+                    alpha_to_coverage_enabled: false, // 4.
+                },
+                multiview: None,
+                cache: None,
+            };
+
+            let render_pipeline = device.create_render_pipeline(&desc);
+            ui_atlases.register(assets_ta, render_pipeline, bg);
+        }
+
+
+
         let this = Self {
+            window,
+            ui_vertex_buff: ResizableBuffer::new("ui-vertex-buffer", &device, BufferUsages::VERTEX | BufferUsages::COPY_SRC | BufferUsages::COPY_DST, 128),
             ui_scale: 1.0,
             rects: vec![],
             draw_count: Cell::new(0),
@@ -594,17 +854,130 @@ impl Renderer {
             device,
             queue,
             config,
-            //mesh_pipeline,
+            mesh_pipeline,
             voxel_pipeline,
             staging_buffer: StagingBelt::new(128 << 20),
             framebuffer,
+            ui_atlases,
+            line_size,
+            characters,
+            white_texture: white,
+
+            mesh_draws: KVec::new(),
+            assets,
+            ui_depth_texture,
         };
 
         this
     }
 
 
-    /*
+    pub fn end(&mut self, encoder: &mut wgpu::CommandEncoder, output: &TextureView) {
+        // draw meshes
+        {
+        }
+
+
+
+        // draw UI
+        let mut z = 0.0;
+        let size = self.window_size();
+        let triangle_count = self.triangle_count.get_mut();
+        let draw_count = self.draw_count.get_mut();
+        let offset = 0.0;
+        let scale = 1.0;
+
+
+        for rect in self.rects.iter() {
+            let tex = rect.tex;
+            let pos = rect.pos;
+            let dims = rect.dims;
+            let modulate = rect.modulate;
+
+            let uvs = self.ui_atlases.get_uv(tex);
+            let buf = self.ui_atlases.buf(tex);
+
+            let x0 = uvs.x;
+            let y0 = uvs.y;
+            let x1 = uvs.z;
+            let y1 = uvs.w;
+
+            z += 0.0001;
+            let z = if let Some(z) = rect.z { z } else { z };
+
+            buf.push(UIVertex::new(pos+dims, Vec2::new(x1, y1), modulate, z));
+            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
+            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
+
+            buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
+            buf.push(UIVertex::new(pos, Vec2::new(x0, y0), modulate, z));
+            buf.push(UIVertex::new(pos+Vec2::new(0.0, dims.y), Vec2::new(x0, y1), modulate, z));
+
+            *triangle_count += 6;
+        }
+
+        let mut vertex_buf = vec![];
+        for (_, (_, _, _, buf)) in self.ui_atlases.atlases.iter() {
+            vertex_buf.extend(buf);
+        }
+
+        let size = self.window_size();
+        let projection = glam::Mat4::orthographic_rh(0.0, size.x as f32, size.y as f32, 0.0, -1.0, 0.0);
+
+        let curr = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let view = Vec4::splat(curr.as_secs_f64().sin() as f32 * 0.5 + 0.5);
+
+        self.ui_atlases.ui_shader_uniform.update(&self.queue, &UiShaderUniform { projection, view });
+
+        self.ui_vertex_buff.resize(&self.device, encoder, vertex_buf.len());
+        self.ui_vertex_buff.write(&mut self.staging_buffer, encoder, &self.device, 0, &vertex_buf);
+
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("atlas-render-pass"),
+            color_attachments: &[
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &output,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })
+            ],
+
+            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                view: &self.ui_depth_texture.view,
+                depth_ops: Some(Operations {
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Discard,
+                }),
+                stencil_ops: None
+            }),
+
+            ..Default::default()
+        });
+
+
+
+        self.ui_atlases.ui_shader_uniform.use_uniform(&mut pass);
+        pass.set_vertex_buffer(0, self.ui_vertex_buff.buffer.slice(..));
+
+        let mut counter = 0;
+        for (_, (_, render_pipeline, bg, buff)) in self.ui_atlases.atlases.iter_mut() {
+            pass.set_pipeline(render_pipeline);
+            pass.set_bind_group(1, &*bg, &[]);
+            pass.draw(counter..counter + buff.len() as u32, 0..1);
+
+            counter += buff.len() as u32;
+            buff.clear();
+        }
+
+        self.rects.clear();
+    }
+
+
     pub fn to_point(&self, pos: Vec2) -> Vec2 {
         pos / self.ui_scale
     }
@@ -616,7 +989,7 @@ impl Renderer {
         let mut active_colour = default_colour;
 
         for l in text.lines() {
-            y += self.biggest_y_size * scale;
+            y += self.line_size * scale;
             x = pos.x;
 
 
@@ -670,12 +1043,12 @@ impl Renderer {
 
 
     pub fn draw_rect(&mut self, pos: Vec2, dims: Vec2, colour: Vec4) {
-        self.draw_tex_rect(pos, dims, self.white, colour);
+        self.draw_tex_rect(pos, dims, self.white_texture, colour);
     }
 
 
     pub fn window_size(&self) -> Vec2 {
-        let (w, h) = self.window.get_size();
+        let (w, h) = (self.config.width, self.config.height);
         Vec2::new(w as _, h as _) / self.ui_scale
     }
 
@@ -692,6 +1065,7 @@ impl Renderer {
     }
 
 
+    /*
     pub fn with_style<F: FnOnce(&mut Self)>(&mut self, style: Style, f: F) {
         let mut prev_rect = self.current_rect;
         self.current_rect = ScreenRect::new();
@@ -722,7 +1096,7 @@ impl Renderer {
         prev_rect.include(self.current_rect);
         self.current_rect = prev_rect;
 
-    }
+    }*/
 
     pub fn draw_tex_rect(&mut self, pos: Vec2, dims: Vec2, tex: TextureId, modulate: Vec4) {
         let rect = DrawRect {
@@ -734,10 +1108,20 @@ impl Renderer {
         };
 
         self.rects.push(rect);
-        self.current_rect.include(ScreenRect { pos, size: dims });
+        //self.current_rect.include(ScreenRect { pos, size: dims });
     }
 
 
+    pub fn draw_mesh(&mut self, mesh: MeshIndex, instance: MeshInstance) {
+        if self.mesh_draws.len() < mesh.usize() {
+            self.mesh_draws.resize(mesh.usize(), vec![]);
+        }
+
+        self.mesh_draws[mesh].push(instance);
+    }
+
+
+    /*
     pub fn draw_item_quat(&self, shader: &ShaderProgram, item_kind: ItemKind, pos: Vec3, mut scale: Vec3, rot: Quat) {
         if let ItemKind::Structure(structure) = item_kind {
             let blocks = structure.blocks(CardinalDirection::North);
@@ -770,23 +1154,13 @@ impl Renderer {
 
 
 
+*/
     pub fn draw_item_icon(&mut self, item: ItemKind, pos: Vec2, dims: Vec2, modulate: Vec4) {
-        let texture = self.meshes.get_ico(item);
+        let texture = self.assets.get_ico(item);
         self.draw_tex_rect(pos, dims, texture, modulate);
     }
+    /*
 
-
-    pub fn draw_mesh(&self, mesh: &Mesh) {
-        let this = &mesh;
-        unsafe {
-            gl::BindVertexArray(this.vao);
-            gl::DrawElements(gl::TRIANGLES, this.indices as _, gl::UNSIGNED_INT, null_mut());
-            gl::BindVertexArray(0);
-        }
-
-        self.triangle_count.set(self.triangle_count.get() + mesh.indices);
-        self.draw_count.set(self.draw_count.get() + 1);
-    }
 
 
     pub fn draw_voxel_mesh(&self, mesh: &ChunkMesh) {
@@ -801,13 +1175,14 @@ impl Renderer {
         self.draw_count.set(self.draw_count.get() + 1);
     }
 
+*/
 
     pub fn text_size(&self, str: &str, scale: f32) -> Vec2 {
         let mut y_size : f32 = 0.0;
         let mut x_size : f32 = 0.0;
 
         for l in str.lines() {
-            y_size += self.biggest_y_size * scale;
+            y_size += self.line_size * scale;
             let mut local_x_size = 0.0;
 
             for c in l.chars() {
@@ -819,14 +1194,18 @@ impl Renderer {
         }
 
         Vec2::new(x_size, y_size)
-    }*/
+    }
 }
 
 
 #[repr(C)]
+#[derive(Pod, Zeroable, Clone, Copy, Debug)]
 pub struct UIVertex {
     position: Vec3,
+    pad: f32,
     uv: Vec2,
+    pad1: f32,
+    pad2: f32,
     modulate: Vec4,
 }
 
@@ -837,6 +1216,34 @@ impl UIVertex {
             position: Vec3::new(position.x, position.y, z),
             uv,
             modulate,
+            pad: 0.0,
+            pad1: 0.0,
+            pad2: 0.0,
+        }
+    }
+
+
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<UIVertex>() as u64,
+            step_mode: VertexStepMode::Vertex,
+            attributes: &[
+                VertexAttribute {
+                    format: VertexFormat::Float32x3,
+                    offset: offset_of!(UIVertex, position) as _,
+                    shader_location: 0,
+                },
+                VertexAttribute {
+                    format: VertexFormat::Float32x2,
+                    offset: offset_of!(UIVertex, uv) as _,
+                    shader_location: 1,
+                },
+                VertexAttribute {
+                    format: VertexFormat::Float32x4,
+                    offset: offset_of!(UIVertex, modulate) as _,
+                    shader_location: 2,
+                }
+            ],
         }
     }
 }
@@ -997,7 +1404,7 @@ pub struct DepthBuffer {
 }
 
 impl DepthBuffer {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+    pub fn new(device: &wgpu::Device, width: u32, height: u32, sample_count: u32) -> Self {
         let format = wgpu::TextureFormat::Depth32Float;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Depth Texture"),
@@ -1007,7 +1414,7 @@ impl DepthBuffer {
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: MSAA_SAMPLE_COUNT,
+            sample_count,
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

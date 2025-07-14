@@ -1,9 +1,10 @@
 use glam::{DVec3, IVec3, UVec3};
+use rand::seq::IndexedRandom;
 use sti::{define_key, vec::KVec};
 use tracing::warn;
 use wgpu::wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs};
 
-use crate::{constants::{CHUNK_SIZE_I32, REGION_SIZE}, directions::Direction, frustum::Frustum, voxel_world::{chunker::ChunkPos, mesh::ChunkFaceMesh}, constants::{RENDER_DISTANCE}};
+use crate::{constants::{CHUNK_SIZE_I32, QUAD_VERTICES, REGION_SIZE, RENDER_DISTANCE}, directions::Direction, frustum::Frustum, voxel_world::{chunker::ChunkPos, mesh::ChunkFaceMesh}};
 
 
 #[derive(Debug)]
@@ -290,8 +291,8 @@ impl MeshOctree {
                     */
 
 
-                    let vo = mesh.vertex.offset as u32;
-                    let vs = mesh.vertex.size as u32;
+                    let vo = mesh.quads.offset as u32;
+                    let vs = mesh.quads.size as u32;
 
                     buffer.push(DrawIndirectArgs {
                         instance_count: vs,

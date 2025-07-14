@@ -2,11 +2,11 @@ pub mod save_system;
 
 use std::time::Instant;
 
-use glam::{DVec3, IVec3, Vec3, Vec4};
+use glam::{DVec3, IVec3, Vec2, Vec3, Vec4};
 use tracing::{info, warn};
-use winit::{event::MouseButton, keyboard::KeyCode};
+use winit::{dpi::LogicalPosition, event::MouseButton, keyboard::KeyCode, window::CursorGrabMode};
 
-use crate::{commands::{Command, CommandRegistry}, directions::CardinalDirection, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick, constants::{DELTA_TICK, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND}};
+use crate::{commands::{Command, CommandRegistry}, constants::{DELTA_TICK, LOAD_DISTANCE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::CardinalDirection, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::Renderer, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick};
 
 pub struct Game {
     pub world: VoxelWorld,
@@ -24,6 +24,7 @@ pub struct Game {
     pub total_rendered_chunks: u32,
     pub lock_frustum: Option<Frustum>,
     pub sky_colour: Vec4,
+    is_mouse_locked: bool,
     ui_layer: UILayer,
 
     pub settings: Settings,
@@ -40,6 +41,7 @@ pub struct Settings {
     pub delta_tick: f32,
     pub player_speed: f32,
     pub render_distance: i32,
+    pub lines: bool,
 }
 
 
@@ -95,11 +97,14 @@ impl Game {
             craft_progress: 0,
 
             ui_layer: UILayer::Gameplay { smoothed_dt: 0.0 },
+            is_mouse_locked: true,
+
             settings: Settings {
                 ui_scale: 1.0,
                 delta_tick: DELTA_TICK,
                 player_speed: PLAYER_SPEED,
                 render_distance: 1,
+                lines: false,
             },
 
         };
@@ -215,20 +220,22 @@ impl Game {
         // handle mouse movement 
         if matches!(self.ui_layer, UILayer::Gameplay { .. }) {
             let dt = input.mouse_delta();
-            self.camera.yaw += dt.x * MOUSE_SENSITIVITY;
-            self.camera.pitch -= dt.y * MOUSE_SENSITIVITY;
-            
-            self.camera.yaw = self.camera.yaw % 360f32.to_radians();
+            if !dt.is_nan() {
+                self.camera.yaw += dt.x * MOUSE_SENSITIVITY;
+                self.camera.pitch -= dt.y * MOUSE_SENSITIVITY;
+                
+                self.camera.yaw = self.camera.yaw % 360f32.to_radians();
 
-            self.camera.pitch = self.camera.pitch.clamp((-89.9f32).to_radians(), 89.99f32.to_radians()) % 360f32.to_radians();
+                self.camera.pitch = self.camera.pitch.clamp((-89.9f32).to_radians(), 89.99f32.to_radians()) % 360f32.to_radians();
 
-            let yaw = self.camera.yaw;
-            let pitch = self.camera.pitch;
-            let x = yaw.cos() * pitch.cos();
-            let y = pitch.sin();
-            let z = yaw.sin() * pitch.cos();
+                let yaw = self.camera.yaw;
+                let pitch = self.camera.pitch;
+                let x = yaw.cos() * pitch.cos();
+                let y = pitch.sin();
+                let z = yaw.sin() * pitch.cos();
 
-            self.camera.front = Vec3::new(x, y, z).normalize();
+                self.camera.front = Vec3::new(x, y, z).normalize();
+            }
 
 
             let dt = input.scroll_delta();
@@ -408,6 +415,11 @@ impl Game {
             }
 
 
+            if input.is_key_just_pressed(KeyCode::KeyP) {
+                self.settings.lines = !self.settings.lines;
+            }
+
+
             if input.is_key_just_pressed(KeyCode::Enter) {
                 if !matches!(self.ui_layer, UILayer::Console { .. }) {
                     self.ui_layer = UILayer::Console {
@@ -458,6 +470,12 @@ impl Game {
         }
 
 
+        if let Some((pos, _))= self.world.raycast_voxel(self.camera.position,
+                                                     self.camera.front,
+                                                     PLAYER_REACH) {
+        }
+
+
         // handle block interactions
         'outer: {
             self.player.interact_delay -= delta_time;
@@ -498,8 +516,6 @@ impl Game {
 
 
                 let item = self.world.break_block(&mut self.structures, pos);
-
-
                 let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5));
 
                 self.world.dropped_items.push(dropped_item);
@@ -607,8 +623,8 @@ impl Game {
         }
 
 
-        if 
-            self.world.chunker.mesh_load_queue_len() == 0
+        if self.settings.render_distance < RENDER_DISTANCE
+            && self.world.chunker.mesh_load_queue_len() == 0
             && self.world.chunker.chunk_load_queue_len() == 0
             && self.world.chunker.chunk_active_jobs_len() == 0
             && self.world.chunker.mesh_active_jobs_len() == 0 {
@@ -623,18 +639,35 @@ impl Game {
                         let offset = IVec3::new(x, y, z);
                         let dist = offset.length_squared();
                         let chunk_pos = offset + player_chunk;
-
-                        /*
-                        let entry = self.world.chunker.get_mesh_entry(WorldChunkPos(chunk_pos));
-                        if !matches!(entry, MeshEntry::None) {
-                            continue;
-                        }*/
-
-                        if dist < rdp1*rdp1 {
-                            self.world.try_get_chunk(chunk_pos);
-                        }
-
                         if dist < rd*rd {
+                            self.world.try_get_chunk(chunk_pos);
+                            self.world.try_get_mesh(chunk_pos);
+                        }
+                    }
+                }
+            }
+
+            self.settings.render_distance += 1;
+            self.settings.render_distance = self.settings.render_distance.min(RENDER_DISTANCE);
+        }
+
+
+        if self.world.chunker.mesh_load_queue_len() == 0
+            && self.world.chunker.chunk_load_queue_len() == 0
+            && self.world.chunker.chunk_active_jobs_len() == 0
+            && self.world.chunker.mesh_active_jobs_len() == 0 {
+
+            let player_chunk = IVec3::ZERO;
+            let rd = self.settings.render_distance;
+
+            for y in -rd..=rd {
+                for z in -rd..=rd {
+                    for x in -rd..=rd {
+                        let offset = IVec3::new(x, y, z);
+                        let dist = offset.length_squared();
+                        let chunk_pos = offset + player_chunk;
+
+                        if dist < LOAD_DISTANCE*LOAD_DISTANCE {
                             self.world.try_get_mesh(chunk_pos);
                         }
                     }
@@ -658,13 +691,13 @@ impl Game {
 
             'unload:
             for (pos, chunk, mesh) in self.world.chunker.iter_chunks() {
-                break;
                 if self.world.chunker.is_queued_for_unloading(pos) {
                     warn!("skipping cos queued for unloading");
                     continue;
                 }
 
                 let offset = (pos.0-player_chunk).length_squared();
+                if offset < LOAD_DISTANCE*LOAD_DISTANCE { continue }
 
                 let chunk = match chunk {
                     ChunkEntry::Loaded(chunk) => chunk,
@@ -672,6 +705,7 @@ impl Game {
                         continue
                     }
                 };
+
 
                 let full_unload = offset > RENDER_DISTANCE*RENDER_DISTANCE;
 
@@ -828,7 +862,6 @@ impl Game {
 
 
         self.structures.process(&mut self.world);
-    }
 
     /*
         // render meshes
@@ -1041,15 +1074,20 @@ impl Game {
             self.shader_mesh.set_vec4(c"modulate", colour);
             self.block_outline_mesh.draw();
         }
+    */
+    }
 
 
+
+    pub fn render(&mut self, renderer: &mut Renderer, input: &mut InputManager, delta_time: f32) {
+        renderer.ui_scale = self.settings.ui_scale;
         // render crossair & hotbar 
         {
-            let window = self.renderer.window_size();
+            let window = renderer.window_size();
 
             // crossair
             let midpoint = window / 2.0;
-            self.renderer.draw_rect(
+            renderer.draw_rect(
                 midpoint - UI_CROSSAIR_SIZE*0.5,
                 Vec2::splat(UI_CROSSAIR_SIZE),
                 UI_CROSSAIR_COLOUR
@@ -1077,22 +1115,22 @@ impl Game {
                 let colour = if i == hand { UI_HOTBAR_SELECTED_BG }
                              else { UI_HOTBAR_UNSELECTED_BG };
 
-                self.renderer.draw_rect(
+                renderer.draw_rect(
                     start,
                     Vec2::splat(UI_SLOT_SIZE),
                     colour
                 );
 
                 if let Some(item) = slot {
-                    self.renderer.draw_item_icon(
+                    renderer.draw_item_icon(
                          item.kind,
                          start+UI_ITEM_OFFSET,
                          Vec2::splat(UI_ITEM_SIZE),
                          Vec4::ONE
-                     );
+                    );
 
                     if item.amount > 0 {
-                        self.renderer.draw_text(
+                        renderer.draw_text(
                             format!("{}", item.amount).as_str(),
                             start+UI_ITEM_OFFSET,
                             UI_ITEM_AMOUNT_SCALE,
@@ -1108,6 +1146,44 @@ impl Game {
         }
 
 
+
+        // render current ui layer
+        let mut ui_layer = core::mem::replace(&mut self.ui_layer, UILayer::None);
+        ui_layer.render(self, &input, renderer, delta_time);
+        if matches!(self.ui_layer, UILayer::None) {
+            self.ui_layer = ui_layer;
+
+            let cm = self.ui_layer.is_mouse_locked();
+            if self.is_mouse_locked != cm {
+                self.is_mouse_locked = cm;
+                let window = renderer.window_size();
+
+                let pos = LogicalPosition::new(
+                    window.x as f64 / 4.0,
+                    window.y as f64 / 4.0
+                );
+
+                renderer.window.set_cursor_position(pos).unwrap();
+                if cm {
+                    renderer.window.set_cursor_visible(false);
+                    renderer.window.set_cursor_grab(CursorGrabMode::Confined) // or Locked
+                        .or_else(|_| renderer.window.set_cursor_grab(CursorGrabMode::Locked))
+                        .unwrap();
+                } else {
+                    renderer.window.set_cursor_visible(true);
+                    renderer.window.set_cursor_grab(CursorGrabMode::None).unwrap();
+                }
+
+                input.move_cursor(Vec2::NAN);
+                input.move_cursor(Vec2::NAN);
+                input.move_cursor(Vec2::NAN);
+            }
+        }
+
+
+
+
+/*
 
         // render "interact with structure" text
         if let Some((raycast, _)) = self.world.raycast_voxel(camera,
@@ -1154,8 +1230,6 @@ impl Game {
                 input.move_cursor(Vec2::NAN);
                 input.move_cursor(Vec2::NAN);
             }
-
-
         }
 
 
@@ -1200,7 +1274,8 @@ impl Game {
 
 
         self.renderer.end();
-    }*/
+*/
+    }
 }
 
 
