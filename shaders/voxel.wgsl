@@ -22,16 +22,6 @@ struct VertexOut {
 };
 
 
-struct FragmentIn {
-    @location(1) normal    : vec3<f32>,
-    @location(2) frag_pos  : vec3<f32>,
-    @location(3) v_distance: f32,
-    @location(4) tex_coords: vec2<f32>,
-    @location(5)      id        : u32,
-    @location(6) colour    : vec3<f32>,
-};
-
-
 struct ChunkMeshFramedata {
     offset: vec3<i32>,
     normal: u32,
@@ -188,7 +178,7 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 
 
 @fragment
-fn fs_main(in: FragmentIn) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let fog_factor = clamp((u.fog_end - in.v_distance) / (u.fog_end - u.fog_start), 0.0, 1.0);
 
     let base = f32(in.id) * TILE_SIZE;

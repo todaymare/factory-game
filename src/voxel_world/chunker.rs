@@ -2,7 +2,6 @@ use std::{collections::{HashMap, HashSet}, num::NonZeroU32, sync::{atomic::Atomi
 
 use bytemuck::Zeroable;
 use glam::{IVec3, UVec3};
-use glfw::ffi::CENTER_CURSOR;
 use rand::seq::IndexedRandom;
 use save_format::byte::{ByteReader, ByteWriter};
 use sti::key::Key;

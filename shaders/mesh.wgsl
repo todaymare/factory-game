@@ -48,13 +48,18 @@ fn vs_main(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
     var out: VertexOut;
     let colour   = unpack_color(vertex.colour);
     let model = mat4x4(instance.model0, instance.model1, instance.model2, instance.model3);
-    out.modulate = colour;
+    out.modulate = instance.modulate * colour;
     out.position = u.projection * u.view * model * vec4f(vertex.position, 1.0);
     return out;
 }
 
 @fragment
-fn fs_main(in: FragmentIn) -> @location(0) vec4<f32> {
-    return in.colour;
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4(
+        pow(in.modulate.x, 2.2),
+        pow(in.modulate.y, 2.2),
+        pow(in.modulate.z, 2.2),
+        pow(in.modulate.w, 2.2),
+    );
 }
 

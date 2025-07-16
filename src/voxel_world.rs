@@ -314,7 +314,12 @@ impl VoxelWorld {
         while self.chunker.chunk_load_queue_len() > 0 { self.chunker.process_chunk_queue(128); }
         while self.chunker.chunk_active_jobs_len() > 0 { self.chunker.process_chunk_jobs(512); }
 
-        let chunks = self.chunker.iter_chunks().map(|x| x.0).collect::<Vec<_>>();
+        let chunks = self.chunker.iter_chunks().filter(|x| {
+            if let chunker::ChunkEntry::Loaded(c) = x.1 {
+                c.is_dirty
+            } else { false }
+        }).map(|x| x.0).collect::<Vec<_>>();
+
         for pos in chunks { self.chunker.save_chunk(pos); }
         while self.chunker.chunk_save_jobs.fetch_add(0, std::sync::atomic::Ordering::SeqCst) > 0 { spin_loop(); }
 

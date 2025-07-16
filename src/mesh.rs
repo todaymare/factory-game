@@ -10,8 +10,8 @@ use wgpu::{util::{BufferInitDescriptor, DeviceExt}, Buffer, BufferUsages};
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct MeshInstance {
-    modulate: Vec4,
-    model: Mat4,
+    pub modulate: Vec4,
+    pub model: Mat4,
 }
 
 
@@ -19,6 +19,7 @@ pub struct MeshInstance {
 pub struct Mesh {
     pub vertices: Buffer,
     pub indices : Buffer,
+    pub index_count: u32,
 }
 
 
@@ -58,6 +59,7 @@ impl Mesh {
         Self {
             vertices: vertices_buffer,
             indices: indices_buffer,
+            index_count: indices.len() as _,
         }
     }
 }
@@ -76,7 +78,6 @@ pub fn vertex_desc() -> wgpu::VertexBufferLayout<'static> {
 
 
 impl MeshInstance {
-
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         const ATTRS: &[wgpu::VertexAttribute] =
             &wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4];

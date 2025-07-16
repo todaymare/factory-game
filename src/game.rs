@@ -2,11 +2,12 @@ pub mod save_system;
 
 use std::time::Instant;
 
-use glam::{DVec3, IVec3, Vec2, Vec3, Vec4};
+use glam::{DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
+use sti::hash::fxhash::fxhash32;
 use tracing::{info, warn};
 use winit::{dpi::LogicalPosition, event::MouseButton, keyboard::KeyCode, window::CursorGrabMode};
 
-use crate::{commands::{Command, CommandRegistry}, constants::{DELTA_TICK, LOAD_DISTANCE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::CardinalDirection, frustum::Frustum, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::Renderer, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick};
+use crate::{commands::{Command, CommandRegistry}, constants::{COLOUR_DENY, COLOUR_PASS, DELTA_TICK, DROPPED_ITEM_SCALE, LOAD_DISTANCE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::CardinalDirection, frustum::Frustum, input::InputManager, items::{Assets, DroppedItem, Item, ItemKind, MeshIndex}, mesh::{Mesh, MeshInstance}, renderer::Renderer, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick};
 
 pub struct Game {
     pub world: VoxelWorld,
@@ -28,8 +29,6 @@ pub struct Game {
     ui_layer: UILayer,
 
     pub settings: Settings,
-
-    //block_outline_mesh: Mesh,
 
     //shader_mesh: ShaderProgram,
     //shader_world: ShaderProgram,
@@ -66,8 +65,8 @@ impl Game {
                 yaw: 90.0f32.to_radians(),
                 fov: 80.069f32.to_radians(),
                 aspect_ratio: 16.0/9.0,
-                near: 0.05,
-                far: 5_000.0,
+                near: 0.01,
+                far: 100.0,
 
             },
 
@@ -106,7 +105,6 @@ impl Game {
                 render_distance: 1,
                 lines: false,
             },
-
         };
 
 
@@ -1075,11 +1073,224 @@ impl Game {
             self.block_outline_mesh.draw();
         }
     */
+
+
     }
 
 
 
     pub fn render(&mut self, renderer: &mut Renderer, input: &mut InputManager, delta_time: f32) {
+        // render dropped items
+        let items = self.world.dropped_items.iter()
+            .chain(self.player.pulling.iter());
+
+        for dropped_item in items {
+            let pos = dropped_item.body.position - self.camera.position;
+            let lifetime = self.current_tick - dropped_item.creation_tick;
+
+            let scale = Vec3::splat(DROPPED_ITEM_SCALE);
+
+            // vary the rotation for each item randomly
+            let hash = fxhash32(&dropped_item.creation_tick);
+            let offset = (hash % 1024) as f32;
+
+            let rot = (lifetime.u32() as f32 + offset) / TICKS_PER_SECOND as f32;
+
+            let instance = MeshInstance {
+                modulate: Vec4::ONE,
+                model: Mat4::from_scale_rotation_translation(scale, Quat::from_rotation_y(rot), pos.as_vec3()),
+            };
+
+            renderer.draw_item(
+                dropped_item.item.kind,
+                instance,
+            );
+        }
+
+
+
+        // render structures
+        for (_, s) in self.structures.structs.iter() {
+            // TODO: frustum culling for structures
+            s.render(
+                &self.structures,
+                &self.camera,
+                renderer,
+            );
+        }
+
+
+
+        'block: {
+            let Some((pos, norm)) =
+                self.world.raycast_voxel(self.camera.position,
+                                         self.camera.front,
+                                         PLAYER_REACH)
+            else { break 'block };
+
+            let held_item = self.player.inventory[self.player.hand_index()];
+
+            if let Some(held_item) = held_item
+                && matches!(held_item.kind,   ItemKind::Voxel(_)
+                                            | ItemKind::Structure(_)) {
+
+                let mut scale = Vec3::ONE;
+
+                let dir = self.camera.compass_direction()
+                    .next_n(self.player.preview_rotation_offset);
+
+                let (origin, blocks, colour, mesh) =
+                match held_item.kind {
+                    ItemKind::Structure(kind) => {
+                        if matches!(kind,   StructureKind::Belt
+                                          | StructureKind::Splitter) {
+                            scale = Vec3::new(1.0, 0.8, 1.0);
+                        }
+
+                        let origin = kind.origin(dir);
+                        let can_place =
+                            self.can_place_structure(kind, pos+norm, dir);
+
+                        let colour = match can_place {
+                            true => COLOUR_PASS,
+                            false => COLOUR_DENY,
+                        };
+
+                        let blocks = kind.blocks(dir);
+
+                        let mesh = renderer.assets.get_item(held_item.kind);
+
+                        (origin, blocks, colour, mesh)
+                    }
+
+
+                    ItemKind::Voxel(voxel) => {
+                        (IVec3::ZERO, [IVec3::ZERO].as_ref(),
+                        voxel.colour(), renderer.assets.cube)
+                    }
+                    _ => unreachable!()
+                };
+
+
+                let (mesh_pos, dims) = {
+                    let mut min = IVec3::MAX;
+                    let mut max = IVec3::MIN;
+                    let mut pos_min = IVec3::MAX;
+                    let mut pos_max = IVec3::MIN;
+
+                    let zero_zero = (pos + norm) - origin;
+                    let position = zero_zero;
+                    for &offset in blocks {
+                        min = min.min(offset);
+                        max = max.max(offset);
+                        pos_min = pos_min.min(position + offset);
+                        pos_max = pos_max.max(position + offset);
+                    }
+
+
+                    let dims = (max - min).abs().as_vec3() + Vec3::ONE;
+                    let mesh_pos = (pos_min + pos_max).as_dvec3() * 0.5;
+                    let mesh_pos = mesh_pos + DVec3::splat(0.5) - self.camera.position;
+
+                    (mesh_pos, dims)
+                };
+
+
+                let rot = dir.as_ivec3().as_vec3();
+                let rot = rot.x.atan2(rot.z) + 90f32.to_radians();
+
+
+                let colour = Vec4::new(colour.x, colour.y, colour.z, 0.8);
+
+
+                // draw the ghost
+                // we use scale here because the mesh should be scaled
+                let model = Mat4::from_scale_rotation_translation(
+                    scale * Vec3::splat(0.99),
+                    Quat::from_rotation_y(rot),
+                    mesh_pos.as_vec3()
+                );
+
+                renderer.draw_mesh(mesh, MeshInstance { modulate: colour, model });
+
+
+                // draw the outline
+                // we use dims here because `block_outline_mesh` is 1x1x1
+                let model = Mat4::from_scale_rotation_translation(
+                    dims * Vec3::splat(1.01),
+                    Quat::IDENTITY,
+                    mesh_pos.as_vec3()
+                );
+
+                renderer.draw_mesh(
+                    renderer.assets.block_outline_mesh,
+                    MeshInstance { modulate: colour, model }
+                );
+
+                break 'block;
+            }
+
+
+            // well i guess it's just a mid ass block
+
+            let voxel = self.world.get_voxel(pos);
+            let (mesh_pos, dims) = match voxel {
+                Voxel::StructureBlock => {
+                    let strct = self.world.structure_blocks[&pos];
+
+                    let strct = self.structures.get(strct);
+                    let blocks = strct.data.as_kind().blocks(strct.direction);
+
+                    let mut min = IVec3::MAX;
+                    let mut max = IVec3::MIN;
+                    let mut pos_min = IVec3::MAX;
+                    let mut pos_max = IVec3::MIN;
+
+                    let position = strct.zero_zero();
+                    for &offset in blocks {
+                        min = min.min(offset);
+                        max = max.max(offset);
+                        pos_min = pos_min.min(position + offset);
+                        pos_max = pos_max.max(position + offset);
+                    }
+
+                    let dims = (max - min).abs().as_vec3() + Vec3::ONE;
+                    let mesh_pos = (pos_min + pos_max).as_dvec3() * 0.5;
+
+                    (mesh_pos, dims)
+                },
+
+
+                _ => (pos.as_dvec3(), Vec3::ONE)
+            };
+
+            let colour =
+            if let Some(mining_progress) = self.player.mining_progress {
+                let target_hardness = voxel.base_hardness();
+                let progress = mining_progress as f32 / target_hardness as f32;
+                let eased = 1.0 - progress.powf(3.0);
+                (Vec4::ONE * eased).with_w(1.0)
+            } else {
+                Vec4::ONE
+            };
+
+
+            // the scale is slightly larger than 1 to combat z-fighting
+            let model = Mat4::from_scale_rotation_translation(
+                dims * Vec3::splat(1.01),
+                Quat::IDENTITY,
+                (mesh_pos + DVec3::splat(0.5) - self.camera.position).as_vec3()
+            );
+
+
+            renderer.draw_mesh(
+                renderer.assets.block_outline_mesh,
+                MeshInstance { modulate: colour, model }
+            );
+        }
+
+
+
         renderer.ui_scale = self.settings.ui_scale;
         // render crossair & hotbar 
         {
@@ -1183,10 +1394,9 @@ impl Game {
 
 
 
-/*
 
         // render "interact with structure" text
-        if let Some((raycast, _)) = self.world.raycast_voxel(camera,
+        if let Some((raycast, _)) = self.world.raycast_voxel(self.camera.position,
                                                              self.camera.front,
                                                              PLAYER_REACH)
            && let Some(structure) = self.world.structure_blocks.get(&raycast) {
@@ -1195,22 +1405,23 @@ impl Game {
                   StructureData::Chest
                 | StructureData::Silo
                 | StructureData::Assembler { .. } => {
-                    let window = self.renderer.window_size();
+                    let window = renderer.window_size();
                     
                     let text = "Press E to interact";
-                    let size = self.renderer.text_size(&text, 0.5);
+                    let size = renderer.text_size(&text, 0.5);
                     let size = Vec2::new(
                         window.x*0.5 - size.x*0.5,
                         window.y - UI_SLOT_PADDING*2.0 - UI_SLOT_SIZE - size.y
                     );
 
-                    self.renderer.draw_text(text, size, 0.5, Vec4::ONE);
+                    renderer.draw_text(text, size, 0.5, Vec4::ONE);
 
                 },
                 _ => (),
             }
         }
 
+/*
 
         // render current ui layer
         let mut ui_layer = core::mem::replace(&mut self.ui_layer, UILayer::None);

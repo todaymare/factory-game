@@ -51,8 +51,9 @@ define_key!(pub MeshIndex(u32));
 pub struct Assets {
     textures: HashMap<ItemKind, TextureId>,
     models: HashMap<ItemKind, MeshIndex>,
-    meshes: KVec<MeshIndex, Mesh>,
+    pub meshes: KVec<MeshIndex, Mesh>,
     pub cube: MeshIndex,
+    pub block_outline_mesh: MeshIndex,
 }
 
 
@@ -242,6 +243,7 @@ impl Assets {
 
 
         Self {
+            block_outline_mesh: meshes.push(Mesh::from_vmf(device, "assets/models/block_outline.vmf")),
             models,
             textures,
             cube: white_mesh,
@@ -250,8 +252,8 @@ impl Assets {
     }
 
 
-    pub fn get(&self, kind: ItemKind) -> &Mesh {
-        &self.meshes[*self.models.get(&kind).unwrap()]
+    pub fn get_item(&self, kind: ItemKind) -> MeshIndex {
+        *self.models.get(&kind).unwrap()
     }
 
     pub fn get_ico(&self, kind: ItemKind) -> TextureId {

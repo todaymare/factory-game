@@ -40,6 +40,7 @@ fn vs_main(vertex: VertexIn) -> VertexOut {
     var output : VertexOut;
 
     output.position = u.projection * vec4(vertex.position, 1.0);
+
     output.uv = vertex.uv;
     output.modulate = vertex.modulate;
     return output;

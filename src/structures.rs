@@ -4,14 +4,14 @@ pub mod belts;
 pub mod inventory;
 
 
-use glam::{IVec3, Vec3};
+use glam::{DVec3, IVec3, Mat4, Quat, Vec3, Vec4};
 use inventory::StructureInventory;
-use sti::define_key;
+use sti::{define_key, hash::fxhash::fxhash32};
 use strct::{rotate_block_vector, InserterState, Structure, StructureData, StructureKind};
 use tracing::warn;
 use work_queue::WorkQueue;
 
-use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::Item, renderer::Renderer, shader::ShaderProgram, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick};
+use crate::{constants::{DROPPED_ITEM_SCALE, TICKS_PER_SECOND}, crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, mesh::MeshInstance, renderer::Renderer, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
@@ -580,12 +580,11 @@ impl Structure {
 
 
 
-    pub fn render(&self, structures: &Structures, camera: &Camera, renderer: &Renderer, shader: &ShaderProgram) {
-        /*
+    pub fn render(&self, structures: &Structures, camera: &Camera, renderer: &mut Renderer) {
         let kind = self.data.as_kind();
 
         let position = self.zero_zero();
-        let mesh = renderer.meshes.get(kind.item_kind());
+        let mesh = renderer.assets.get_item(kind.item_kind());
 
         let blocks = self.data.as_kind().blocks(self.direction);
         let mut pos_min = IVec3::MAX;
@@ -614,7 +613,17 @@ impl Structure {
                     if let Some(item) = item {
                         let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
                                   else { 90f32.to_radians() };
-                        renderer.draw_item(shader, item.kind, left_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
+
+                        let instance = MeshInstance {
+                            modulate: Vec4::ONE,
+                            model: Mat4::from_scale_rotation_translation(
+                                Vec3::splat(DROPPED_ITEM_SCALE), 
+                                Quat::from_rotation_x(rot), 
+                                left_base
+                            ),
+                        };
+
+                        renderer.draw_item(item.kind, instance);
                     }
                 }
 
@@ -624,7 +633,17 @@ impl Structure {
                     if let Some(item) = item {
                         let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
                                   else { 90f32.to_radians() };
-                        renderer.draw_item(shader, item.kind, right_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
+
+                        let instance = MeshInstance {
+                            modulate: Vec4::ONE,
+                            model: Mat4::from_scale_rotation_translation(
+                                Vec3::splat(DROPPED_ITEM_SCALE), 
+                                Quat::from_rotation_x(rot), 
+                                right_base
+                            ),
+                        };
+
+                        renderer.draw_item(item.kind, instance);
                     }
                 }
             }
@@ -643,7 +662,17 @@ impl Structure {
                     if let Some(item) = item {
                         let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
                                   else { 90f32.to_radians() };
-                        renderer.draw_item(shader, item.kind, left_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
+
+                        let instance = MeshInstance {
+                            modulate: Vec4::ONE,
+                            model: Mat4::from_scale_rotation_translation(
+                                Vec3::splat(DROPPED_ITEM_SCALE), 
+                                Quat::from_rotation_x(rot), 
+                                left_base
+                            ),
+                        };
+
+                        renderer.draw_item(item.kind, instance);
                     }
                 }
 
@@ -653,7 +682,17 @@ impl Structure {
                     if let Some(item) = item {
                         let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
                                   else { 90f32.to_radians() };
-                        renderer.draw_item(shader, item.kind, right_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
+
+                        let instance = MeshInstance {
+                            modulate: Vec4::ONE,
+                            model: Mat4::from_scale_rotation_translation(
+                                Vec3::splat(DROPPED_ITEM_SCALE), 
+                                Quat::from_rotation_x(rot), 
+                                right_base
+                            ),
+                        };
+
+                        renderer.draw_item(item.kind, instance);
                     }
                 }
 
@@ -666,7 +705,17 @@ impl Structure {
                     if let Some(item) = item {
                         let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
                                   else { 90f32.to_radians() };
-                        renderer.draw_item(shader, item.kind, left_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
+
+                        let instance = MeshInstance {
+                            modulate: Vec4::ONE,
+                            model: Mat4::from_scale_rotation_translation(
+                                Vec3::splat(DROPPED_ITEM_SCALE), 
+                                Quat::from_rotation_x(rot), 
+                                left_base
+                            ),
+                        };
+
+                        renderer.draw_item(item.kind, instance);
                     }
                 }
 
@@ -676,7 +725,17 @@ impl Structure {
                     if let Some(item) = item {
                         let rot = if matches!(item.kind, ItemKind::Structure(_)) { 0.0 }
                                   else { 90f32.to_radians() };
-                        renderer.draw_item(shader, item.kind, right_base, Vec3::splat(DROPPED_ITEM_SCALE), Vec3::new(rot, 0.0, 0.0));
+
+                        let instance = MeshInstance {
+                            modulate: Vec4::ONE,
+                            model: Mat4::from_scale_rotation_translation(
+                                Vec3::splat(DROPPED_ITEM_SCALE), 
+                                Quat::from_rotation_x(rot), 
+                                right_base
+                            ),
+                        };
+
+                        renderer.draw_item(item.kind, instance);
                     }
                 }
             }
@@ -688,9 +747,18 @@ impl Structure {
 
                 let hash = fxhash32(&self.position) % 1024;
                 let t = (hash + structures.current_tick.u32()) as f32 / TICKS_PER_SECOND as f32;
-                let rotation = Vec3::new(t, t * 0.7, t * 1.3);
+                let r = Vec3::new(t, t * 0.7, t * 1.3);
 
-                renderer.draw_item(shader, recipe.result.kind, mesh_position, Vec3::splat(1.2), rotation);
+                let instance = MeshInstance {
+                    modulate: Vec4::ONE,
+                    model: Mat4::from_scale_rotation_translation(
+                        Vec3::splat(1.2),
+                        Quat::from_euler(glam::EulerRot::XYZ, r.x, r.y, r.z),
+                        mesh_position,
+                    ),
+                };
+
+                renderer.draw_item(recipe.result.kind, instance);
             }
             _ => (),
         }
@@ -700,9 +768,13 @@ impl Structure {
         let rot = rot.x.atan2(rot.z);
         let rot = rot + 90f32.to_radians();
         let model = Mat4::from_translation(mesh_position) * Mat4::from_scale(dims) * Mat4::from_rotation_y(rot);
-        shader.set_matrix4(c"model", model);
-        mesh.draw();
-        */
+
+        let instance = MeshInstance {
+            modulate: Vec4::ONE,
+            model,
+        };
+
+        renderer.draw_mesh(mesh, instance);
     }
 }
 

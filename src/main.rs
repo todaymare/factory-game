@@ -7,7 +7,6 @@
 #![feature(iter_array_chunks)]
 #![feature(seek_stream_len)]
 
-pub mod shader;
 pub mod mesh;
 pub mod quad;
 pub mod renderer;
@@ -42,11 +41,11 @@ use glam::{DVec2, DVec3, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
 use input::InputManager;
 use items::{DroppedItem, Item};
 use renderer::{create_multisampled_framebuffer, DepthBuffer, Renderer, VoxelShaderUniform};
-use wgpu::wgt::DrawIndirectArgs;
+use wgpu::{wgt::DrawIndirectArgs, TextureViewDescriptor};
 use winit::{dpi::LogicalSize, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, window::{CursorGrabMode, Window, WindowId}};
 use winit::application::ApplicationHandler;
 
-use crate::constants::MSAA_SAMPLE_COUNT;
+use crate::{constants::MSAA_SAMPLE_COUNT, renderer::RenderSettings};
 
 
 
@@ -76,6 +75,8 @@ impl ApplicationHandler for App {
         window.set_cursor_grab(CursorGrabMode::Confined) // or Locked
             .or_else(|_| window.set_cursor_grab(CursorGrabMode::Locked))
             .unwrap();
+
+        self.game.load();
 
         self.renderer = Some(pollster::block_on(Renderer::new(window)));
     }
@@ -120,7 +121,8 @@ impl ApplicationHandler for App {
                 match state {
                     winit::event::ElementState::Pressed => self.input.set_pressed_button(button),
                     winit::event::ElementState::Released => self.input.set_unpressed_button(button),
-                }
+                };
+
             }
 
             WindowEvent::CursorMoved { position: pos, .. } => {
@@ -142,6 +144,11 @@ impl ApplicationHandler for App {
                         }
                     },
                     winit::event::ElementState::Released => self.input.set_unpressed_key(event.physical_key),
+                };
+
+
+                if self.input.is_key_just_pressed(winit::keyboard::KeyCode::Escape) {
+                    event_loop.exit();
                 }
             }
 
@@ -172,7 +179,7 @@ impl ApplicationHandler for App {
 
 
                 let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("voxel-command-encoder"),
+                    label: Some("command-encoder"),
                 });
 
 
@@ -195,132 +202,15 @@ impl ApplicationHandler for App {
                 self.input.update();
 
                 let output = renderer.surface.get_current_texture().unwrap();
-                let output_texture = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let view = &renderer.framebuffer;
+                let view = output.texture.create_view(&TextureViewDescriptor::default());
 
-                let c = game.sky_colour.as_dvec4();
-                let camera = game.camera.position;
-                let projection = game.camera.perspective_matrix();
-                let cview = game.camera.view_matrix();
-
-                // render chunks
-                {
-                    renderer.staging_buffer.recall();
-                    let voxel_pipeline = &mut renderer.voxel_pipeline;
-                    let rd = game.settings.render_distance;
-                    let fog_distance = (rd - 1) as f32;
-
-                    let uniform = VoxelShaderUniform {
-                        view: cview * Mat4::from_scale(Vec3::splat(0.5)),
-                        projection,
-                        modulate: Vec4::ONE,
-
-                        camera_block: camera.floor().as_ivec3(),
-                        camera_offset: (camera - camera.floor()).as_vec3(),
-
-                        fog_color: game.sky_colour.xyz(),
-                        fog_density: 1.0,
-                        fog_start: fog_distance * CHUNK_SIZE as f32 * 0.9,
-                        fog_end: fog_distance * CHUNK_SIZE as f32,
-                        pad_00: 0.0,
-                        pad_01: 0.0,
-                        pad_02: 0.0,
-                        pad_03: 0.0,
-
-
-                    };
-
-
-                    let (player_chunk, _) = split_world_pos(game.player.body.position.as_ivec3());
-
-                    let mut indirect : Vec<DrawIndirectArgs> = vec![];
-
-                    let frustum = match &game.lock_frustum {
-                        Some(f) => f.clone(),
-                        None => Frustum::compute(projection, cview),
-                    };
-
-
-                    let now = Instant::now();
-                    let mut counter = 0;
-                    let mut rendered_counter = 0;
-                    for (pos, region) in game.world.chunker.regions() {
-                        region.octree().render(
-                            region.octree().root,
-                            0,
-                            pos.0,
-                            UVec3::ZERO,
-                            player_chunk,
-                            &mut indirect,
-                            &frustum,
-                            camera,
-                            &mut counter,
-                            &mut rendered_counter,
-                        );
-                    }
-
-                    
-                    info!("time {:?} distance: {}, index count: {}, indirect: {} \
-                          ", 
-                           now.elapsed(), game.settings.render_distance-1,
-                           voxel_pipeline.chunk_offsets.as_slice().len(),
-                           indirect.len());
-
-                    if !indirect.is_empty() {
-                        voxel_pipeline.indirect_buf.resize(&renderer.device, &mut encoder, indirect.len());
-                        voxel_pipeline.indirect_buf.write(&mut renderer.staging_buffer, &mut encoder, &renderer.device, 0, &indirect);
-                    }
-
-                    renderer.staging_buffer.finish();
-
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("voxel-render-pass"),
-                        color_attachments: &[
-                            Some(wgpu::RenderPassColorAttachment {
-                                view: &view,
-                                resolve_target: Some(&output_texture),
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color { r: c.x, g: c.y, b: c.z, a: c.w }),
-                                    store: wgpu::StoreOp::Discard,
-                                },
-                                depth_slice: None,
-                            }),
-                        ],
-
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &voxel_pipeline.depth_buffer.view,
-                            depth_ops: Some(wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(1.0),
-                                store: wgpu::StoreOp::Discard,
-                            }),
-
-                            stencil_ops: None,
-                        }),
-
-                        ..Default::default()
-                    });
-
-
-                    pass.set_pipeline(if self.game.settings.lines { &voxel_pipeline.line_pipeline } else { &voxel_pipeline.pipeline });
-                    voxel_pipeline.frame_uniform.update(&renderer.queue, &uniform);
-                    voxel_pipeline.frame_uniform.use_uniform(&mut pass);
-                    pass.set_bind_group(1, voxel_pipeline.model_uniform.bind_group(), &[]);
-                    pass.set_bind_group(2, &voxel_pipeline.texture, &[]);
-
-                    {
-                        pass.set_vertex_buffer(0, voxel_pipeline.vertex_buf.slice(..));
-                        pass.set_vertex_buffer(1, voxel_pipeline.instances.ssbo.buffer.slice(..));
-                        pass.multi_draw_indirect(&voxel_pipeline.indirect_buf.buffer, 0, indirect.len() as _);
-                    }
-                    drop(pass);
-
-                    renderer.end(&mut encoder, &output_texture);
-                    renderer.staging_buffer.finish();
-                    renderer.queue.submit(std::iter::once(encoder.finish()));
-
-                }
-
-
+                renderer.end(encoder, &mut self.game.world, &view, RenderSettings {
+                    camera: &self.game.camera,
+                    skybox: self.game.sky_colour,
+                    render_distance: self.game.settings.render_distance as u32,
+                    frustum: self.game.lock_frustum.clone(),
+                    lines: self.game.settings.lines,
+                });
 
 
                 output.present();
@@ -349,7 +239,7 @@ impl ApplicationHandler for App {
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
+        .with_max_level(Level::ERROR)
         .init();
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();

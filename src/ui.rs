@@ -1,9 +1,8 @@
 use glam::{DVec3, Vec2, Vec4};
-use glfw::CursorMode;
 use winit::{event::MouseButton, keyboard::KeyCode};
 use std::{fmt::Write, ops::Bound};
 
-use crate::{commands::Command, constants::{PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND}, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{SlotKind, SlotMeta, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{split_world_pos, VoxelWorld}, Game, Player};
+use crate::{commands::Command, constants::{COLOUR_ADDITIVE_HIGHLIGHT, COLOUR_DENY, COLOUR_GREY, COLOUR_PASS, COLOUR_PLAYER_ACTIVE_HOTBAR, COLOUR_SCREEN_DIM, COLOUR_WARN, COLOUR_WHITE, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND, UI_Z_MAX, UI_Z_MIN}, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{SlotKind, SlotMeta, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{split_world_pos, VoxelWorld}, Game, Player};
 
 pub enum UILayer {
     Inventory {
@@ -94,7 +93,8 @@ impl UILayer {
                 let window = renderer.window_size();
                 let text_box = Vec2::new(window.x * 0.6, renderer.line_size * 0.6);
                 let box_pos = Vec2::new(0.0, window.y - text_box.y * 0.95);
-                renderer.draw_rect(box_pos, text_box, Vec4::new(0.1, 0.1, 0.1, 0.5));
+                renderer.draw_rect(box_pos, text_box, COLOUR_SCREEN_DIM);
+
                 let text_pos = Vec2::new(box_pos.x, box_pos.y);
                 renderer.draw_text(&text, text_pos, TEXT_SIZE, Vec4::ONE);
 
@@ -260,7 +260,10 @@ impl UILayer {
                 }
 
 
-                renderer.draw_rect(Vec2::ZERO, window, Vec4::new(0.1, 0.1, 0.1, 0.5));
+                renderer.with_z(UI_Z_MIN, |renderer| {
+                    renderer.draw_rect(Vec2::ZERO, window, COLOUR_SCREEN_DIM);
+                });
+
                 let window = renderer.window_size();
 
                 let rows = PLAYER_ROW_SIZE;
@@ -336,10 +339,10 @@ impl UILayer {
                                 else { break 'mode };
 
                                 let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(slot_size));
-                                let mut colour = (Vec4::ONE * 0.2).with_w(1.0); 
+                                let mut colour = COLOUR_GREY; 
 
                                 if is_mouse_intersecting {
-                                    colour += Vec4::splat(0.4);
+                                    colour += COLOUR_ADDITIVE_HIGHLIGHT;
                                 }
                                
                                 renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
@@ -667,7 +670,7 @@ fn draw_recipes(game: &mut Game, input: &InputManager, renderer: &mut Renderer, 
 
     let size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
 
-    renderer.draw_rect(corner, size, Vec4::ONE);
+    renderer.draw_rect(corner, size, COLOUR_WHITE);
 
     let mut base = corner + padding * 0.5;
     let point = renderer.to_point(input.mouse_position());
@@ -705,11 +708,11 @@ fn draw_recipes(game: &mut Game, input: &InputManager, renderer: &mut Renderer, 
                 }
             }
 
-            let mut colour = if can_craft { Vec4::new(0.2, 0.6, 0.2, 1.0) }
-                             else { Vec4::new(0.6, 0.2, 0.2, 1.0) }; 
+            let mut colour = if can_craft { COLOUR_PASS }
+                             else { COLOUR_DENY }; 
 
             if is_mouse_intersecting {
-                colour += Vec4::splat(0.4);
+                colour += COLOUR_ADDITIVE_HIGHLIGHT;
             }
            
             renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
@@ -719,8 +722,8 @@ fn draw_recipes(game: &mut Game, input: &InputManager, renderer: &mut Renderer, 
 
             if is_mouse_intersecting {
                 let size = Vec2::new(recipe.requirements.len() as f32, 1.0) * (padding + slot_size);
-                renderer.with_z(1.0, |renderer| {
-                renderer.draw_rect(point, size, Vec4::new(0.2, 0.2, 0.2, 1.0));
+                renderer.with_z(UI_Z_MAX, |renderer| {
+                renderer.draw_rect(point, size, COLOUR_GREY);
                 let mut base = point + padding*0.5;
                 for item in recipe.requirements.iter() {
                     let craft_step = rc.craft_queue.iter()
@@ -729,10 +732,10 @@ fn draw_recipes(game: &mut Game, input: &InputManager, renderer: &mut Renderer, 
                         .unwrap();
 
                     let colour = match craft_step {
-                        CraftStepResult::DirectlyAvailable => Vec4::new(0.2, 0.6, 0.2, 1.0),
-                        CraftStepResult::Craftable(_) => Vec4::new(0.6, 0.6, 0.2, 1.0),
-                        CraftStepResult::NotCraftable => Vec4::new(0.6, 0.2, 0.2, 1.0),
-                        CraftStepResult::NotAvailableRawMaterial => Vec4::new(0.6, 0.2, 0.2, 1.0),
+                        CraftStepResult::DirectlyAvailable => COLOUR_PASS,
+                        CraftStepResult::Craftable(_) => COLOUR_WARN,
+                        CraftStepResult::NotCraftable => COLOUR_DENY,
+                        CraftStepResult::NotAvailableRawMaterial => COLOUR_DENY,
                     };
 
                     renderer.draw_rect(base, Vec2::splat(slot_size), colour);
@@ -930,11 +933,11 @@ fn draw_player_inventory(renderer: &mut Renderer, player: &mut Player, world: &m
     let cols = PLAYER_HOTBAR_SIZE;
 
     let slot_size = 64.0;
-    let padding = 16.0;
+    let padding = 16.0f32;
 
     let size = Vec2::new(cols as f32, rows as f32) * (slot_size + padding) as f32;
 
-    renderer.draw_rect(corner, size, Vec4::ONE);
+    renderer.draw_rect(corner, size, COLOUR_WHITE);
 
     let mut base = corner + padding * 0.5;
     let point = renderer.to_point(input.mouse_position());
@@ -943,8 +946,8 @@ fn draw_player_inventory(renderer: &mut Renderer, player: &mut Player, world: &m
         for col in 0..cols {
             let slot_index = row*cols+col;
             let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(SLOT_SIZE));
-            let colour = if slot_index/PLAYER_HOTBAR_SIZE == player.hotbar { Vec4::new(0.4, 0.6, 0.4, 1.0) }
-                         else { (Vec4::ONE * 0.2).with_w(1.0) }; 
+            let colour = if slot_index/PLAYER_HOTBAR_SIZE == player.hotbar { COLOUR_PLAYER_ACTIVE_HOTBAR }
+                         else { COLOUR_GREY }; 
 
 
             draw_inventory_item(renderer, &mut player.inventory, player.body.position, world, other_inv, input, holding_item,
@@ -1002,7 +1005,7 @@ fn draw_inventory(renderer: &mut Renderer, inventory: &mut [Option<Item>],
         for col in 0..cols {
             let slot_index = row*cols+col;
             let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(SLOT_SIZE));
-            let colour = (Vec4::ONE * 0.2).with_w(1.0); 
+            let colour = COLOUR_GREY; 
 
             draw_inventory_item(renderer, inventory, player_pos, world, &mut other_inv, input, holding_item,
                                 pos, slot_index, point, colour);
@@ -1035,7 +1038,7 @@ fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
 
     let is_mouse_intersecting = point_in_rect(mouse, pos, Vec2::splat(SLOT_SIZE));
     if is_mouse_intersecting {
-        colour += Vec4::splat(0.4);
+        colour += COLOUR_ADDITIVE_HIGHLIGHT;
     }
 
     renderer.draw_rect(pos, Vec2::splat(SLOT_SIZE), colour);

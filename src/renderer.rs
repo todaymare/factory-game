@@ -6,20 +6,20 @@ pub mod gpu_allocator;
 use std::{cell::Cell, collections::HashMap, mem::offset_of, ptr::null_mut, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 
 use bytemuck::{Pod, Zeroable};
-use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
-use glam::{DVec3, IVec2, IVec3, Mat4, Vec2, Vec3, Vec4};
+//use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
+use glam::{DVec3, IVec2, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
 use gpu_allocator::GPUAllocator;
 use image::{DynamicImage, EncodableLayout, GenericImage, GenericImageView, Rgba32FImage, RgbaImage};
 use rand::seq::IndexedRandom;
 use ssbo::{ResizableBuffer, SSBO};
-use sti::{alloc::default_realloc, define_key, key::Key, static_assert_eq, vec::KVec};
+use sti::{key::Key, static_assert_eq, vec::KVec};
 use textures::{TextureAtlasBuilder, TextureId, UiShaderUniform, UiTextureAtlasManager};
-use tracing::warn;
+use tracing::{info, warn};
 use uniform::Uniform;
 use wgpu::{util::{BufferInitDescriptor, DeviceExt, RenderEncoder, StagingBelt}, wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs}, BufferUsages, TextureUsages, *};
 use winit::window::Window;
 
-use crate::{constants::{FONT_SIZE, MSAA_SAMPLE_COUNT, QUAD_VERTICES, VOXEL_TEXTURE_ATLAS_TILE_CAP, VOXEL_TEXTURE_ATLAS_TILE_SIZE}, free_list::FreeKVec, items::{Assets, ItemKind, MeshIndex}, mesh::MeshInstance, voxel_world::mesh::{ChunkMeshFramedata, ChunkQuadInstance, VoxelMeshIndex}};
+use crate::{constants::{CHUNK_SIZE, FONT_SIZE, MSAA_SAMPLE_COUNT, QUAD_VERTICES, UI_DELTA_Z, UI_Z_MAX, UI_Z_MIN, VOXEL_TEXTURE_ATLAS_TILE_CAP, VOXEL_TEXTURE_ATLAS_TILE_SIZE}, directions::CardinalDirection, free_list::FreeKVec, frustum::Frustum, items::{Assets, ItemKind, MeshIndex}, mesh::MeshInstance, voxel_world::{mesh::{ChunkMeshFramedata, ChunkQuadInstance, VoxelMeshIndex}, split_world_pos, VoxelWorld}, Camera};
 
 
 // the renderer is done,
@@ -75,6 +75,15 @@ pub struct Character {
     pub size: IVec2,
     pub bearing: IVec2,
     pub advance: u32,
+}
+
+
+pub struct RenderSettings<'a> {
+    pub camera: &'a Camera,
+    pub skybox: Vec4,
+    pub render_distance: u32,
+    pub frustum: Option<Frustum>,
+    pub lines: bool,
 }
 
 
@@ -163,7 +172,7 @@ impl Renderer {
                                     | wgpu::Features::TIMESTAMP_QUERY,
                 required_limits: {
                     let mut limits = wgpu::Limits::downlevel_defaults();
-                    limits.max_buffer_size = 17179869184;
+                    limits.max_buffer_size = adapter.limits().max_buffer_size;
                     limits.max_storage_buffer_binding_size = 512 << 20;
                     limits.max_texture_dimension_2d = 8192;
                     limits
@@ -241,7 +250,7 @@ impl Renderer {
                     topology: wgpu::PrimitiveTopology::TriangleList, // 1.
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Ccw, // 2.
-                    cull_mode: None,
+                    cull_mode: Some(Face::Back),
                     //cull_mode: None,
                     // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
                     polygon_mode: wgpu::PolygonMode::Fill,
@@ -440,8 +449,6 @@ impl Renderer {
 
             let depth_texture = DepthBuffer::new(&device, config.width, config.height, MSAA_SAMPLE_COUNT); 
 
-
-
             let targets = &[Some(wgpu::ColorTargetState { // 4.
                         format: config.format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -483,8 +490,8 @@ impl Renderer {
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList, // 1.
                     strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw, // 2.
-                    cull_mode: None,
+                    front_face: wgpu::FrontFace::Cw, // 2.
+                    cull_mode: Some(wgpu::Face::Back),
                     //cull_mode: None,
                     // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
                     polygon_mode: wgpu::PolygonMode::Fill,
@@ -551,6 +558,14 @@ impl Renderer {
         let ui_depth_texture = DepthBuffer::new(&device, config.width, config.height, 1); 
 
         {
+
+
+            let mut chars = HashMap::new();
+            let mut atlas = TextureAtlasBuilder::new(TextureFormat::R8Unorm);
+
+            let mut biggest_y_size : f32 = 0.0;
+
+
             let mut ft = null_mut();
             if unsafe { freetype::freetype::FT_Init_FreeType(&mut ft) } != 0 {
                 panic!("failed to init freetype library");
@@ -562,15 +577,9 @@ impl Renderer {
                 panic!("failed to load font");
             }
 
-            unsafe { FT_Set_Pixel_Sizes(face, FONT_SIZE, FONT_SIZE) };
-
-            let mut chars = HashMap::new();
-            let mut atlas = TextureAtlasBuilder::new(TextureFormat::R8Unorm);
-
-            let mut biggest_y_size : f32 = 0.0;
-
+            unsafe { freetype::freetype::FT_Set_Pixel_Sizes(face, FONT_SIZE, FONT_SIZE) };
             for c in 0..128 {
-                if unsafe { FT_Load_Char(face, c as u64, FT_LOAD_RENDER as _) } != 0 {
+                if unsafe { freetype::freetype::FT_Load_Char(face, c as u64, freetype::freetype::FT_LOAD_RENDER as _) } != 0 {
                     panic!("failed to load glyph '{}'", char::from_u32(c).unwrap());
                 }
 
@@ -605,16 +614,15 @@ impl Renderer {
                 }
             }
 
+            unsafe {
+                freetype::freetype::FT_Done_Face(face);
+                freetype::freetype::FT_Done_FreeType(ft);
+            }
+
             white = atlas.register(IVec2::new(32, 32), &[255; 32*32]);
             line_size = biggest_y_size;
             characters = chars;
             let atlas = atlas.build(&device, &queue);
-
-            unsafe {
-                FT_Done_Face(face);
-                FT_Done_FreeType(ft);
-            }
-
 
             let shader = device.create_shader_module(
                 wgpu::ShaderModuleDescriptor {
@@ -872,21 +880,184 @@ impl Renderer {
     }
 
 
-    pub fn end(&mut self, encoder: &mut wgpu::CommandEncoder, output: &TextureView) {
+    pub fn end(&mut self, mut encoder: wgpu::CommandEncoder, voxel_world: &mut VoxelWorld, output_texture: &TextureView, settings: RenderSettings) {
+        let framebuffer = &self.framebuffer;
+
+
+        let camera = settings.camera.position;
+        let projection = settings.camera.perspective_matrix();
+        let view = settings.camera.view_matrix();
+
+
+        self.staging_buffer.recall();
+
+        // prepare voxel buffers
+        let indirect_len;
+        {
+            let voxel_pipeline = &mut self.voxel_pipeline;
+
+            let (player_chunk, _) = split_world_pos(camera.as_ivec3());
+
+            let mut indirect : Vec<DrawIndirectArgs> = vec![];
+
+            let frustum = match &settings.frustum{
+                Some(f) => f.clone(),
+                None => Frustum::compute(projection, view),
+            };
+
+
+            let now = Instant::now();
+            let mut counter = 0;
+            let mut rendered_counter = 0;
+            for (pos, region) in voxel_world.chunker.regions() {
+                region.octree().render(
+                    region.octree().root,
+                    0,
+                    pos.0,
+                    UVec3::ZERO,
+                    player_chunk,
+                    &mut indirect,
+                    &frustum,
+                    camera,
+                    &mut counter,
+                    &mut rendered_counter,
+                );
+            }
+
+            
+            info!("time {:?} distance: {}, index count: {}, indirect: {} \
+                  ", 
+                   now.elapsed(), settings.render_distance-1,
+                   voxel_pipeline.chunk_offsets.as_slice().len(),
+                   indirect.len());
+
+            if !indirect.is_empty() {
+                voxel_pipeline.indirect_buf.resize(&self.device, &mut encoder, indirect.len());
+                voxel_pipeline.indirect_buf.write(&mut self.staging_buffer, &mut encoder, &self.device, 0, &indirect);
+            }
+
+            indirect_len = indirect.len();
+        }
+
+
+        // prepare mesh buffers
+        'meshes: {
+            let mut buf = vec![];
+
+            // upload instances
+            for (_, instances) in &mut self.mesh_draws {
+                buf.extend_from_slice(&instances);
+            }
+
+            if buf.is_empty() { break 'meshes }
+
+            self.mesh_pipeline.instance_buffer.resize(&self.device, &mut encoder, buf.len());
+            self.mesh_pipeline.instance_buffer.write(&mut self.staging_buffer, &mut encoder, &self.device, 0, &buf);
+        }
+
+
+        let c = settings.skybox.as_dvec4();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("world-render-pass"),
+            color_attachments: &[
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &framebuffer,
+                    resolve_target: Some(&output_texture),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: c.x, g: c.y, b: c.z, a: c.w }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                }),
+            ],
+
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.voxel_pipeline.depth_buffer.view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+
+                stencil_ops: None,
+            }),
+
+            ..Default::default()
+        });
+
+
+
+
         // draw meshes
         {
+            pass.set_pipeline(&self.mesh_pipeline.pipeline);
+
+            self.mesh_pipeline.frame_uniform.update(&self.queue, &MeshShaderUniform {
+                view,
+                projection,
+            });
+
+            self.mesh_pipeline.frame_uniform.use_uniform(&mut pass);
+            pass.set_vertex_buffer(1, self.mesh_pipeline.instance_buffer.buffer.slice(..));
+
+            let mut counter = 0;
+            for (index, instances) in &mut self.mesh_draws {
+                if instances.is_empty() { continue }
+
+                let mesh = &self.assets.meshes[index];
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), IndexFormat::Uint32);
+
+                pass.draw_indexed(0..mesh.index_count, 0, counter..counter+instances.len() as u32);
+                counter += instances.len() as u32;
+                instances.clear();
+            }
+        }
+
+
+        // render voxel world
+        {
+            let rd = settings.render_distance;
+            let fog_distance = (rd - 1) as f32;
+
+            let uniform = VoxelShaderUniform {
+                view,
+                projection,
+                modulate: Vec4::ONE,
+
+                camera_block: camera.floor().as_ivec3(),
+                camera_offset: (camera - camera.floor()).as_vec3(),
+
+                fog_color: settings.skybox.xyz(),
+                fog_density: 1.0,
+                fog_start: fog_distance * CHUNK_SIZE as f32 * 0.9,
+                fog_end: fog_distance * CHUNK_SIZE as f32,
+                pad_00: 0.0,
+                pad_01: 0.0,
+                pad_02: 0.0,
+                pad_03: 0.0,
+            };
+
+            let voxel_pipeline = &mut self.voxel_pipeline;
+
+            pass.set_pipeline(if settings.lines { &voxel_pipeline.line_pipeline } else { &voxel_pipeline.pipeline });
+
+            voxel_pipeline.frame_uniform.update(&self.queue, &uniform);
+            voxel_pipeline.frame_uniform.use_uniform(&mut pass);
+            pass.set_bind_group(1, voxel_pipeline.model_uniform.bind_group(), &[]);
+            pass.set_bind_group(2, &voxel_pipeline.texture, &[]);
+
+            pass.set_vertex_buffer(0, voxel_pipeline.vertex_buf.slice(..));
+            pass.set_vertex_buffer(1, voxel_pipeline.instances.ssbo.buffer.slice(..));
+            pass.multi_draw_indirect(&voxel_pipeline.indirect_buf.buffer, 0, indirect_len as _);
         }
 
 
 
-        // draw UI
-        let mut z = 0.0;
-        let size = self.window_size();
-        let triangle_count = self.triangle_count.get_mut();
-        let draw_count = self.draw_count.get_mut();
-        let offset = 0.0;
-        let scale = 1.0;
+        drop(pass);
 
+        // draw UI
+        let mut z = UI_Z_MIN;
+        let triangle_count = self.triangle_count.get_mut();
 
         for rect in self.rects.iter() {
             let tex = rect.tex;
@@ -902,8 +1073,8 @@ impl Renderer {
             let x1 = uvs.z;
             let y1 = uvs.w;
 
-            z += 0.0001;
-            let z = if let Some(z) = rect.z { z } else { z };
+            let z = if let Some(rect_z) = rect.z { rect_z } else { z += UI_DELTA_Z; z };
+            assert!(z > UI_Z_MIN && z <= UI_Z_MAX);
 
             buf.push(UIVertex::new(pos+dims, Vec2::new(x1, y1), modulate, z));
             buf.push(UIVertex::new(pos+Vec2::new(dims.x, 0.0), Vec2::new(x1, y0), modulate, z));
@@ -922,22 +1093,22 @@ impl Renderer {
         }
 
         let size = self.window_size();
-        let projection = glam::Mat4::orthographic_rh(0.0, size.x as f32, size.y as f32, 0.0, -1.0, 0.0);
+        let projection = glam::Mat4::orthographic_rh(0.0, size.x as f32, size.y as f32, 0.0, -UI_Z_MAX, UI_Z_MIN);
 
         let curr = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
         let view = Vec4::splat(curr.as_secs_f64().sin() as f32 * 0.5 + 0.5);
 
         self.ui_atlases.ui_shader_uniform.update(&self.queue, &UiShaderUniform { projection, view });
 
-        self.ui_vertex_buff.resize(&self.device, encoder, vertex_buf.len());
-        self.ui_vertex_buff.write(&mut self.staging_buffer, encoder, &self.device, 0, &vertex_buf);
+        self.ui_vertex_buff.resize(&self.device, &mut encoder, vertex_buf.len());
+        self.ui_vertex_buff.write(&mut self.staging_buffer, &mut encoder, &self.device, 0, &vertex_buf);
 
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("atlas-render-pass"),
             color_attachments: &[
                 Some(wgpu::RenderPassColorAttachment {
-                    view: &output,
+                    view: &output_texture,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -974,7 +1145,12 @@ impl Renderer {
             buff.clear();
         }
 
+        drop(pass);
+
         self.rects.clear();
+        self.staging_buffer.finish();
+
+        self.queue.submit(std::iter::once(encoder.finish()));
     }
 
 
@@ -1024,7 +1200,9 @@ impl Renderer {
                     };
                     continue
                 }
-                let ch = self.characters.get(&c).unwrap();
+
+                let Some(ch) = self.characters.get(&c)
+                else { warn!("[renderer] draw-text: character not registered '{c}'"); continue };
 
                 let xpos = x + ch.bearing.x as f32 * scale;
                 let ypos = y - (ch.size.y + ch.bearing.y) as f32 * scale * 0.5;
@@ -1055,12 +1233,22 @@ impl Renderer {
 
 
     pub fn with_z<F: FnOnce(&mut Self)>(&mut self, mut z: f32, f: F) {
+        assert!(z >= UI_Z_MIN && z <= UI_Z_MAX);
         let len = self.rects.len();
         f(self);
 
-        for item in &mut self.rects[len..] {
-            item.z = Some(z);
-            z += 0.0001;
+        let item_count = self.rects.len() - len;
+
+        if (z - item_count as f32 * UI_DELTA_Z) >= UI_Z_MIN {
+            for item in self.rects[len..].iter_mut().rev() {
+                item.z = Some(z);
+                z -= UI_DELTA_Z;
+            }
+        } else {
+            for item in self.rects[len..].iter_mut() {
+                z += UI_DELTA_Z;
+                item.z = Some(z);
+            }
         }
     }
 
@@ -1113,16 +1301,15 @@ impl Renderer {
 
 
     pub fn draw_mesh(&mut self, mesh: MeshIndex, instance: MeshInstance) {
-        if self.mesh_draws.len() < mesh.usize() {
-            self.mesh_draws.resize(mesh.usize(), vec![]);
+        if self.mesh_draws.len() <= mesh.usize() {
+            self.mesh_draws.resize(mesh.usize()+1, vec![]);
         }
 
         self.mesh_draws[mesh].push(instance);
     }
 
 
-    /*
-    pub fn draw_item_quat(&self, shader: &ShaderProgram, item_kind: ItemKind, pos: Vec3, mut scale: Vec3, rot: Quat) {
+    pub fn draw_item(&mut self, item_kind: ItemKind, mut instance: MeshInstance) {
         if let ItemKind::Structure(structure) = item_kind {
             let blocks = structure.blocks(CardinalDirection::North);
             let mut min = IVec3::MAX;
@@ -1135,26 +1322,17 @@ impl Renderer {
 
             let size = (max - min).abs() + IVec3::ONE;
             let size = size.as_vec3().max_element();
-            scale /= size.abs();
+            let (scale, rot, trans) = instance.model.to_scale_rotation_translation();
+            let scale = scale / size;
+            instance.model = Mat4::from_scale_rotation_translation(scale, rot, trans);
         }
 
 
-        let model = Mat4::from_scale_rotation_translation(scale, rot, pos);
-        shader.set_matrix4(c"model", model);
-
-        let mesh = self.meshes.get(item_kind);
-        self.draw_mesh(mesh);
+        let mesh = self.assets.get_item(item_kind);
+        self.draw_mesh(mesh, instance);
     }
 
 
-    pub fn draw_item(&self, shader: &ShaderProgram, item_kind: ItemKind, pos: Vec3, scale: Vec3, rot: Vec3) {
-        let rot = Quat::from_euler(glam::EulerRot::XYZ, rot.x, rot.y, rot.z);
-        self.draw_item_quat(shader, item_kind, pos, scale, rot);
-    }
-
-
-
-*/
     pub fn draw_item_icon(&mut self, item: ItemKind, pos: Vec2, dims: Vec2, modulate: Vec4) {
         let texture = self.assets.get_ico(item);
         self.draw_tex_rect(pos, dims, texture, modulate);
@@ -1186,7 +1364,8 @@ impl Renderer {
             let mut local_x_size = 0.0;
 
             for c in l.chars() {
-                let ch = self.characters.get(&c).unwrap();
+                let Some(ch) = self.characters.get(&c)
+                else { warn!("[renderer] text-size: character not registered '{c}'"); continue };
                 local_x_size += (ch.advance >> 6) as f32 * scale;
             }
 
@@ -1248,76 +1427,6 @@ impl UIVertex {
     }
 }
 
-
-#[derive(Debug)]
-pub struct GpuTexture {
-    id: u32,
-    format: GpuTextureFormat,
-}
-
-
-impl GpuTexture {
-    pub fn new(format: GpuTextureFormat) -> Self {
-        let mut id = 0;
-        unsafe {
-            gl::GenTextures(1, &mut id);
-
-            gl::BindTexture(gl::TEXTURE_2D, id);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_BORDER as _);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_BORDER as _);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as _);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as _);
-
-
-        }
-
-        GpuTexture { id, format }
-    }
-
-
-    pub fn set_data(&self, dims: IVec2, data: &[u8]) {
-        self.set_data_raw(dims, data.as_ptr());
-    }
-
-
-    pub fn set_data_raw(&self, dims: IVec2, data: *const u8) {
-        unsafe {
-        let (format, typ) = match self.format {
-            GpuTextureFormat::Red => (gl::RED, gl::UNSIGNED_BYTE),
-            GpuTextureFormat::RGBA => (gl::RGBA, gl::UNSIGNED_BYTE),
-        };
-
-        gl::BindTexture(gl::TEXTURE_2D, self.id);
-        gl::TexImage2D(
-            gl::TEXTURE_2D,
-            0,
-            format as _,
-            dims.x,
-            dims.y,
-            0,
-            format,
-            typ,
-            data as _
-        );
-
-        }
-    }
-}
-
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum GpuTextureFormat {
-    Red,
-    RGBA,
-}
-impl GpuTextureFormat {
-    fn pixel_size(&self) -> u32 {
-        match self {
-            GpuTextureFormat::Red => 1,
-            GpuTextureFormat::RGBA => 4,
-        }
-    }
-}
 
 pub fn point_in_rect(point: Vec2, rect_pos: Vec2, rect_size: Vec2) -> bool {
     point.x >= rect_pos.x &&

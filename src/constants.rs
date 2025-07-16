@@ -1,7 +1,14 @@
 use glam::{Vec3, Vec4};
 
-pub const COLOUR_PASS : Vec3 = Vec3::new(0.5, 0.8, 0.5);
-pub const COLOUR_DENY : Vec3 = Vec3::new(0.8, 0.5, 0.5);
+pub const COLOUR_WHITE: Vec4 = Vec4::new(1.0, 1.0, 1.0, 1.0);
+pub const COLOUR_PASS : Vec4 = Vec4::new(0.2, 0.8, 0.2, 1.0);
+pub const COLOUR_WARN : Vec4 = Vec4::new(0.8, 0.8, 0.2, 1.0);
+pub const COLOUR_DENY : Vec4 = Vec4::new(0.8, 0.2, 0.2, 1.0);
+pub const COLOUR_GREY : Vec4 = Vec4::new(0.2, 0.2, 0.2, 1.0);
+pub const COLOUR_SCREEN_DIM : Vec4 = Vec4::new(0.1, 0.1, 0.1, 0.6);
+pub const COLOUR_PLAYER_ACTIVE_HOTBAR : Vec4 = Vec4::new(0.4, 0.6, 0.4, 1.0);
+
+pub const COLOUR_ADDITIVE_HIGHLIGHT: Vec4 = Vec4::splat(0.4);
 
 pub const MSAA_SAMPLE_COUNT : u32 = 4;
 pub const VOXEL_TEXTURE_ATLAS_TILE_SIZE : u32 = 32;
@@ -16,6 +23,9 @@ pub const UI_ITEM_OFFSET          : f32  = UI_SLOT_SIZE * 0.05;
 pub const UI_ITEM_SIZE            : f32  = UI_SLOT_SIZE * 0.9;
 pub const UI_ITEM_AMOUNT_SCALE    : f32  = 0.5;
 pub const UI_SLOT_PADDING         : f32  = 16.0;
+pub const UI_DELTA_Z              : f32  = 0.0001;
+pub const UI_Z_MAX                : f32  = 1.0;
+pub const UI_Z_MIN                : f32  = 0.0;
 
 pub const REGION_SIZE    : usize = 32;
 pub const REGION_SIZE_P3 : usize = REGION_SIZE*REGION_SIZE*REGION_SIZE;
@@ -37,7 +47,6 @@ pub const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
 pub const RENDER_DISTANCE : i32 = 4;
 pub const LOAD_DISTANCE : i32 = 4;
-
 
 pub const FONT_SIZE : u32 = 48;
 
