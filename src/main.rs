@@ -261,7 +261,6 @@ fn main() {
     game.load();
 
     let mut app = App {
-        window: None,
         last_frame: Instant::now(),
         time_since_last_simulation: 0.0,
         game: Game::new(),

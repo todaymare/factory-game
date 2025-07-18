@@ -8,7 +8,7 @@ use sti::key::Key;
 use tracing::{error, info, trace, warn};
 use wgpu::util::StagingBelt;
 
-use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_P3, REGION_SIZE, REGION_SIZE_P3}, free_list::FreeKVec, octree::MeshOctree, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO}, voxel_world::voxel::Voxel};
+use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_I32, CHUNK_SIZE_P3, REGION_SIZE, REGION_SIZE_P3}, free_list::FreeKVec, octree::{Leaf, MeshOctree}, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO}, voxel_world::voxel::Voxel};
 
 use super::{chunk::{Chunk, ChunkData, Noise}, mesh::{ChunkDataRef, ChunkFaceMesh, ChunkMeshFramedata, ChunkMeshes, ChunkQuadInstance, VoxelMeshIndex}, VoxelWorld, SURROUNDING_OFFSETS};
 
@@ -182,9 +182,10 @@ impl Chunker {
 
                 MeshEntry::Loaded(chunk_meshes) => {
                     if let Some(meshes) = chunk_meshes.meshes.take() {
-                        let prev_meshes = region.octree.get_mut(meshes);
+                        let leaf = region.octree.get_mut(meshes);
+                        let prev_meshes = &mut leaf.mesh;
 
-                        for mesh in prev_meshes.iter_mut() {
+                        for mesh in prev_meshes {
                             let Some(mesh) = mesh.take()
                             else { continue };
 
@@ -328,7 +329,7 @@ impl Chunker {
                 MeshEntry::None => {
                     let meshes = 
                         if !is_data_some { None }
-                        else { Some(region.octree.insert(chunk_pos.chunk(), data)) };
+                        else { Some(region.octree.insert(chunk_pos.chunk(), Leaf { mesh: data })) };
 
                     let value = ChunkMeshes { meshes, version };
                     *entry = MeshEntry::Loaded(value);
@@ -345,7 +346,7 @@ impl Chunker {
                     if let Some(meshes) = chunk_meshes.meshes {
                         let prev_meshes = region.octree.get_mut(meshes);
 
-                        for mesh in prev_meshes.iter_mut() {
+                        for mesh in prev_meshes.mesh.iter_mut() {
                             let Some(mesh) = mesh.take()
                             else { continue };
 
@@ -355,14 +356,14 @@ impl Chunker {
 
 
                         if is_data_some {
-                            *prev_meshes = data;
+                            prev_meshes.mesh = data;
                         } else {
                             chunk_meshes.meshes = None;
                         }
                     } else {
                         let meshes = 
                             if !is_data_some { None }
-                            else { Some(region.octree.insert(chunk_pos.chunk(), data)) };
+                            else { Some(region.octree.insert(chunk_pos.chunk(), Leaf { mesh: data })) };
                         chunk_meshes.meshes = meshes;
                     }
                 },

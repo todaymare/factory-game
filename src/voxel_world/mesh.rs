@@ -49,6 +49,7 @@ pub struct ChunkFaceMesh {
 }
 
 
+#[derive(Debug)]
 pub struct ChunkMeshes {
     pub meshes: Option<NodeId>,
     pub version: NonZeroU32,

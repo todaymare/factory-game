@@ -54,24 +54,24 @@ impl VoxelWorld {
     }
 
 
-    pub fn get_chunk(&mut self, pos: IVec3) -> &Chunk {
+    pub fn get_chunk(&mut self, pos: WorldChunkPos) -> &Chunk {
         &*self.ensure_chunk_exists(pos)
     }
 
 
-    pub fn get_chunk_mut(&mut self, pos: IVec3) -> &mut Chunk {
+    pub fn get_chunk_mut(&mut self, pos: WorldChunkPos) -> &mut Chunk {
         self.ensure_chunk_exists(pos);
-        self.chunker.get_mut_chunk(WorldChunkPos(pos)).unwrap()
+        self.chunker.get_mut_chunk(pos).unwrap()
     }
 
 
-    pub fn try_get_chunk(&mut self, pos: IVec3) -> Option<&Chunk> {
-        self.chunker.get_chunk_or_queue(WorldChunkPos(pos)).map(|x| &*x)
+    pub fn try_get_chunk(&mut self, pos: WorldChunkPos) -> Option<&Chunk> {
+        self.chunker.get_chunk_or_queue(pos).map(|x| &*x)
     }
 
 
-    pub fn ensure_chunk_exists(&mut self, pos: IVec3) -> &Chunk {
-        self.chunker.get_chunk_or_generate(WorldChunkPos(pos))
+    pub fn ensure_chunk_exists(&mut self, pos: WorldChunkPos) -> &Chunk {
+        self.chunker.get_chunk_or_generate(pos)
     }
 
 
@@ -571,11 +571,11 @@ impl VoxelWorld {
 
 
 /// takes in a world position and returns a chunk position, chunk local position pair
-pub fn split_world_pos(pos: IVec3) -> (IVec3, IVec3) {
+pub fn split_world_pos(pos: IVec3) -> (WorldChunkPos, IVec3) {
     let chunk_pos = pos.div_euclid(IVec3::splat(CHUNK_SIZE as i32));
     let chunk_local_pos = pos.rem_euclid(IVec3::splat(CHUNK_SIZE as i32));
 
-    (chunk_pos, chunk_local_pos)
+    (WorldChunkPos(chunk_pos), chunk_local_pos)
 }
 
 

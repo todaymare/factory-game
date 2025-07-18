@@ -1,4 +1,4 @@
-use std::{cell::Cell, hash::Hash, i32, num::{NonZero, NonZeroI16, NonZeroU32}, simd::{cmp::SimdPartialEq, u8x64}, sync::Arc};
+use std::{cell::Cell, hash::Hash, i32, num::{NonZero, NonZeroI16, NonZeroU32}, rc::Rc, simd::{cmp::SimdPartialEq, u8x64}, sync::Arc};
 
 use glam::{DVec2, IVec2, IVec3, Vec3Swizzles};
 use libnoise::{Generator, ImprovedPerlin, Simplex, Source};

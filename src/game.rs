@@ -467,13 +467,7 @@ impl Game {
             }
         }
 
-
-        if let Some((pos, _))= self.world.raycast_voxel(self.camera.position,
-                                                     self.camera.front,
-                                                     PLAYER_REACH) {
-        }
-
-
+        
         // handle block interactions
         'outer: {
             self.player.interact_delay -= delta_time;
@@ -617,7 +611,7 @@ impl Game {
 
         if self.current_tick.u32() % (TICKS_PER_SECOND * 120) == 0 {
             info!("autosaving..");
-            //self.save();
+            self.save();
         }
 
 
@@ -629,7 +623,6 @@ impl Game {
 
             let player_chunk = IVec3::ZERO;
             let rd = self.settings.render_distance;
-            let rdp1 = rd+1;
 
             for y in -rd..=rd {
                 for z in -rd..=rd {
@@ -638,7 +631,7 @@ impl Game {
                         let dist = offset.length_squared();
                         let chunk_pos = offset + player_chunk;
                         if dist < rd*rd {
-                            self.world.try_get_chunk(chunk_pos);
+                            self.world.try_get_chunk(WorldChunkPos(chunk_pos));
                             self.world.try_get_mesh(chunk_pos);
                         }
                     }
@@ -694,7 +687,7 @@ impl Game {
                     continue;
                 }
 
-                let offset = (pos.0-player_chunk).length_squared();
+                let offset = (pos.0-player_chunk.0).length_squared();
                 if offset < LOAD_DISTANCE*LOAD_DISTANCE { continue }
 
                 let chunk = match chunk {
@@ -718,7 +711,7 @@ impl Game {
                     if offset < rd*rd {
                         match mesh {
                             MeshEntry::Loaded(mesh) => {
-                                if chunk.version != mesh.version {
+                                if chunk.version.get() != mesh.version.get() {
                                     warn!("skipping cos version difference");
                                     // the version mismatches
                                     continue;

@@ -19,7 +19,7 @@ use uniform::Uniform;
 use wgpu::{util::{BufferInitDescriptor, DeviceExt, RenderEncoder, StagingBelt}, wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs}, BufferUsages, TextureUsages, *};
 use winit::window::Window;
 
-use crate::{constants::{CHUNK_SIZE, FONT_SIZE, MSAA_SAMPLE_COUNT, QUAD_VERTICES, UI_DELTA_Z, UI_Z_MAX, UI_Z_MIN, VOXEL_TEXTURE_ATLAS_TILE_CAP, VOXEL_TEXTURE_ATLAS_TILE_SIZE}, directions::CardinalDirection, free_list::FreeKVec, frustum::Frustum, items::{Assets, ItemKind, MeshIndex}, mesh::MeshInstance, voxel_world::{mesh::{ChunkMeshFramedata, ChunkQuadInstance, VoxelMeshIndex}, split_world_pos, VoxelWorld}, Camera};
+use crate::{constants::{CHUNK_SIZE, FONT_SIZE, MSAA_SAMPLE_COUNT, QUAD_VERTICES, UI_DELTA_Z, UI_Z_MAX, UI_Z_MIN, VOXEL_TEXTURE_ATLAS_TILE_CAP, VOXEL_TEXTURE_ATLAS_TILE_SIZE}, directions::CardinalDirection, free_list::FreeKVec, frustum::Frustum, items::{Assets, ItemKind, MeshIndex}, mesh::MeshInstance, voxel_world::{chunker::ChunkPos, mesh::{ChunkMeshFramedata, ChunkQuadInstance, VoxelMeshIndex}, split_world_pos, VoxelWorld}, Camera};
 
 
 // the renderer is done,
@@ -891,6 +891,7 @@ impl Renderer {
 
         self.staging_buffer.recall();
 
+
         // prepare voxel buffers
         let indirect_len;
         {
@@ -906,30 +907,21 @@ impl Renderer {
             };
 
 
-            let now = Instant::now();
-            let mut counter = 0;
-            let mut rendered_counter = 0;
+            let mut draw_counter = 0;
             for (pos, region) in voxel_world.chunker.regions() {
                 region.octree().render(
-                    region.octree().root,
-                    0,
-                    pos.0,
-                    UVec3::ZERO,
+                    ChunkPos(UVec3::ZERO),
+                    pos,
                     player_chunk,
-                    &mut indirect,
-                    &frustum,
                     camera,
-                    &mut counter,
-                    &mut rendered_counter,
+                    &frustum,
+                    &mut indirect,
+                    &mut draw_counter,
                 );
             }
 
-            
-            info!("time {:?} distance: {}, index count: {}, indirect: {} \
-                  ", 
-                   now.elapsed(), settings.render_distance-1,
-                   voxel_pipeline.chunk_offsets.as_slice().len(),
-                   indirect.len());
+            self.draw_count.set(draw_counter as u32);
+
 
             if !indirect.is_empty() {
                 voxel_pipeline.indirect_buf.resize(&self.device, &mut encoder, indirect.len());
@@ -1010,6 +1002,7 @@ impl Renderer {
                 pass.draw_indexed(0..mesh.index_count, 0, counter..counter+instances.len() as u32);
                 counter += instances.len() as u32;
                 instances.clear();
+
             }
         }
 
