@@ -66,7 +66,7 @@ impl Game {
                 fov: 80.069f32.to_radians(),
                 aspect_ratio: 16.0/9.0,
                 near: 0.01,
-                far: 100.0,
+                far: 5_000.0,
 
             },
 

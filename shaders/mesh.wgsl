@@ -34,19 +34,10 @@ struct Uniforms {
 var<uniform> u : Uniforms;
 
 
-fn unpack_color(col : u32) -> vec4<f32> {
-    let r = f32((col >> 24u) & 0xFFu) / 255.0;
-    let g = f32((col >> 16u) & 0xFFu) / 255.0;
-    let b = f32((col >> 8u)  & 0xFFu) / 255.0;
-    let a = f32(col & 0xFFu) / 255.0;
-    return vec4f(r, g, b, a);
-}
-
-
 @vertex
 fn vs_main(vertex: VertexIn, instance: InstanceIn) -> VertexOut {
     var out: VertexOut;
-    let colour   = unpack_color(vertex.colour);
+    let colour   = unpack4x8unorm(vertex.colour).abgr;
     let model = mat4x4(instance.model0, instance.model1, instance.model2, instance.model3);
     out.modulate = instance.modulate * colour;
     out.position = u.projection * u.view * model * vec4f(vertex.position, 1.0);

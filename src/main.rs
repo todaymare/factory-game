@@ -59,7 +59,6 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 
 struct App {
-    window: Option<Window>,
     renderer: Option<Renderer>,
     last_frame: Instant,
     time_since_last_simulation: f32,
@@ -246,8 +245,6 @@ fn main() {
 
     let event_loop = EventLoop::builder().build().unwrap();
 
-    // ControlFlow::Poll continuously runs the event loop, even if the OS hasn't
-    // dispatched any events. This is ideal for games and similar applications.
     event_loop.set_control_flow(ControlFlow::Poll);
 
     let mut game = Game::new();
@@ -276,50 +273,7 @@ fn main() {
     app.game.save();
     return;
 
-    /*
-    let mut input = InputManager::default();
-
-    //game.renderer.window.set_cursor_mode(glfw::CursorMode::Disabled);
-
-    info!("loading previous save-state");
-    if !fs::exists("saves/").is_ok_and(|f| f == true) {
-        trace!("no previous save-state. creating files");
-        let _ = fs::create_dir("saves/");
-        let _ = fs::create_dir("saves/chunks/");
-        game.save();
-    }
-
-    game.load();
-
-    info!("starting game loop");
-    let mut last_frame = 0.0;
-    let mut time_since_last_simulation_step = 0.0;
-    while !game.renderer.window.should_close() {
-        let current_frame = game.renderer.glfw.get_time() as f64;
-
-        let delta_time = (current_frame - last_frame) as f32;
-        last_frame = current_frame;
-        time_since_last_simulation_step += delta_time;
-
-
-        // seperation for seperation sake
-        process_events(&mut game.renderer, &mut input);
-        game.handle_input(delta_time, &mut input);
-
-        while time_since_last_simulation_step > game.settings.delta_tick {
-            game.simulation_tick();
-
-            time_since_last_simulation_step -= game.settings.delta_tick;
-        }
-
-
-        game.update_world();
-        game.render(&mut input, delta_time);
-    }
-
-    game.save();*/
 }
-
 
 
 #[derive(Clone, Copy)]
@@ -330,59 +284,6 @@ pub struct PhysicsBody {
     aabb_dims: Vec3,
 }
 
-
-/*
-fn process_events(renderer: &mut Renderer,
-                  input: &mut InputManager) {
-
-    input.update();
- 
-    let events = glfw::flush_messages(&renderer.window_events).collect::<Vec<_>>();
-    for event in events {
-        match event.1 {
-            glfw::WindowEvent::FramebufferSize(x, y) => {
-                unsafe { gl::Viewport(0, 0, x, y); }
-            },
-
-
-            glfw::WindowEvent::MouseButton(button, action, _) => {
-                match action {
-                    glfw::Action::Release => input.set_unpressed_button(button),
-                    glfw::Action::Press => input.set_pressed_button(button),
-                    glfw::Action::Repeat => input.set_pressed_button(button),
-                }
-            }
-
-
-            glfw::WindowEvent::Key(key, _, action, _) => {
-                match action {
-                    glfw::Action::Release => input.set_unpressed_key(key),
-                    glfw::Action::Press => input.set_pressed_key(key),
-                    glfw::Action::Repeat => (),
-                }
-            }
-
-
-            glfw::WindowEvent::Scroll(x, y) => {
-                input.scroll(Vec2::new(x as f32, y as f32));
-            }
-
-
-            glfw::WindowEvent::CursorPos(x, y) => {
-                input.move_cursor(Vec2::new(x as f32, y as f32));
-            }
-
-
-            glfw::WindowEvent::Char(ch) => {
-                input.new_char(ch);
-            }
-
-
-            _ => (),
-        }
-    }
-}
-*/
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub struct Tick(u32);
@@ -581,10 +482,10 @@ impl Camera {
         let sector = (angle / (PI/2.0)).round() as i32 % 4;
 
         match sector {
-            3 => CardinalDirection::South,
-            0 => CardinalDirection::West,
-            1 => CardinalDirection::North,
-            2 => CardinalDirection::East,
+            0 => CardinalDirection::South,
+            1 => CardinalDirection::West,
+            2 => CardinalDirection::North,
+            3 => CardinalDirection::East,
             _ => unreachable!(),
         }
     }
