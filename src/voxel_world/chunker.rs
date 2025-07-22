@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, num::NonZeroU32, sync::{atomic::AtomicU32, mpsc::{Receiver, Sender}, Arc}, time::Instant};
+use std::{cell::Cell, collections::{HashMap, HashSet}, num::NonZeroU32, rc::Rc, sync::{atomic::AtomicU32, mpsc::{Receiver, Sender}, Arc}, time::Instant};
 
 use bytemuck::Zeroable;
 use glam::{IVec3, UVec3};
@@ -58,6 +58,7 @@ pub struct MeshTaskData {
 
 
 #[repr(u32)]
+#[derive(Debug)]
 pub enum ChunkEntry {
     None = 0,
 
@@ -68,6 +69,7 @@ pub enum ChunkEntry {
 
 
 #[repr(u32)]
+#[derive(Debug)]
 pub enum MeshEntry {
     None = 0,
     Loaded(ChunkMeshes),
@@ -123,21 +125,22 @@ impl Chunker {
         loop {
             if start.elapsed().as_millis() > timeout { break; }
 
-            let Some(chunk_pos) = iter.next()
+            let Some(&chunk_pos) = iter.next()
             else { break };
 
             let did_succeed = self.try_prepare_mesh_task(
                 framedata,
                 &mut batch,
-                *chunk_pos
+                chunk_pos
             );
 
 
-            if !did_succeed { continue }
+            if !did_succeed { warn!("failed to spawn mesh task for chunk at '{}'", chunk_pos.0); continue }
+
+            load_queue.remove(&chunk_pos);
+            iter = load_queue.iter();
 
             if batch.len() == 32 {
-                batch.iter().for_each(|x| { assert!(load_queue.remove(&x.pos)); });
-                iter = load_queue.iter();
                 self.spawn_mesh_task(batch);
                 batch = vec![];
             }
@@ -175,7 +178,7 @@ impl Chunker {
             remove_list.push(chunk_pos);
             match mesh {
                 MeshEntry::None => {
-                    //warn!("tried to unload a mesh that was already unloaded");
+                    warn!("tried to unload a mesh that was already unloaded");
                     continue;
                 },
 
@@ -192,8 +195,9 @@ impl Chunker {
                             framedata.remove(mesh.chunk_mesh_data_index);
                             instance_allocator.free(mesh.quads);
                         }
-
                     }
+
+                    region.octree.remove(chunk_pos.chunk());
 
 
                 },
@@ -241,27 +245,7 @@ impl Chunker {
             else { break; };
 
             self.chunk_active_jobs -= 1;
-
-            let region = self.get_region_or_insert(chunk_pos.region());
-            let entry = region.get_mut(chunk_pos.chunk());
-
-            match entry {
-                ChunkEntry::None => {
-                    warn!("chunk was unloaded");
-                    continue
-                },
-
-
-                ChunkEntry::Loading => {
-                    *entry = ChunkEntry::Loaded(chunk);
-                },
-
-
-                ChunkEntry::Loaded(_) => {
-                    warn!("chunk at '{}' was already loaded", chunk_pos.0);
-                },
-
-            }
+            self.register_chunk(chunk_pos, chunk);
         }
     }
 
@@ -289,7 +273,25 @@ impl Chunker {
 
             let region = self.get_region_or_insert(chunk_pos.region());
 
-            let entry = &mut region.meshes[chunk_pos.chunk().to_region_index()];
+            let (chunk_entry, mesh_entry) = {
+                let pos = chunk_pos.chunk();
+                let index = pos.to_region_index();
+                (&mut region.chunks[index], &mut region.meshes[index])
+            };
+
+            let chunk_version = match chunk_entry {
+                ChunkEntry::Loaded(chunk) => {
+                    if version.get() < chunk.version.get() {
+                        warn!("outdated mesh '{chunk_pos:?}'");
+                        self.mesh_load_queue.insert(chunk_pos);
+                        continue;
+                    }
+
+                    Some(chunk.version.clone())
+                },
+
+                _ => None,
+            };
 
             let mut data = [const { None }; 6];
             for i in 0..6 {
@@ -320,19 +322,17 @@ impl Chunker {
                 data[i] = Some(mesh);
             }
 
-
             let data = data;
             let is_data_some = data.iter().any(|x| x.is_some());
 
-
-            match entry {
+            match mesh_entry {
                 MeshEntry::None => {
                     let meshes = 
                         if !is_data_some { None }
                         else { Some(region.octree.insert(chunk_pos.chunk(), Leaf { mesh: data })) };
 
                     let value = ChunkMeshes { meshes, version };
-                    *entry = MeshEntry::Loaded(value);
+                    *mesh_entry = MeshEntry::Loaded(value);
                 },
 
 
@@ -343,6 +343,7 @@ impl Chunker {
                     }
 
                     chunk_meshes.version = version;
+
                     if let Some(meshes) = chunk_meshes.meshes {
                         let prev_meshes = region.octree.get_mut(meshes);
 
@@ -354,7 +355,6 @@ impl Chunker {
                             instance_allocator.free(mesh.quads);
                         }
 
-
                         if is_data_some {
                             prev_meshes.mesh = data;
                         } else {
@@ -364,6 +364,7 @@ impl Chunker {
                         let meshes = 
                             if !is_data_some { None }
                             else { Some(region.octree.insert(chunk_pos.chunk(), Leaf { mesh: data })) };
+
                         chunk_meshes.meshes = meshes;
                     }
                 },
@@ -401,35 +402,36 @@ impl Chunker {
         if self.mesh_active_jobs.contains(&pos) { return true };
 
         let base = pos.0;
+        let mut failed = false;
         for x in -1..=1 {
             for y in -1..=1 {
                 for z in -1..=1 {
                     let offset = IVec3::new(x, y, z);
                     let Some(_) = self.get_chunk_or_queue(WorldChunkPos(base+offset))
-                    else { return false; };
+                    else {
+                        failed = true;
+                        continue;
+                    };
                 }
             }
         }
 
+        if failed {
+            warn!("mesh-task: '{}' failed because neighbour chunks aren't loaded", pos.0);
+            return false;
+        }
 
         let region = self.get_region_or_insert(pos.region());
-        let (chunk, mesh) = region.get_mut_chunk_and_mesh(pos.chunk());
+        let (chunk, mut mesh) = region.get_mut_chunk_and_mesh(pos.chunk());
 
 
-        let chunk = match (chunk, mesh) {
-              (ChunkEntry::Loading, _)
-            | (ChunkEntry::None, _) => {
-                self.get_chunk_or_queue(pos);
-                return false;
-            },
-
-
+        let chunk = match (chunk, &mut mesh) {
             (ChunkEntry::Loaded(c), MeshEntry::None) => c,
 
 
             (ChunkEntry::Loaded(chunk), MeshEntry::Loaded(chunk_meshes)) => {
                 if chunk.version == chunk_meshes.version {
-                    trace!("failed to spawn a mesh job for chunk at '{}' because the mesh is up-to-date", pos.0);
+                    warn!("failed to spawn a mesh job for chunk at '{}' because the mesh is up-to-date", pos.0);
                     return true;
                 }
 
@@ -437,16 +439,34 @@ impl Chunker {
                 chunk_meshes.version = chunk.version;
                 chunk
             },
+
+
+              (ChunkEntry::Loading, _)
+            | (ChunkEntry::None, _) => {
+                self.get_chunk_or_queue(pos);
+                warn!("mesh-task: '{}' failed because chunk isn't loaded", pos.0);
+                return false;
+            },
+
+
         };
 
 
         if chunk.data.is_none() {
-            trace!("failed to spawn a mesh job for chunk at '{}' because it's empty", pos.0);
+            warn!("failed to spawn a mesh job for chunk at '{}' because it's empty", pos.0);
             return true;
         }
 
 
         let version = chunk.version;
+
+
+        match mesh {
+            MeshEntry::Loaded(chunk_meshes) => chunk_meshes.version = version,
+            _ => (),
+        }
+
+
         self.mesh_active_jobs.insert(pos);
 
         let offsets = [
@@ -511,12 +531,18 @@ impl Chunker {
 
 
     pub fn unload_voxel_data_of_chunk(&mut self, pos: WorldChunkPos) {
+        println!("unloading voxel data of {}", pos.0);
         let region = self.get_region_or_insert(pos.region());
         let entry = region.get_mut(pos.chunk());
+
 
         match entry {
             ChunkEntry::Loaded(_) => {
                 self.save_chunk(pos);
+                
+                let region = self.get_region_or_insert(pos.region());
+                let entry = region.get_mut(pos.chunk());
+                *entry = ChunkEntry::None;
             },
 
 
@@ -548,7 +574,6 @@ impl Chunker {
 
 
         let data = chunk.data.clone();
-        *entry = ChunkEntry::None;
         self.chunk_save_jobs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let counter = self.chunk_save_jobs.clone();
 
@@ -578,6 +603,11 @@ impl Chunker {
             counter.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             info!("save-chunk: saved chunk at '{}' in {:?}", pos.0, time.elapsed());
         });
+    }
+
+
+    pub fn unload_mesh(&mut self, pos: WorldChunkPos) {
+        self.mesh_unload_queue.insert(pos);
     }
 
 
@@ -616,9 +646,11 @@ impl Chunker {
             else { continue };
 
             chunk.version = chunk.version.checked_add(1).unwrap();
+            self.mesh_load_queue.insert(pos);
         }
 
 
+        self.mesh_load_queue.insert(pos);
         let chunk = match self.get_chunk_entry(pos) {
             ChunkEntry::Loaded(chunk) => chunk,
             _ => return None,
@@ -626,6 +658,7 @@ impl Chunker {
 
         chunk.version = chunk.version.checked_add(1).unwrap();
         chunk.is_dirty = true;
+        println!("invalidating {pos:?}");
 
         Some(chunk)
 
@@ -675,11 +708,39 @@ impl Chunker {
               ChunkEntry::None 
             | ChunkEntry::Loading => {
                 let result = generate_chunk(pos, &self.noise);
-                *chunk = ChunkEntry::Loaded(result);
 
+                self.register_chunk(pos, result);
                 self.get_chunk_or_generate(pos)
             }
         }
+    }
+
+
+    fn register_chunk(&mut self, chunk_pos: WorldChunkPos, chunk: Chunk) {
+        let region = self.get_region_or_insert(chunk_pos.region());
+        let entry = region.get_mut(chunk_pos.chunk());
+
+        match entry {
+            ChunkEntry::None => {
+                warn!("chunk was unloaded");
+                *entry = ChunkEntry::Loaded(chunk);
+                return;
+            },
+
+
+            ChunkEntry::Loading => {
+                println!("loaded {}", chunk_pos.0);
+                *entry = ChunkEntry::Loaded(chunk);
+            },
+
+
+            ChunkEntry::Loaded(_) => {
+                warn!("chunk at '{}' was already loaded", chunk_pos.0);
+            },
+        }
+
+
+
     }
 
 
@@ -692,6 +753,7 @@ impl Chunker {
 
         match (entry, mesh_entry) {
             (ChunkEntry::Loaded(chunk), MeshEntry::None) => {
+                println!("chunk is loaded and mesh is none {pos:?}");
                 if chunk.data.is_some() && !self.mesh_active_jobs.contains(&pos) {
                     self.mesh_load_queue.insert(pos);
                 }
@@ -699,7 +761,9 @@ impl Chunker {
             },
 
             (ChunkEntry::Loaded(chunk), MeshEntry::Loaded(chunk_meshes)) => {
-                if chunk.version != chunk_meshes.version {
+                println!("chunk is loaded and mesh is loaded {pos:?},
+                    chunk_version: {}, mesh_version: {}", chunk.version.get(), chunk_meshes.version.get());
+                if chunk.version.get() != chunk_meshes.version.get() {
                     println!("queueing");
                     self.mesh_load_queue.insert(pos);
                 }
@@ -710,11 +774,15 @@ impl Chunker {
 
 
             (_, MeshEntry::Loaded(chunk_meshes)) => {
+                println!("mesh is loaded {pos:?}");
                 Some(chunk_meshes)
             },
 
 
-            (_, MeshEntry::None) => None,
+            (_, MeshEntry::None) => {
+                self.mesh_load_queue.insert(pos);
+                None
+            },
         }
     }
 

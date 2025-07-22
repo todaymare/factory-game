@@ -608,6 +608,10 @@ impl Renderer {
                     };
 
                     let h = character.size.y as f32;
+                    if h > biggest_y_size {
+                        dbg!(char::from_u32(c).unwrap());
+                    }
+
                     biggest_y_size = biggest_y_size.max(h);
 
                     chars.insert(char::from_u32(c).unwrap(), character);
@@ -907,6 +911,7 @@ impl Renderer {
             };
 
 
+            let mut buf = vec![];
             let mut draw_counter = 0;
             for (pos, region) in voxel_world.chunker.regions() {
                 region.octree().render(
@@ -916,9 +921,13 @@ impl Renderer {
                     camera,
                     &frustum,
                     &mut indirect,
+                    &mut buf,
                     &mut draw_counter,
                 );
             }
+
+
+            for b in buf { voxel_world.chunker.get_mesh_or_queue(b); }
 
             self.draw_count.set(draw_counter as u32);
 
@@ -938,7 +947,20 @@ impl Renderer {
 
             // upload instances
             for (_, instances) in &mut self.mesh_draws {
-                buf.extend_from_slice(&instances);
+                for instance in instances {
+                    if instance.modulate.w == 1.0 {
+                        buf.push(*instance);
+                    }
+                }
+            }
+
+
+            for (_, instances) in &mut self.mesh_draws {
+                for instance in instances {
+                    if instance.modulate.w != 1.0 {
+                        buf.push(*instance);
+                    }
+                }
             }
 
             if buf.is_empty() { break 'meshes }
@@ -979,34 +1001,6 @@ impl Renderer {
 
 
 
-        // draw meshes
-        {
-            pass.set_pipeline(&self.mesh_pipeline.pipeline);
-
-            self.mesh_pipeline.frame_uniform.update(&self.queue, &MeshShaderUniform {
-                view,
-                projection,
-            });
-
-            self.mesh_pipeline.frame_uniform.use_uniform(&mut pass);
-            pass.set_vertex_buffer(1, self.mesh_pipeline.instance_buffer.buffer.slice(..));
-
-            let mut counter = 0;
-            for (index, instances) in &mut self.mesh_draws {
-                if instances.is_empty() { continue }
-
-                let mesh = &self.assets.meshes[index];
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), IndexFormat::Uint32);
-
-                pass.draw_indexed(0..mesh.index_count, 0, counter..counter+instances.len() as u32);
-                counter += instances.len() as u32;
-                instances.clear();
-
-            }
-        }
-
-
         // render voxel world
         {
             let rd = settings.render_distance;
@@ -1043,6 +1037,50 @@ impl Renderer {
             pass.set_vertex_buffer(1, voxel_pipeline.instances.ssbo.buffer.slice(..));
             pass.multi_draw_indirect(&voxel_pipeline.indirect_buf.buffer, 0, indirect_len as _);
         }
+
+
+        // draw meshes
+        {
+            pass.set_pipeline(&self.mesh_pipeline.pipeline);
+
+            self.mesh_pipeline.frame_uniform.update(&self.queue, &MeshShaderUniform {
+                view,
+                projection,
+            });
+
+            self.mesh_pipeline.frame_uniform.use_uniform(&mut pass);
+            pass.set_vertex_buffer(1, self.mesh_pipeline.instance_buffer.buffer.slice(..));
+
+            let mut counter = 0;
+            for (index, instances) in &mut self.mesh_draws {
+                if instances.is_empty() { continue }
+
+                let mesh = &self.assets.meshes[index];
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), IndexFormat::Uint32);
+
+                let len = instances.iter().filter(|x| x.modulate.w == 1.0).count() as u32;
+                pass.draw_indexed(0..mesh.index_count, 0, counter..counter+len);
+                counter += len;
+
+            }
+
+            for (index, instances) in &mut self.mesh_draws {
+                if instances.is_empty() { continue }
+
+                let mesh = &self.assets.meshes[index];
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), IndexFormat::Uint32);
+
+                let len = instances.iter().filter(|x| x.modulate.w != 1.0).count() as u32;
+                println!("drawing {} transparents", len);
+                pass.draw_indexed(0..mesh.index_count, 0, counter..counter+len);
+                counter += len;
+                instances.clear();
+
+            }
+        }
+
 
 
 
@@ -1158,10 +1196,11 @@ impl Renderer {
         let mut active_colour = default_colour;
 
         for l in text.lines() {
-            y += self.line_size * scale;
             x = pos.x;
+            y += self.line_size * scale;
 
 
+            let mut line_size = 0.0f32;
             let mut iter = l.chars();
             while let Some(c) = iter.next() {
                 if c == '§' {
@@ -1182,7 +1221,7 @@ impl Renderer {
                         'b' => Vec4::new(0.1, 1.0, 1.0, 1.0),
                         'c' => Vec4::new(1.0, 0.1, 0.1, 1.0),
                         'd' => Vec4::new(1.0, 0.1, 1.0, 1.0),
-                        'e' => Vec4::new(1.0, 1.0, 0.7, 1.0),
+                        'e' => Vec4::new(1.0, 1.0, 0.5, 1.0),
                         'f' => Vec4::ONE,
                         'r' => default_colour,
 
@@ -1203,6 +1242,7 @@ impl Renderer {
 
                 let w = ch.size.x as f32 * scale;
                 let h = ch.size.y as f32 * scale;
+                line_size = line_size.max(h);
 
                 let dims = Vec2::new(w, h);
                 self.draw_tex_rect(Vec2::new(xpos, ypos), dims, ch.texture, active_colour);
@@ -1355,8 +1395,16 @@ impl Renderer {
         for l in str.lines() {
             y_size += self.line_size * scale;
             let mut local_x_size = 0.0;
+            let mut skip_next = false;
 
             for c in l.chars() {
+                if skip_next { skip_next = false; continue };
+
+                if c == '§' {
+                    skip_next = true;
+                    continue
+                }
+
                 let Some(ch) = self.characters.get(&c)
                 else { warn!("[renderer] text-size: character not registered '{c}'"); continue };
                 local_x_size += (ch.advance >> 6) as f32 * scale;

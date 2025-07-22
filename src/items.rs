@@ -134,6 +134,38 @@ impl ItemKind {
     }
 
 
+    pub fn name(self) -> &'static str {
+        match self {
+            ItemKind::Coal => "Coal",
+            ItemKind::CopperOre => "Copper Ore",
+            ItemKind::IronOre => "Iron Ore",
+            ItemKind::Structure(StructureKind::Belt) => "§eBelt",
+            ItemKind::Structure(StructureKind::Splitter) => "§eSplitter",
+            ItemKind::Structure(StructureKind::Inserter) => "§eInserter",
+            ItemKind::Structure(StructureKind::Chest) => "§eChest",
+            ItemKind::Structure(StructureKind::Silo) => "§eSilo",
+            ItemKind::Structure(StructureKind::Quarry) => "§eQuarry",
+            ItemKind::Structure(StructureKind::Assembler) => "§eAssembler",
+            ItemKind::Structure(StructureKind::Furnace) => "§eFurnace",
+            ItemKind::Voxel(Voxel::Dirt) => "Dirt Block",
+            ItemKind::Voxel(Voxel::Stone) => "Stone Block",
+
+            ItemKind::IronPlate => "Iron Plate",
+            ItemKind::CopperPlate => "Copper Plate",
+
+            ItemKind::IronGearWheel => "Iron Gear Wheel",
+            ItemKind::IronRod => "Iron Rod",
+            ItemKind::CopperWire => "Copper Wire",
+            ItemKind::MechanicalComponent => "Mechanical Component",
+            ItemKind::ElectronicsKit => "Electronics Kit",
+
+            ItemKind::BuildersRuler => "builders_ruler",
+
+            ItemKind::Voxel(_) => "invalid",
+        }
+    }
+
+
 
     pub fn max_stack_size(self) -> u32 {
         100

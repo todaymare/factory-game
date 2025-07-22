@@ -7,7 +7,7 @@ use sti::hash::fxhash::fxhash32;
 use tracing::{info, warn};
 use winit::{dpi::LogicalPosition, event::MouseButton, keyboard::KeyCode, window::CursorGrabMode};
 
-use crate::{commands::{Command, CommandRegistry}, constants::{COLOUR_DENY, COLOUR_PASS, DELTA_TICK, DROPPED_ITEM_SCALE, LOAD_DISTANCE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::CardinalDirection, frustum::Frustum, input::InputManager, items::{Assets, DroppedItem, Item, ItemKind, MeshIndex}, mesh::{Mesh, MeshInstance}, renderer::Renderer, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick};
+use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE_I32, COLOUR_DENY, COLOUR_PASS, DELTA_TICK, DROPPED_ITEM_SCALE, LOAD_DISTANCE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::CardinalDirection, frustum::Frustum, input::InputManager, items::{Assets, DroppedItem, Item, ItemKind, MeshIndex}, mesh::{Mesh, MeshInstance}, renderer::Renderer, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick};
 
 pub struct Game {
     pub world: VoxelWorld,
@@ -29,6 +29,7 @@ pub struct Game {
     ui_layer: UILayer,
 
     pub settings: Settings,
+    prev_player_chunk: Option<WorldChunkPos>,
 
     //shader_mesh: ShaderProgram,
     //shader_world: ShaderProgram,
@@ -102,9 +103,11 @@ impl Game {
                 ui_scale: 1.0,
                 delta_tick: DELTA_TICK,
                 player_speed: PLAYER_SPEED,
-                render_distance: 1,
+                render_distance: RENDER_DISTANCE,
                 lines: false,
             },
+
+            prev_player_chunk: None,
         };
 
 
@@ -118,6 +121,13 @@ impl Game {
         this.command_registry.register("rd", |game, cmd| {
             let speed = cmd.arg(0)?.as_i32()?;
             game.settings.render_distance = speed;
+            Some(())
+        });
+
+
+        this.command_registry.register("unload", |game, cmd| {
+            let (chunk_pos, _) = split_world_pos(game.player.body.position.as_ivec3());
+            game.world.chunker.unload_voxel_data_of_chunk(chunk_pos);
             Some(())
         });
 
@@ -615,6 +625,7 @@ impl Game {
         }
 
 
+        /*
         if self.settings.render_distance < RENDER_DISTANCE
             && self.world.chunker.mesh_load_queue_len() == 0
             && self.world.chunker.chunk_load_queue_len() == 0
@@ -640,37 +651,73 @@ impl Game {
 
             self.settings.render_distance += 1;
             self.settings.render_distance = self.settings.render_distance.min(RENDER_DISTANCE);
-        }
+            println!("heyo {}", self.settings.render_distance);
+        }*/
 
 
-        if self.world.chunker.mesh_load_queue_len() == 0
-            && self.world.chunker.chunk_load_queue_len() == 0
-            && self.world.chunker.chunk_active_jobs_len() == 0
-            && self.world.chunker.mesh_active_jobs_len() == 0 {
+        {
 
-            let player_chunk = IVec3::ZERO;
+            let player_chunk = self.player.body.position.as_ivec3();
+            let (player_chunk, _) = split_world_pos(player_chunk);
             let rd = self.settings.render_distance;
+            let ld = LOAD_DISTANCE;
 
-            for y in -rd..=rd {
-                for z in -rd..=rd {
-                    for x in -rd..=rd {
-                        let offset = IVec3::new(x, y, z);
-                        let dist = offset.length_squared();
-                        let chunk_pos = offset + player_chunk;
+            if let Some(old_chunk) = self.prev_player_chunk {
+                iterate_diff(
+                    &mut self.world,
+                    old_chunk.0 - IVec3::splat(rd),
+                    old_chunk.0 + IVec3::splat(rd),
+                    player_chunk.0 - IVec3::splat(rd),
+                    player_chunk.0 + IVec3::splat(rd),
+                    |world, chunk_pos| {
+                        //world.chunker.unload_chunk(WorldChunkPos(chunk_pos));
+                    },
 
-                        if dist < LOAD_DISTANCE*LOAD_DISTANCE {
+                    |world, chunk_pos| {
+                        println!("hweeeeeleele {chunk_pos:?}");
+                        world.try_get_chunk(WorldChunkPos(chunk_pos));
+                        world.try_get_mesh(chunk_pos);
+                    }
+                );
+
+                iterate_diff(
+                    &mut self.world,
+                    old_chunk.0 - IVec3::splat(ld),
+                    old_chunk.0 + IVec3::splat(ld),
+                    player_chunk.0 - IVec3::splat(ld),
+                    player_chunk.0 + IVec3::splat(ld),
+                    |world, chunk_pos| {
+                        //world.chunker.unload_voxel_data_of_chunk(WorldChunkPos(chunk_pos));
+                    },
+                    |world, chunk_pos| {
+                        world.try_get_chunk(WorldChunkPos(chunk_pos));
+                        world.try_get_mesh(chunk_pos);
+                    }
+                );
+
+
+            } else {
+
+                let rd = rd+1;
+                for y in -rd..=rd {
+                    for z in -rd..=rd {
+                        for x in -rd..=rd {
+                            let offset = IVec3::new(x, y, z);
+                            let chunk_pos = offset + player_chunk.0;
+
                             self.world.try_get_mesh(chunk_pos);
                         }
                     }
                 }
             }
 
+            self.prev_player_chunk = Some(player_chunk);
             self.settings.render_distance += 1;
             self.settings.render_distance = self.settings.render_distance.min(RENDER_DISTANCE);
         }
 
 
-        if self.current_tick.u32() % (TICKS_PER_SECOND * 5) == 0 {
+        if self.current_tick.u32() % (TICKS_PER_SECOND * 5) == 100000 {
 
             let time = Instant::now();
             let (player_chunk, _) = split_world_pos(self.player.body.position.as_ivec3());
@@ -1489,3 +1536,74 @@ impl Drop for Game {
         //self.block_outline_mesh.destroy();
     }
 }
+
+
+fn iterate_diff<T>(
+    val: &mut T,
+    a_min: IVec3, a_max: IVec3,
+    b_min: IVec3, b_max: IVec3,
+    mut visit_old: impl FnMut(&mut T, IVec3),
+    mut visit_new: impl FnMut(&mut T, IVec3),
+) {
+    let [ax0, ay0, az0] = a_min.to_array();
+    let [ax1, ay1, az1] = a_max.to_array();
+    let [bx0, by0, bz0] = b_min.to_array();
+    let [bx1, by1, bz1] = b_max.to_array();
+
+    let ix0 = ax0.max(bx0);
+    let ix1 = ax1.min(bx1);
+    let iy0 = ay0.max(by0);
+    let iy1 = ay1.min(by1);
+    let iz0 = az0.max(bz0);
+    let iz1 = az1.min(bz1);
+
+    let overlap_exists = ix0 < ix1 && iy0 < iy1 && iz0 < iz1;
+
+    // Iterate A - intersection
+    if overlap_exists {
+        for x in ax0..ax1 {
+            for y in ay0..ay1 {
+                for z in az0..az1 {
+                    if x < ix0 || x >= ix1 ||
+                       y < iy0 || y >= iy1 ||
+                       z < iz0 || z >= iz1 {
+                        visit_old(val, IVec3::new(x, y, z));
+                    }
+                }
+            }
+        }
+    } else {
+        // No overlap, all of A is unique
+        for x in ax0..ax1 {
+            for y in ay0..ay1 {
+                for z in az0..az1 {
+                    visit_old(val, IVec3::new(x, y, z));
+                }
+            }
+        }
+    }
+
+    // Same for B - intersection
+    if overlap_exists {
+        for x in bx0..bx1 {
+            for y in by0..by1 {
+                for z in bz0..bz1 {
+                    if x < ix0 || x >= ix1 ||
+                       y < iy0 || y >= iy1 ||
+                       z < iz0 || z >= iz1 {
+                        visit_new(val, IVec3::new(x, y, z));
+                    }
+                }
+            }
+        }
+    } else {
+        for x in bx0..bx1 {
+            for y in by0..by1 {
+                for z in bz0..bz1 {
+                    visit_new(val, IVec3::new(x, y, z));
+                }
+            }
+        }
+    }
+}
+

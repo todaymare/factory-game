@@ -1,10 +1,11 @@
-use glam::{Vec3, Vec4};
+use glam::{Vec2, Vec3, Vec4};
 
 pub const COLOUR_WHITE: Vec4 = Vec4::new(1.0, 1.0, 1.0, 1.0);
 pub const COLOUR_PASS : Vec4 = Vec4::new(0.2, 0.8, 0.2, 1.0);
 pub const COLOUR_WARN : Vec4 = Vec4::new(0.8, 0.8, 0.2, 1.0);
 pub const COLOUR_DENY : Vec4 = Vec4::new(0.8, 0.2, 0.2, 1.0);
 pub const COLOUR_GREY : Vec4 = Vec4::new(0.2, 0.2, 0.2, 1.0);
+pub const COLOUR_DARK_GREY : Vec4 = Vec4::new(0.1, 0.1, 0.1, 1.0);
 pub const COLOUR_SCREEN_DIM : Vec4 = Vec4::new(0.1, 0.1, 0.1, 0.6);
 pub const COLOUR_PLAYER_ACTIVE_HOTBAR : Vec4 = Vec4::new(0.4, 0.6, 0.4, 1.0);
 
@@ -19,6 +20,7 @@ pub const UI_CROSSAIR_COLOUR      : Vec4 = Vec4::ONE;
 pub const UI_HOTBAR_UNSELECTED_BG : Vec4 = Vec4::new(0.2, 0.2, 0.2, 1.0);
 pub const UI_HOTBAR_SELECTED_BG   : Vec4 = Vec4::new(1.0, 0.0, 0.0, 1.0);
 pub const UI_SLOT_SIZE            : f32  = 60.0;
+pub const UI_HOVER_ACTION_OFFSET  : Vec2 = Vec2::new(30.0, 0.0); 
 pub const UI_ITEM_OFFSET          : f32  = UI_SLOT_SIZE * 0.05;
 pub const UI_ITEM_SIZE            : f32  = UI_SLOT_SIZE * 0.9;
 pub const UI_ITEM_AMOUNT_SCALE    : f32  = 0.5;
@@ -45,7 +47,7 @@ pub const PLAYER_HOTBAR_SIZE : usize = 5;
 pub const PLAYER_ROW_SIZE : usize = 6;
 pub const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-pub const RENDER_DISTANCE : i32 = 4;
+pub const RENDER_DISTANCE : i32 = 12;
 pub const LOAD_DISTANCE : i32 = 4;
 
 pub const FONT_SIZE : u32 = 48;

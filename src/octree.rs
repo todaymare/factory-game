@@ -1,4 +1,4 @@
-use std::num::NonZeroU16;
+use std::{cell::Cell, num::{NonZeroU16, NonZeroU32}, rc::Rc};
 
 use glam::{DVec3, IVec3, UVec3};
 use rand::seq::IndexedRandom;
@@ -29,7 +29,7 @@ pub enum Node {
 
 #[derive(Debug)]
 pub struct Leaf {
-    pub mesh: [Option<ChunkFaceMesh>; 6],
+    pub mesh: [Option<ChunkFaceMesh>; 6]
 }
 
 
@@ -197,13 +197,15 @@ impl MeshOctree {
         &self, pos0: ChunkPos, region: RegionPos,
         player_chunk: WorldChunkPos, camera: DVec3,
         frustum: &Frustum, buffer: &mut Vec<DrawIndirectArgs>,
+        remesh_buffer: &mut Vec<WorldChunkPos>,
         counter: &mut usize)
     {
 
         fn rec(
             this: &MeshOctree, pos0: ChunkPos, at: u16, height: u32,
             region: RegionPos, player_chunk: WorldChunkPos, camera: DVec3,
-            frustum: &Frustum, buffer: &mut Vec<DrawIndirectArgs>, counter: &mut usize,
+            frustum: &Frustum, buffer: &mut Vec<DrawIndirectArgs>,
+            remesh_buffer: &mut Vec<WorldChunkPos>, counter: &mut usize,
         ) {
 
             let chunk_pos = (region.0 * REGION_SIZE as i32) + pos0.0.as_ivec3();
@@ -231,7 +233,7 @@ impl MeshOctree {
                         rec(
                             this, ChunkPos(pos0.0 + d.0), child_id.0.get(),
                             height - 1, region, player_chunk, camera,
-                            frustum, buffer, counter
+                            frustum, buffer, remesh_buffer, counter
                         );
                     }
                 }
@@ -292,7 +294,7 @@ impl MeshOctree {
 
         rec(
             self, pos0, 0, Self::HEIGHT, region,
-            player_chunk, camera, frustum, buffer, counter
+            player_chunk, camera, frustum, buffer, remesh_buffer, counter
         );
     }
 
@@ -317,6 +319,11 @@ impl MeshOctree {
         node[0] = self.first_free;
         self.nodes[node_id.0.get()] = Node::Internal(node);
         self.first_free = node_id;
+    }
+
+
+    pub fn get(&self, node: NodeId) -> &Leaf {
+        self.nodes[node.0.get()].leaf()
     }
 
 

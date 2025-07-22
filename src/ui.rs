@@ -2,7 +2,7 @@ use glam::{DVec3, Vec2, Vec4};
 use winit::{event::MouseButton, keyboard::KeyCode};
 use std::{fmt::Write, ops::Bound};
 
-use crate::{commands::Command, constants::{COLOUR_ADDITIVE_HIGHLIGHT, COLOUR_DENY, COLOUR_GREY, COLOUR_PASS, COLOUR_PLAYER_ACTIVE_HOTBAR, COLOUR_SCREEN_DIM, COLOUR_WARN, COLOUR_WHITE, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND, UI_Z_MAX, UI_Z_MIN}, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{SlotKind, SlotMeta, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{split_world_pos, VoxelWorld}, Game, Player};
+use crate::{commands::Command, constants::{COLOUR_ADDITIVE_HIGHLIGHT, COLOUR_DARK_GREY, COLOUR_DENY, COLOUR_GREY, COLOUR_PASS, COLOUR_PLAYER_ACTIVE_HOTBAR, COLOUR_SCREEN_DIM, COLOUR_WARN, COLOUR_WHITE, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND, UI_HOVER_ACTION_OFFSET, UI_Z_MAX, UI_Z_MIN}, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{SlotKind, SlotMeta, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{chunker::MeshEntry, split_world_pos, VoxelWorld}, Game, Player};
 
 pub enum UILayer {
     Inventory {
@@ -430,6 +430,10 @@ impl UILayer {
 
                     let _ = writeln!(text, "§eRENDER WORLD TIME: §a{}ms§r", game.render_world_time);
                     let _ = writeln!(text, "§eRENDERED CHUNKS: §a{}§r", game.total_rendered_chunks);
+                    let _ = writeln!(text, "§eCHUNK LOAD QUEUE: §a{}§r", game.world.chunker.chunk_load_queue_len());
+                    let _ = writeln!(text, "§eCHUNK ACTIVE JOBS: §a{}§r", game.world.chunker.chunk_active_jobs_len());
+                    let _ = writeln!(text, "§eREMESH QUEUE: §a{}§r", game.world.chunker.mesh_load_queue_len());
+                    let _ = writeln!(text, "§eREMESH ACTIVE JOBS: §a{}§r", game.world.chunker.mesh_active_jobs_len());
 
                     let _ = writeln!(text, "§ePITCH: §a{:.1}({:.1}) §eYAW: §a{:.1}({:.1})§r", game.camera.pitch.to_degrees(), game.camera.pitch, game.camera.yaw.to_degrees(), game.camera.yaw);
                     let _ = writeln!(text, "§ePOSITION: §a{:.1}, {:.1} {:.1}§r", game.camera.position.x, game.camera.position.y, game.camera.position.z);
@@ -437,8 +441,17 @@ impl UILayer {
                     let (chunk_pos, chunk_local_pos) = split_world_pos(game.player.body.position.floor().as_ivec3());
                     let _ = writeln!(text, "§eCHUNK POSITION: §a{}, {}, {}§r", chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z);
                     let _ = writeln!(text, "§eCHUNK LOCAL POSITION: §a{}, {}, {}§r", chunk_local_pos.x, chunk_local_pos.y, chunk_local_pos.z);
-                    let _ = writeln!(text, "§eDIRECTION: §b{:?}§r", game.camera.compass_direction());
+                    let _ = writeln!(text, "§eCHUNK VERSION: §a{}§r", game.world.chunker.get_chunk(chunk_pos).map(|x| x.version.get()).unwrap_or(0));
+                    match game.world.chunker.get_mesh_entry(chunk_pos) {
+                        MeshEntry::None => {
+                            let _ = writeln!(text, "§eMESH VERSION: §aNone§r");
+                        },
+                        MeshEntry::Loaded(chunk_meshes) => {
+                            let _ = writeln!(text, "§eMESH VERSION: §a{}§r", chunk_meshes.version.get());
+                        },
+                    };
 
+                    let _ = writeln!(text, "§eDIRECTION: §b{:?}§r", game.camera.compass_direction());
 
                     let target_block = game.world.raycast_voxel(game.camera.position, game.camera.front, PLAYER_REACH);
                     if let Some(target_block) = target_block {
@@ -721,10 +734,28 @@ fn draw_recipes(game: &mut Game, input: &InputManager, renderer: &mut Renderer, 
 
 
             if is_mouse_intersecting {
-                let size = Vec2::new(recipe.requirements.len() as f32, 1.0) * (padding + slot_size);
+                let padding = 10.0;
+                let scale = 0.5;
+
+                let text_size = renderer.text_size(recipe.result.kind.name(), scale);
+                let ingredient_size = Vec2::new(recipe.requirements.len() as f32, 1.0) * (padding*0.5 + slot_size);
+
+                let size = Vec2::splat(padding * 0.5)
+                            + Vec2::new(ingredient_size.x.max(text_size.x), 0.0)
+                            + Vec2::new(0.0, text_size.y)
+                            + Vec2::new(0.0, padding)
+                            + Vec2::new(0.0, ingredient_size.y)
+                            + Vec2::splat(padding);
+
+
                 renderer.with_z(UI_Z_MAX, |renderer| {
-                renderer.draw_rect(point, size, COLOUR_GREY);
-                let mut base = point + padding*0.5;
+                let mut pos = point + UI_HOVER_ACTION_OFFSET;
+                pos.y -= size.y * 0.5;
+
+                renderer.draw_rect(pos, size, COLOUR_DARK_GREY);
+                renderer.draw_text(recipe.result.kind.name(), pos+padding, scale, Vec4::ONE);
+
+                let mut base = pos + padding + Vec2::new(0.0, text_size.y+padding);
                 for item in recipe.requirements.iter() {
                     let craft_step = rc.craft_queue.iter()
                         .find(|x| x.item == item.kind && x.depth == 1)
@@ -740,8 +771,8 @@ fn draw_recipes(game: &mut Game, input: &InputManager, renderer: &mut Renderer, 
 
                     renderer.draw_rect(base, Vec2::splat(slot_size), colour);
                     renderer.draw_item_icon(item.kind, base+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
-                    renderer.draw_text(format!("{}", item.amount).as_str(), base+slot_size*0.05, 0.4, Vec4::ONE);
-                    base += Vec2::new(slot_size+padding, 0.0);
+                    renderer.draw_text(format!("{}", item.amount).as_str(), base+slot_size*0.05, scale, Vec4::ONE);
+                    base += Vec2::new(slot_size+padding*0.5, 0.0);
                 }
 
                 });
@@ -1051,6 +1082,24 @@ fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
     }
 
     if !is_mouse_intersecting { return }
+
+    if let Some(item) = *slot {
+        renderer.with_z(UI_Z_MAX, |renderer| {
+            let item_name = item.kind.name();
+            let scale = 0.5;
+            let padding = 10.0;
+            let size = renderer.text_size(item_name, scale) + Vec2::splat(padding * 2.0);
+
+            let mut pos = mouse + UI_HOVER_ACTION_OFFSET;
+            pos.y -= size.y * 0.5;
+
+            renderer.draw_rect(pos, size, COLOUR_DARK_GREY);
+            renderer.draw_text(item_name, pos+padding, scale, Vec4::ONE);
+        });
+
+    };
+    
+
 
     if input.is_button_pressed(MouseButton::Left) && input.is_key_pressed(KeyCode::ShiftLeft) {
         if let Some(inv_item) = slot && let Some(other_inv) = &mut other_inv {

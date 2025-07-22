@@ -338,3 +338,7 @@ impl core::fmt::Debug for ChunkData {
     }
 }
 
+
+unsafe impl Send for Chunk {}
+unsafe impl Sync for Chunk {}
+

@@ -1,4 +1,4 @@
-use std::{mem::offset_of, num::NonZeroU32, ptr::null_mut, sync::Arc};
+use std::{cell::Cell, mem::offset_of, num::NonZeroU32, ptr::null_mut, rc::Rc, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec3, UVec3, UVec4, Vec3, Vec4};
@@ -24,6 +24,7 @@ pub struct ChunkQuadInstance {
     // vertex 2 ao: 10..12
     // vertex 3 ao: 12..14
     // vertex 4 ao: 14..16
+    // debug is_chunk_loaded: 16..17
     id: u32,
 
     chunk_index: u32,

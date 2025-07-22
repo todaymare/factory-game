@@ -215,6 +215,7 @@ impl ApplicationHandler for App {
                 output.present();
 
                 renderer.window.request_redraw();
+                println!("frame");
             }
 
 
@@ -238,7 +239,7 @@ impl ApplicationHandler for App {
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(Level::ERROR)
+        .with_max_level(Level::WARN)
         .init();
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
