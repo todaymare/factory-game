@@ -1,6 +1,6 @@
 use glam::IVec3;
 
-use crate::{crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh};
+use crate::{constants::COAL_ENERGY_PER_UNIT, crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh, structures::inventory::Filter};
 
 use super::inventory::{SlotKind, SlotMeta, StructureInventory};
 
@@ -11,6 +11,7 @@ pub struct Structure {
     pub data: StructureData,
 
     pub inventory: Option<StructureInventory>,
+    pub energy: u32,
 
     pub is_asleep: bool,
 }
@@ -40,11 +41,7 @@ pub enum StructureData {
         recipe: Option<Recipe>,
     },
 
-    Furnace {
-        input: Option<Item>,
-        output: Option<Item>,
-    }
-
+    Furnace,
 }
 
 
@@ -99,6 +96,8 @@ impl StructureData {
                 const SLOTS : &[SlotMeta] = &[SlotMeta::new(1, SlotKind::Storage); 4];
                 (Self::Belt, Some(StructureInventory::new(SLOTS)))
             },
+
+
             StructureKind::Splitter => {
                 const SLOTS : &[SlotMeta] = &[SlotMeta::new(1, SlotKind::Storage); 8];
                 (Self::Splitter { priority: [0; 2] }, Some(StructureInventory::new(SLOTS)))
@@ -108,7 +107,15 @@ impl StructureData {
             StructureKind::Assembler => (Self::Assembler { recipe: None }, None),
 
 
-            StructureKind::Furnace => (Self::Furnace { input: None, output: None }, None),
+            StructureKind::Furnace => {
+                const SLOTS : &[SlotMeta] = &[
+                    SlotMeta::new(u32::MAX, SlotKind::Input { filter: Filter::Reserved }), 
+                    SlotMeta::new(10, SlotKind::Input { filter: Filter::Fuel }), 
+                    SlotMeta::new(u32::MAX, SlotKind::Output)
+                ];
+
+                (Self::Furnace, Some(StructureInventory::new(SLOTS)))
+            },
         }
     }
 
@@ -138,7 +145,58 @@ impl Structure {
             direction,
             is_asleep: true,
             inventory: inv,
+            energy: 0,
         }
+    }
+
+
+    pub fn consume_energy(&mut self, amount: u32) -> bool {
+        let Some(inv) = &mut self.inventory
+        else { return false; };
+
+        if self.energy < amount {
+            for i in 0..inv.inputs_len() {
+                let (_, meta) = inv.input(i);
+                let entry = inv.input_mut(i);
+
+                match meta.kind {
+                    SlotKind::Input { filter: Filter::Fuel } => (),
+                    _ => continue,
+                };
+
+
+                let Some(item) = entry
+                else { continue; };
+
+
+                let energy_per_unit = match item.kind {
+                    ItemKind::Coal => COAL_ENERGY_PER_UNIT,
+
+                    _ => panic!("not a fuel source"),
+
+                };
+
+                let units_required = amount.div_ceil(energy_per_unit);
+
+                if item.amount >= units_required {
+                    item.amount -= units_required;
+                    if item.amount == 0 {
+                        *entry = None;
+                    }
+
+                    self.energy += units_required * energy_per_unit;
+                    break;
+                }
+            }
+        }
+
+
+        if self.energy < amount {
+            return false;
+        }
+
+        self.energy -= amount;
+        true
     }
 
 
@@ -149,8 +207,13 @@ impl Structure {
 
     pub fn can_accept(&self, item: Item) -> bool {
         match self.data {
-            StructureData::Furnace { input, output } => {
-                if let Some(input) = input {
+            StructureData::Furnace => {
+                let inv = self.inventory.as_ref().unwrap();
+
+                let output = *inv.output(0).0;
+                let input = inv.input(0).0;
+
+                let result = if let Some(input) = input {
                     input.kind == item.kind && input.amount < 5 && input.amount + item.amount <= input.kind.max_stack_size()
                 } else if let Some(output) = output {
                     let curr_recipe = FURNACE_RECIPES.iter().find(|x| x.result.kind == output.kind).unwrap();
@@ -158,7 +221,10 @@ impl Structure {
                     input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
                 } else {
                     FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == item.kind).is_some()
-                }
+                };
+
+
+                result || inv.can_accept(item)
             }
 
 
@@ -175,8 +241,14 @@ impl Structure {
 
     pub fn can_accept_from_player(&self, item: Item) -> bool {
         match self.data {
-            StructureData::Furnace { input, output } => {
-                if let Some(input) = input {
+            StructureData::Furnace => {
+                let inv = self.inventory.as_ref().unwrap();
+
+                let output = *inv.output(0).0;
+                let input = inv.input(0).0;
+
+
+                let result = if let Some(input) = input {
                     input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
                 } else if let Some(output) = output {
                     let curr_recipe = FURNACE_RECIPES.iter().find(|x| x.result.kind == output.kind).unwrap();
@@ -184,7 +256,10 @@ impl Structure {
                     input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
                 } else {
                     FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == item.kind).is_some()
-                }
+                };
+
+
+                result || inv.can_accept(item)
             }
 
 
@@ -200,11 +275,31 @@ impl Structure {
 
     pub fn give_item(&mut self, item: Item) {
         match &mut self.data {
-            StructureData::Furnace { input, .. } => {
-                if let Some(input) = input {
-                    input.amount += item.amount;
+            StructureData::Furnace => {
+                let inv = self.inventory.as_mut().unwrap();
+
+                let output = *inv.output(0).0;
+                let input = inv.input_mut(0);
+
+                let can_add_to_burning = if let Some(input) = input {
+                    input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
+                } else if let Some(output) = output {
+                    let curr_recipe = FURNACE_RECIPES.iter().find(|x| x.result.kind == output.kind).unwrap();
+                    let input = curr_recipe.requirements[0];
+                    input.kind == item.kind && input.amount + item.amount <= input.kind.max_stack_size()
                 } else {
-                    *input = Some(item);
+                    FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == item.kind).is_some()
+                };
+
+
+                if can_add_to_burning {
+                    if let Some(input) = input {
+                        input.amount += item.amount;
+                    } else {
+                        *input = Some(item);
+                    }
+                } else {
+                    inv.give_item(item);
                 }
             },
 
@@ -222,9 +317,6 @@ impl Structure {
 
     pub fn available_items_len(&self) -> usize {
         match self.data {
-            StructureData::Furnace { output, .. } => output.is_some() as _,
-
-
             _ => {
                 let Some(inventory) = &self.inventory
                 else { return 0 };
@@ -238,8 +330,6 @@ impl Structure {
 
     pub fn available_item(&self, index: usize) -> &Option<Item> {
         match &self.data {
-            StructureData::Furnace { output, .. } => &output,
-
             _ => {
                 let Some(inventory) = &self.inventory
                 else { panic!("tried to view an item from a structure with no inventory") };
@@ -254,22 +344,6 @@ impl Structure {
 
     pub fn try_take(&mut self, index: usize, max: u32) -> Option<Item> {
         match &mut self.data {
-            StructureData::Furnace { output, .. } => {
-                if let Some(output_item) = output {
-                    let amount = max.min(output_item.amount);
-                    output_item.amount -= amount;
-                    let mut item = *output_item;
-                    item.amount = amount;
-
-                    if output_item.amount == 0 { *output = None };
-
-                    return Some(item)
-                }
-
-                None
-            }
-
-
             _ => {
                 let Some(inventory) = &mut self.inventory
                 else { panic!("tried to take an item from a structure with no inventory") };

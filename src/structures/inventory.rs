@@ -18,11 +18,20 @@ pub struct SlotMeta {
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum SlotKind {
     Input {
-        filter: Option<ItemKind>,
+        filter: Filter,
     },
 
     Storage,
     Output,
+}
+
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum Filter {
+    ItemKind(ItemKind),
+    Reserved,
+    Fuel,
+    None,
 }
 
 
@@ -45,8 +54,7 @@ impl StructureInventory {
             }
 
             if let SlotKind::Input { filter } = meta.kind 
-                && let Some(filter) = filter
-                && item.kind != filter {
+                && !filter.is_valid(item.kind) {
                 continue;
             }
 
@@ -87,8 +95,7 @@ impl StructureInventory {
             }
 
             if let SlotKind::Input { filter } = meta.kind 
-                && let Some(filter) = filter
-                && item.kind != filter {
+                && !filter.is_valid(item.kind) {
                 continue;
             }
 
@@ -176,6 +183,20 @@ impl StructureInventory {
     }
 
 
+    pub fn input_mut(&mut self, index: usize) -> &mut Option<Item> {
+        debug_assert!(index < self.inputs_len());
+
+        let (i, _) = self.meta.iter()
+            .enumerate()
+            .filter(|x| matches!(x.1.kind, SlotKind::Input { .. } | SlotKind::Storage))
+            .skip(index)
+            .next()
+            .unwrap();
+
+        &mut self.slots[i]
+    }
+
+
     pub fn try_take(&mut self, index: usize, max: u32) -> Option<Item> {
         let (i, _) = self.meta.iter()
             .enumerate()
@@ -203,5 +224,17 @@ impl StructureInventory {
 impl SlotMeta {
     pub const fn new(max_amount: u32, kind: SlotKind) -> Self {
         Self { max_amount, kind }
+    }
+}
+
+
+impl Filter {
+    pub fn is_valid(self, item: ItemKind) -> bool {
+        match self {
+            Filter::ItemKind(item_kind) => item == item_kind,
+            Filter::Fuel => item == ItemKind::Coal,
+            Filter::Reserved => false,
+            Filter::None => true,
+        }
     }
 }

@@ -3,20 +3,18 @@ pub mod uniform;
 pub mod ssbo;
 pub mod gpu_allocator;
 
-use std::{cell::Cell, collections::HashMap, mem::offset_of, ptr::null_mut, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use std::{cell::Cell, collections::HashMap, mem::offset_of, ptr::null_mut, time::{SystemTime, UNIX_EPOCH}};
 
 use bytemuck::{Pod, Zeroable};
-//use freetype::freetype::{FT_Done_Face, FT_Done_FreeType, FT_Load_Char, FT_Set_Pixel_Sizes, FT_LOAD_RENDER};
-use glam::{DVec3, IVec2, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
+use glam::{IVec2, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
 use gpu_allocator::GPUAllocator;
-use image::{DynamicImage, EncodableLayout, GenericImage, GenericImageView, Rgba32FImage, RgbaImage};
-use rand::seq::IndexedRandom;
+use image::{EncodableLayout, GenericImage, GenericImageView, RgbaImage};
 use ssbo::{ResizableBuffer, SSBO};
 use sti::{key::Key, static_assert_eq, vec::KVec};
 use textures::{TextureAtlasBuilder, TextureId, UiShaderUniform, UiTextureAtlasManager};
-use tracing::{info, warn};
+use tracing::warn;
 use uniform::Uniform;
-use wgpu::{util::{BufferInitDescriptor, DeviceExt, RenderEncoder, StagingBelt}, wgt::{DrawIndexedIndirectArgs, DrawIndirectArgs}, BufferUsages, TextureUsages, *};
+use wgpu::{util::{BufferInitDescriptor, DeviceExt, StagingBelt}, wgt::DrawIndirectArgs, BufferUsages, TextureUsages, *};
 use winit::window::Window;
 
 use crate::{constants::{CHUNK_SIZE, FONT_SIZE, MSAA_SAMPLE_COUNT, QUAD_VERTICES, UI_DELTA_Z, UI_Z_MAX, UI_Z_MIN, VOXEL_TEXTURE_ATLAS_TILE_CAP, VOXEL_TEXTURE_ATLAS_TILE_SIZE}, directions::CardinalDirection, free_list::FreeKVec, frustum::Frustum, items::{Assets, ItemKind, MeshIndex}, mesh::MeshInstance, voxel_world::{chunker::ChunkPos, mesh::{ChunkMeshFramedata, ChunkQuadInstance, VoxelMeshIndex}, split_world_pos, VoxelWorld}, Camera};
@@ -1073,7 +1071,6 @@ impl Renderer {
                 pass.set_index_buffer(mesh.indices.slice(..), IndexFormat::Uint32);
 
                 let len = instances.iter().filter(|x| x.modulate.w != 1.0).count() as u32;
-                println!("drawing {} transparents", len);
                 pass.draw_indexed(0..mesh.index_count, 0, counter..counter+len);
                 counter += len;
                 instances.clear();
@@ -1286,39 +1283,6 @@ impl Renderer {
     }
 
 
-    /*
-    pub fn with_style<F: FnOnce(&mut Self)>(&mut self, style: Style, f: F) {
-        let mut prev_rect = self.current_rect;
-        self.current_rect = ScreenRect::new();
-        let len = self.rects.len();
-
-        f(self);
-
-        self.current_rect.pos = self.current_rect.pos.min(style.fallback_pos);
-        self.current_rect.size = self.current_rect.size.max(style.min);
-
-
-        if style.margin != Vec4::ZERO {
-            self.current_rect.pos -= style.margin.xy();
-            self.current_rect.size += style.margin.xy() + style.margin.zw();
-        }
-
-        if style.bg != Vec4::ZERO {
-            let rect = DrawRect {
-                modulate: style.bg,
-                pos: self.current_rect.pos,
-                dims: self.current_rect.size,
-                tex: self.white,
-                z: None,
-            };
-            self.rects.insert(len, rect);
-        }
-
-        prev_rect.include(self.current_rect);
-        self.current_rect = prev_rect;
-
-    }*/
-
     pub fn draw_tex_rect(&mut self, pos: Vec2, dims: Vec2, tex: TextureId, modulate: Vec4) {
         let rect = DrawRect {
             modulate,
@@ -1329,7 +1293,6 @@ impl Renderer {
         };
 
         self.rects.push(rect);
-        //self.current_rect.include(ScreenRect { pos, size: dims });
     }
 
 
@@ -1370,23 +1333,7 @@ impl Renderer {
         let texture = self.assets.get_ico(item);
         self.draw_tex_rect(pos, dims, texture, modulate);
     }
-    /*
 
-
-
-    pub fn draw_voxel_mesh(&self, mesh: &ChunkMesh) {
-        let this = &mesh;
-        unsafe {
-            gl::BindVertexArray(this.vao);
-            gl::DrawElements(gl::TRIANGLES, this.indices as _, gl::UNSIGNED_INT, null_mut());
-            gl::BindVertexArray(0);
-        }
-
-        self.triangle_count.set(self.triangle_count.get() + mesh.indices);
-        self.draw_count.set(self.draw_count.get() + 1);
-    }
-
-*/
 
     pub fn text_size(&self, str: &str, scale: f32) -> Vec2 {
         let mut y_size : f32 = 0.0;

@@ -188,21 +188,7 @@ impl Game {
 
 
                 StructureKind::Furnace => {
-                    let input = {
-                        buf.clear();
-                        write!(buf, "structure[{i}].input");
-                        hm.get(&*buf).map(|s| parse_item(s.as_str()))
-                    };
-
-                    let output = {
-                        buf.clear();
-                        write!(buf, "structure[{i}].output");
-                        hm.get(&*buf).map(|s| parse_item(s.as_str()))
-                    };
-
-
-
-                    StructureData::Furnace { input, output }
+                    StructureData::Furnace
                 }
             };
 
@@ -359,16 +345,7 @@ impl Game {
                 }
 
 
-                StructureData::Furnace { input, output } => {
-                    if let Some(input) = input {
-                        let path = format_in!(&arena, "{buf}.input").leak();
-                        save_item(&arena, &mut v, path, *input);
-                    }
-                    if let Some(output) = output {
-                        let path = format_in!(&arena, "{buf}.output").leak();
-                        save_item(&arena, &mut v, path, *output);
-                    }
-                }
+                StructureData::Furnace => {}
             };
         }
 

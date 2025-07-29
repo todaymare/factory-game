@@ -2,7 +2,7 @@ use glam::{DVec3, Vec2, Vec4};
 use winit::{event::MouseButton, keyboard::KeyCode};
 use std::{fmt::Write, ops::Bound};
 
-use crate::{commands::Command, constants::{COLOUR_ADDITIVE_HIGHLIGHT, COLOUR_DARK_GREY, COLOUR_DENY, COLOUR_GREY, COLOUR_PASS, COLOUR_PLAYER_ACTIVE_HOTBAR, COLOUR_SCREEN_DIM, COLOUR_WARN, COLOUR_WHITE, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND, UI_HOVER_ACTION_OFFSET, UI_Z_MAX, UI_Z_MIN}, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{SlotKind, SlotMeta, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{chunker::MeshEntry, split_world_pos, VoxelWorld}, Game, Player};
+use crate::{commands::Command, constants::{COLOUR_ADDITIVE_HIGHLIGHT, COLOUR_DARK_GREY, COLOUR_DENY, COLOUR_GREY, COLOUR_PASS, COLOUR_PLAYER_ACTIVE_HOTBAR, COLOUR_SCREEN_DIM, COLOUR_WARN, COLOUR_WHITE, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND, UI_HOVER_ACTION_OFFSET, UI_Z_MAX, UI_Z_MIN}, crafting::{self, Recipe, RECIPES}, input::InputManager, items::{DroppedItem, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{Filter, SlotKind, SlotMeta, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{chunker::MeshEntry, split_world_pos, VoxelWorld}, Game, Player};
 
 pub enum UILayer {
     Inventory {
@@ -473,6 +473,7 @@ impl UILayer {
                             let _ = writeln!(text, "§e- POSITION: §a{}, {}, {}", structure.position.x, structure.position.y, structure.position.z);
                             let _ = writeln!(text, "§e- DIRECTION: §b{:?}", structure.direction);
                             let _ = writeln!(text, "§e- IS ASLEEP: §b{}", structure.is_asleep);
+                            let _ = writeln!(text, "§e- ENERGY: §b{}", structure.energy);
 
                             if let Some(inv) = &structure.inventory {
                                 let input_len = inv.inputs_len();
@@ -482,14 +483,14 @@ impl UILayer {
                                         let (item, meta) = inv.input(i);
                                         let filter = match meta.kind {
                                             SlotKind::Input { filter } => filter,
-                                            SlotKind::Storage => None,
+                                            SlotKind::Storage => Filter::None,
                                             SlotKind::Output => unreachable!(),
                                         };
 
                                         if let Some(item) = item {
                                             let max_amount = meta.max_amount.min(item.kind.max_stack_size());
                                             let _ = writeln!(text, "§e     - §b{:?} §a{}x/{}x", item.kind, item.amount, max_amount);
-                                        } else if let Some(filter) = filter && meta.max_amount != u32::MAX {
+                                        } else if !matches!(filter, Filter::None) && meta.max_amount != u32::MAX {
                                             let max_amount = meta.max_amount;
                                             let _ = writeln!(text, "§e     - §b{:?} §a0x/{}x", filter, max_amount);
                                         } else {
@@ -570,10 +571,8 @@ impl UILayer {
                                     let _ = writeln!(text, "§e  - RECIPE: §a{crafter:?}");
                                 }
 
-                                StructureData::Furnace { input, output } => {
+                                StructureData::Furnace => {
                                     let _ = writeln!(text, "Furnace");
-                                    let _ = writeln!(text, "§e  - INPUT: §b{input:?}");
-                                    let _ = writeln!(text, "§e  - OUTPUT: §b{output:?}");
                                 }
                             }
                         } else {

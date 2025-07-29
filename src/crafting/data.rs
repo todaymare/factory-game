@@ -6,7 +6,7 @@
 //
 //
 //
-use crate::{constants::TICKS_PER_SECOND, items::{Item, ItemKind}, structures::{inventory::{SlotKind, SlotMeta}, strct::StructureKind}, voxel_world::voxel::Voxel};
+use crate::{constants::TICKS_PER_SECOND, items::{Item, ItemKind}, structures::{inventory::{Filter, SlotKind, SlotMeta}, strct::StructureKind}, voxel_world::voxel::Voxel};
 use super::Recipe;
 
 pub const FURNACE_RECIPES : &'static [Recipe] = &[
@@ -92,101 +92,101 @@ pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
     match index {
         0 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(4, SlotKind::Input { filter: Some(ItemKind::IronPlate) }),
+                SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronPlate) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS
         },
         1 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(2, SlotKind::Input { filter: Some(ItemKind::IronPlate) }),
+                SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronPlate) }),
                 SlotMeta::new(4, SlotKind::Output),
             ];
             SLOTS
         },
         2 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(2, SlotKind::Input { filter: Some(ItemKind::CopperPlate) }),
+                SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::CopperPlate) }),
                 SlotMeta::new(6, SlotKind::Output),
             ];
             SLOTS
         },
         3 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(4, SlotKind::Input { filter: Some(ItemKind::IronRod) }),
-                SlotMeta::new(2, SlotKind::Input { filter: Some(ItemKind::IronGearWheel) }),
+                SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronRod) }),
+                SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronGearWheel) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS
         },
         4 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(6, SlotKind::Input { filter: Some(ItemKind::CopperWire) }),
-                SlotMeta::new(2, SlotKind::Input { filter: Some(ItemKind::CopperPlate) }),
+                SlotMeta::new(6, SlotKind::Input { filter: Filter::ItemKind(ItemKind::CopperWire) }),
+                SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::CopperPlate) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS
         },
         5 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(2, SlotKind::Input { filter: Some(ItemKind::IronGearWheel) }),
-                SlotMeta::new(8, SlotKind::Input { filter: Some(ItemKind::Voxel(Voxel::Stone)) }),
+                SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronGearWheel) }),
+                SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
                 SlotMeta::new(6, SlotKind::Output),
             ];
             SLOTS
         },
         6 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(8, SlotKind::Input { filter: Some(ItemKind::Structure(StructureKind::Belt)) }),
-                SlotMeta::new(2, SlotKind::Input { filter: Some(ItemKind::ElectronicsKit) }),
+                SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Structure(StructureKind::Belt)) }),
+                SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::ElectronicsKit) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS
         },
         7 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(4, SlotKind::Input { filter: Some(ItemKind::IronGearWheel) }),
-                SlotMeta::new(32, SlotKind::Input { filter: Some(ItemKind::Voxel(Voxel::Stone)) }),
+                SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronGearWheel) }),
+                SlotMeta::new(32, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS
         },
         8 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(8, SlotKind::Input { filter: Some(ItemKind::Structure(StructureKind::Chest)) }),
-                SlotMeta::new(128, SlotKind::Input { filter: Some(ItemKind::Voxel(Voxel::Stone)) }),
+                SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Structure(StructureKind::Chest)) }),
+                SlotMeta::new(128, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS
         },
         9 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(2, SlotKind::Input { filter: Some(ItemKind::MechanicalComponent) }),
-                SlotMeta::new(2, SlotKind::Input { filter: Some(ItemKind::ElectronicsKit) }),
+                SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::MechanicalComponent) }),
+                SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::ElectronicsKit) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS
         },
         10 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(32, SlotKind::Input { filter: Some(ItemKind::Voxel(Voxel::Stone)) }),
-                SlotMeta::new(8, SlotKind::Input { filter: Some(ItemKind::Coal) }),
+                SlotMeta::new(32, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
+                SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Coal) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS
         },
         11 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(8, SlotKind::Input { filter: Some(ItemKind::MechanicalComponent) }),
-                SlotMeta::new(24, SlotKind::Input { filter: Some(ItemKind::Voxel(Voxel::Stone)) }),
+                SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::MechanicalComponent) }),
+                SlotMeta::new(24, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS
         },
         12 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(6, SlotKind::Input { filter: Some(ItemKind::MechanicalComponent) }),
-                SlotMeta::new(4, SlotKind::Input { filter: Some(ItemKind::ElectronicsKit) }),
+                SlotMeta::new(6, SlotKind::Input { filter: Filter::ItemKind(ItemKind::MechanicalComponent) }),
+                SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::ElectronicsKit) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS

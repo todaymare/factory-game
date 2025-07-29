@@ -11,7 +11,7 @@ use strct::{rotate_block_vector, InserterState, Structure, StructureData, Struct
 use tracing::warn;
 use work_queue::WorkQueue;
 
-use crate::{constants::{DROPPED_ITEM_SCALE, TICKS_PER_SECOND}, crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, mesh::MeshInstance, renderer::Renderer, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick};
+use crate::{constants::{DROPPED_ITEM_SCALE, FURNACE_COST_PER_SMELT, TICKS_PER_SECOND}, crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, mesh::MeshInstance, renderer::Renderer, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
@@ -440,7 +440,11 @@ impl Structure {
             }
 
 
-            StructureData::Furnace { input, output } => {
+            StructureData::Furnace => {
+                let inv = structure.inventory.as_mut().unwrap();
+                let input = inv.input(0).0;
+                let output = inv.output_mut(0);
+
                 if let Some(input_item) = input {
                     let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
                     else { unreachable!() };
@@ -454,6 +458,9 @@ impl Structure {
                     }
                 }
 
+                let output = *inv.output(0).0;
+                let input = inv.input_mut(0);
+
                 if let Some(input_item) = input {
                     let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
                     else { unreachable!() };
@@ -466,6 +473,15 @@ impl Structure {
                         }
                     }
 
+                    if !structure.consume_energy(20) {
+                        structure.is_asleep = true;
+                        return;
+                    }
+
+                    let inv = structure.inventory.as_mut().unwrap();
+                    let input = inv.input_mut(0);
+                    let input_item = input.as_mut().unwrap();
+
                     input_item.amount -= 1;
                     if input_item.amount == 0 {
                         *input = None;
@@ -476,6 +492,7 @@ impl Structure {
                 }  
 
                 structure.is_asleep = true;
+
             }
 
 
@@ -544,7 +561,12 @@ impl Structure {
             }
 
 
-            StructureData::Furnace { input, output } => {
+            StructureData::Furnace => {
+                let inv = structure.inventory.as_mut().unwrap();
+
+                let output = *inv.output(0).0;
+                let input = inv.input_mut(0);
+
                 if let Some(input_item) = input {
                     let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
                     else { unreachable!() };
@@ -557,17 +579,27 @@ impl Structure {
                         }
                     }
 
+                    if !structure.consume_energy(FURNACE_COST_PER_SMELT) {
+                        structure.is_asleep = true;
+                        return;
+                    }
+
+                    let inv = structure.inventory.as_mut().unwrap();
+                    let input = inv.input_mut(0);
+                    let input_item = input.as_mut().unwrap();
+
                     input_item.amount -= 1;
                     if input_item.amount == 0 {
                         *input = None;
                     }
 
-
                     structures.schedule_in(id, recipe.time);
                     return;
-                }
+                }  
 
                 structure.is_asleep = true;
+
+
             }
 
 

@@ -181,14 +181,6 @@ impl VoxelWorld {
                     self.dropped_items.push(DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
                 }
 
-                StructureData::Furnace { input, output } => {
-                    if let Some(item) = input {
-                        self.dropped_items.push(DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
-                    }
-                    if let Some(item) = output {
-                        self.dropped_items.push(DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
-                    }
-                }
                 _ => (),
             }
 

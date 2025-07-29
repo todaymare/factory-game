@@ -1,4 +1,4 @@
-use glam::{Vec2, Vec3, Vec4};
+use glam::{Vec2, Vec4};
 
 pub const COLOUR_WHITE: Vec4 = Vec4::new(1.0, 1.0, 1.0, 1.0);
 pub const COLOUR_PASS : Vec4 = Vec4::new(0.2, 0.8, 0.2, 1.0);
@@ -47,7 +47,7 @@ pub const PLAYER_HOTBAR_SIZE : usize = 5;
 pub const PLAYER_ROW_SIZE : usize = 6;
 pub const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-pub const RENDER_DISTANCE : i32 = 12;
+pub const RENDER_DISTANCE : i32 = 4;
 pub const LOAD_DISTANCE : i32 = 4;
 
 pub const FONT_SIZE : u32 = 48;
@@ -56,6 +56,10 @@ pub const DROPPED_ITEM_SCALE : f32 = 0.5;
 
 pub const TICKS_PER_SECOND : u32 = 60;
 pub const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32; 
+
+
+pub const COAL_ENERGY_PER_UNIT : u32 = 200;
+pub const FURNACE_COST_PER_SMELT : u32 = 25;
 
 
 pub const QUAD_VERTICES : &[i32] = &[
