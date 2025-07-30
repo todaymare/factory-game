@@ -198,14 +198,14 @@ impl MeshOctree {
         player_chunk: WorldChunkPos, camera: DVec3,
         frustum: &Frustum, buffer: &mut Vec<DrawIndirectArgs>,
         remesh_buffer: &mut Vec<WorldChunkPos>,
-        counter: &mut usize)
+        counter: &mut u32)
     {
 
         fn rec(
             this: &MeshOctree, pos0: ChunkPos, at: u16, height: u32,
             region: RegionPos, player_chunk: WorldChunkPos, camera: DVec3,
             frustum: &Frustum, buffer: &mut Vec<DrawIndirectArgs>,
-            remesh_buffer: &mut Vec<WorldChunkPos>, counter: &mut usize,
+            remesh_buffer: &mut Vec<WorldChunkPos>, counter: &mut u32,
         ) {
 
             let chunk_pos = (region.0 * REGION_SIZE as i32) + pos0.0.as_ivec3();
@@ -239,7 +239,6 @@ impl MeshOctree {
                 }
             }
             else {
-                *counter += 1;
                 let leaf = this.nodes[at].leaf();
                 let chunk_pos = (region.0 * REGION_SIZE as i32) + pos0.0.as_ivec3();
                 let offset = chunk_pos - player_chunk.0;
@@ -279,6 +278,7 @@ impl MeshOctree {
                     let vo = mesh.quads.offset as u32;
                     let vs = mesh.quads.size as u32;
 
+                    *counter += vs * 6;
                     buffer.push(DrawIndirectArgs {
                         instance_count: vs,
                         first_instance: vo,

@@ -8,13 +8,6 @@ use tracing::error;
 
 use crate::{constants::DROPPED_ITEM_SCALE, mesh::Mesh, renderer::{textures::{TextureAtlasBuilder, TextureId}}, structures::strct::StructureKind, voxel_world::voxel::Voxel, PhysicsBody, Tick};
 
-#[derive(Clone)]
-pub struct DroppedItem {
-    pub item: Item,
-    pub body: PhysicsBody,
-    pub creation_tick: Tick,
-}
-
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Item {
@@ -184,22 +177,6 @@ impl ItemKind {
         match self {
             ItemKind::Structure(structure) => Some(structure),
             _ => None,
-        }
-    }
-}
-
-
-impl DroppedItem {
-    pub fn new(item: Item, pos: DVec3) -> Self {
-        DroppedItem {
-            item,
-            body: PhysicsBody {
-                position: pos,
-                velocity: (random::<Vec3>() - Vec3::ONE*0.5) * 5.0,
-                aabb_dims: Vec3::splat(DROPPED_ITEM_SCALE),
-            },
-
-            creation_tick: Tick::NEVER,
         }
     }
 }

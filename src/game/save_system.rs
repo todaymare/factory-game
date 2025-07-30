@@ -5,7 +5,7 @@ use save_format::{Arena, Value};
 use sti::format_in;
 use tracing::warn;
 
-use crate::{constants::DROPPED_ITEM_SCALE, crafting::{crafting_recipe_index, crafting_recipe_inventory, RECIPES}, directions::CardinalDirection, game::Game, items::{DroppedItem, Item, ItemKind}, structures::{inventory::StructureInventory, strct::{InserterState, Structure, StructureData, StructureKind}}, PhysicsBody, Tick};
+use crate::{constants::DROPPED_ITEM_SCALE, crafting::{crafting_recipe_index, crafting_recipe_inventory, RECIPES}, directions::CardinalDirection, game::Game, items::{Item, ItemKind}, structures::{inventory::StructureInventory, strct::{InserterState, Structure, StructureData, StructureKind}}, PhysicsBody, Tick};
 
 impl Game {
     #[allow(unused_must_use)]
@@ -26,20 +26,7 @@ impl Game {
         game.camera.yaw = hm["camera.yaw"].as_f32();
         game.camera.pitch = hm["camera.pitch"].as_f32();
 
-        let mut i = 0;
         let mut buf = sti::string::String::with_cap_in(&arena, 128);
-        loop {
-            buf.clear();
-            write!(buf, "world.dropped_items[{i}]");
-
-            let Some(dropped_item) = parse_dropped_item(&hm, &mut buf)
-            else { break; };
-
-            game.world.dropped_items.push(dropped_item);
-
-            i += 1;
-        }
-
 
         // player
         game.player.body.position = hm["player.body.position"].as_vec3().as_dvec3();
@@ -58,21 +45,6 @@ impl Game {
 
             let item = parse_item(value.as_str());
             game.player.inventory[i] = Some(item);
-
-            i += 1;
-        }
-
-
-        let mut i = 0;
-        let mut buf = sti::string::String::with_cap_in(&arena, 128);
-        loop {
-            buf.clear();
-            write!(buf, "player.pulling[{i}]");
-
-            let Some(dropped_item) = parse_dropped_item(&hm, &mut buf)
-            else { break; };
-
-            game.player.pulling.push(dropped_item);
 
             i += 1;
         }
@@ -239,12 +211,6 @@ impl Game {
         insert!(self.camera.pitch, Num);
 
 
-        for (i, item) in self.world.dropped_items.iter().enumerate() {
-            let path = format_in!(&arena, "world.dropped_items[{i}]").leak();
-            save_dropped_item(&arena, &mut v, path, item);
-        }
-
-
         v.push(("player.body.position", Value::Vec3(self.player.body.position.as_vec3())));
         insert!(self.player.body.velocity, Vec3);
         insert!(self.player.hand, Num);
@@ -257,13 +223,7 @@ impl Game {
             }
         }
 
-
-        for (i, item) in self.player.pulling.iter().enumerate() {
-            let path = format_in!(&arena, "player.pulling[{i}]").leak();
-            save_dropped_item(&arena, &mut v, path, item);
-        }
-
-
+        
         // structures
         let mut buf = String::new();
         let mut structure_to_index = HashMap::new();
@@ -393,22 +353,6 @@ fn save_item<'a>(arena: &'a Arena,
 }
 
 
-fn save_dropped_item<'a>(
-    arena: &'a Arena,
-    v: &mut Vec<(&'a str, Value<'a>)>,
-    prefix: &'a str,
-    item: &DroppedItem) {
-    let path = format_in!(arena, "{prefix}.item");
-    save_item(arena, v, path.leak(), item.item);
-    v.push((format_in!(arena, "{prefix}.body.position").leak(), Value::Vec3(item.body.position.as_vec3())));
-    v.push((format_in!(arena, "{prefix}.body.velocity").leak(), Value::Vec3(item.body.velocity)));
-    v.push((format_in!(arena, "{prefix}.creation_tick").leak(), Value::Num(item.creation_tick.u32() as _)));
-}
-
-
-
-
-
 fn parse_item(str: &str) -> Item {
     let (split_pos, _) = str.bytes().enumerate().rev().find(|x| x.1 == b'x').unwrap();
     let (ident, amount) = str.split_at(split_pos);
@@ -420,41 +364,5 @@ fn parse_item(str: &str) -> Item {
     let item = Item { amount, kind };
     item
 }
-
-
-fn parse_dropped_item(hm: &HashMap<&str, Value>, buf: &mut sti::string::String<&Arena>) -> Option<DroppedItem> {
-    let buf_len = buf.len();
-
-    buf.push(".item");
-    let Some(&value) = hm.get(buf.as_str())
-    else { return None };
-
-    let item = parse_item(value.as_str());
-
-    // parse the body
-    unsafe { buf.inner_mut().set_len(buf_len); }
-    buf.push(".body.position");
-    let position = hm[buf.as_str()].as_vec3();
-
-    unsafe { buf.inner_mut().set_len(buf_len); }
-    buf.push(".body.velocity");
-    let velocity = hm[buf.as_str()].as_vec3();
-
-
-    unsafe { buf.inner_mut().set_len(buf_len); }
-    buf.push(".creation_tick");
-    let creation_tick = hm[buf.as_str()].as_u32();
-
-    unsafe { buf.inner_mut().set_len(buf_len); }
-
-    let dropped_item = DroppedItem {
-        item,
-        body: PhysicsBody { position: position.as_dvec3(), velocity, aabb_dims: Vec3::splat(DROPPED_ITEM_SCALE) },
-        creation_tick: Tick(creation_tick),
-    };
-
-    Some(dropped_item)
-}
-
 
 

@@ -37,6 +37,7 @@ pub struct Renderer {
 
     pub voxel_pipeline: VoxelPipeline,
     pub mesh_pipeline: MeshPipeline,
+
     pub staging_buffer: StagingBelt,
 
 
@@ -894,6 +895,7 @@ impl Renderer {
         self.staging_buffer.recall();
 
 
+        let triangle_count = self.triangle_count.get_mut();
         // prepare voxel buffers
         let indirect_len;
         {
@@ -910,7 +912,6 @@ impl Renderer {
 
 
             let mut buf = vec![];
-            let mut draw_counter = 0;
             for (pos, region) in voxel_world.chunker.regions() {
                 region.octree().render(
                     ChunkPos(UVec3::ZERO),
@@ -920,15 +921,12 @@ impl Renderer {
                     &frustum,
                     &mut indirect,
                     &mut buf,
-                    &mut draw_counter,
+                    triangle_count,
                 );
             }
 
 
             for b in buf { voxel_world.chunker.get_mesh_or_queue(b); }
-
-            self.draw_count.set(draw_counter as u32);
-
 
             if !indirect.is_empty() {
                 voxel_pipeline.indirect_buf.resize(&self.device, &mut encoder, indirect.len());
@@ -1039,7 +1037,7 @@ impl Renderer {
 
         // draw meshes
         {
-            pass.set_pipeline(&self.mesh_pipeline.pipeline);
+            pass.set_pipeline(if settings.lines { &self.mesh_pipeline.line_pipeline } else { &self.mesh_pipeline.pipeline });
 
             self.mesh_pipeline.frame_uniform.update(&self.queue, &MeshShaderUniform {
                 view,
@@ -1054,6 +1052,9 @@ impl Renderer {
                 if instances.is_empty() { continue }
 
                 let mesh = &self.assets.meshes[index];
+
+                *triangle_count += mesh.index_count * instances.len() as u32;
+
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), IndexFormat::Uint32);
 
@@ -1076,6 +1077,8 @@ impl Renderer {
                 instances.clear();
 
             }
+
+
         }
 
 
@@ -1085,7 +1088,6 @@ impl Renderer {
 
         // draw UI
         let mut z = UI_Z_MIN;
-        let triangle_count = self.triangle_count.get_mut();
 
         for rect in self.rects.iter() {
             let tex = rect.tex;

@@ -74,6 +74,31 @@ impl<G: Key, K: Key, V, A: Alloc> KGenMap<G, K, V, A> {
             f(v);
         }
     }
+    
+
+    pub fn entry_at(&mut self, index: usize) -> Option<&mut V> {
+        let val = &mut self.vec[unsafe { K::from_usize_unck(index) }];
+        match &mut val.1 {
+            KGenVal::Occupied(v) => Some(v),
+            KGenVal::Free { .. } => None,
+        }
+    }
+
+
+    pub fn remove_entry_at(&mut self, index: usize) -> V {
+        let key = unsafe { K::from_usize_unck(index) };
+        let slot = &mut self.vec[key].1;
+
+        let slot = core::mem::replace(slot, KGenVal::Free { next: self.next });
+
+        match slot {
+            KGenVal::Occupied(v) => v,
+            KGenVal::Free { .. } => unreachable!(),
+        }
+    }
+
+
+    pub fn len(&self) -> usize { self.vec.len() }
 
 
     pub fn with_cap_in(alloc: A, cap: usize) -> Self {

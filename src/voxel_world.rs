@@ -14,12 +14,11 @@ use tracing::{error, info, warn};
 use voxel::Voxel;
 use wgpu::util::StagingBelt;
 
-use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_I32, REGION_SIZE}, free_list::FreeKVec, items::{DroppedItem, Item}, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
+use crate::{constants::{CHUNK_SIZE, CHUNK_SIZE_I32, REGION_SIZE}, entities::{EntityKind, EntityMap}, free_list::FreeKVec, items::{Item}, renderer::{gpu_allocator::GPUAllocator, ssbo::SSBO}, structures::{strct::{InserterState, StructureData}, StructureId, Structures}, voxel_world::chunk::Chunk, PhysicsBody};
 
 
 pub struct VoxelWorld {
     pub structure_blocks: sti::hash::HashMap<IVec3, StructureId>,
-    pub dropped_items: Vec<DroppedItem>,
     pub chunker: Chunker,
 }
 
@@ -40,7 +39,6 @@ impl VoxelWorld {
         Self {
             chunker: Chunker::new(),
             structure_blocks: sti::hash::HashMap::new(),
-            dropped_items: vec![],
         }
 
     }
@@ -135,12 +133,7 @@ impl VoxelWorld {
     }
 
 
-    pub fn drop_item(&mut self, item: Item, pos: DVec3) {
-        self.dropped_items.push(DroppedItem::new(item, pos));
-    }
-
-
-    pub fn break_block(&mut self, structures: &mut Structures, pos: IVec3) -> Item {
+    pub fn break_block(&mut self, structures: &mut Structures, entities: &mut EntityMap, pos: IVec3) -> Item {
         let voxel = self.get_voxel_mut(pos);
 
         let item = if voxel.is_structure() {
@@ -171,14 +164,20 @@ impl VoxelWorld {
                 for item in &inv.slots {
                     let Some(item) = item
                     else { continue };
-                    self.dropped_items.push(DroppedItem::new(*item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
+                    entities.spawn(
+                        EntityKind::dropped_item(*item),
+                        pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)
+                    );
                 }
             }
 
 
             match structure.data {
                 StructureData::Inserter { state: InserterState::Placing(item), .. } => {
-                    self.dropped_items.push(DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)));
+                    entities.spawn(
+                        EntityKind::dropped_item(item),
+                        pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)
+                    );
                 }
 
                 _ => (),

@@ -11,7 +11,7 @@ use strct::{rotate_block_vector, InserterState, Structure, StructureData, Struct
 use tracing::warn;
 use work_queue::WorkQueue;
 
-use crate::{constants::{DROPPED_ITEM_SCALE, FURNACE_COST_PER_SMELT, TICKS_PER_SECOND}, crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, mesh::MeshInstance, renderer::Renderer, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick};
+use crate::{constants::{DROPPED_ITEM_SCALE, FURNACE_COST_PER_SMELT, TICKS_PER_SECOND}, crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, entities::EntityMap, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, mesh::MeshInstance, renderer::Renderer, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
@@ -84,7 +84,7 @@ impl Structures {
     }
 
 
-    pub fn process(&mut self, world: &mut VoxelWorld) {
+    pub fn process(&mut self, entities: &mut EntityMap, world: &mut VoxelWorld) {
         self.current_tick = self.current_tick.inc();
         if self.current_tick.0 % 5 == 0 {
             self.update_belts(world);
@@ -100,7 +100,7 @@ impl Structures {
         }
 
         for id in to_be_updated {
-            Structure::update(id.1, self, world);
+            Structure::update(id.1, self, entities, world);
         }
     }
 
@@ -255,7 +255,7 @@ impl Ord for StructureId {
 }
 
 impl Structure {
-    pub fn update(id: StructureId, structures: &mut Structures, world: &mut VoxelWorld) {
+    pub fn update(id: StructureId, structures: &mut Structures, entities: &mut EntityMap, world: &mut VoxelWorld) {
         let structure = structures.get_mut_without_wake_up(id);
         if structure.is_asleep {
             warn!("tried to update a function that is asleep");
@@ -295,7 +295,7 @@ impl Structure {
                 if !voxel.is_air() {
                     let item = world.block_item(structures, zz + pos);
 
-                    world.break_block(structures, zz + pos);
+                    world.break_block(structures, entities, zz + pos);
 
                     let structure = structures.get_mut_without_wake_up(id);
                     let inventory = &mut structure.inventory.as_mut().unwrap();
@@ -398,7 +398,7 @@ impl Structure {
                         else { unreachable!() };
 
                         *state = InserterState::Searching;
-                        Structure::update(id, structures, world);
+                        Structure::update(id, structures, entities, world);
                         return;
                     },
 

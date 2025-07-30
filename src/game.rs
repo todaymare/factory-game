@@ -4,14 +4,15 @@ use std::time::Instant;
 
 use glam::{DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
 use sti::hash::fxhash::fxhash32;
-use tracing::{info, warn};
+use tracing::{info, warn, Instrument};
 use winit::{dpi::LogicalPosition, event::MouseButton, keyboard::KeyCode, window::CursorGrabMode};
 
-use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE_I32, COLOUR_DENY, COLOUR_PASS, DELTA_TICK, DROPPED_ITEM_SCALE, LOAD_DISTANCE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::CardinalDirection, frustum::Frustum, input::InputManager, items::{Assets, DroppedItem, Item, ItemKind, MeshIndex}, mesh::{Mesh, MeshInstance}, renderer::Renderer, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick};
+use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE_I32, COLOUR_DENY, COLOUR_PASS, DELTA_TICK, DROPPED_ITEM_SCALE, LOAD_DISTANCE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::CardinalDirection, entities::{EntityKind, EntityMap}, frustum::Frustum, input::InputManager, items::{Assets, Item, ItemKind, MeshIndex}, mesh::{Mesh, MeshInstance}, renderer::Renderer, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick};
 
 pub struct Game {
     pub world: VoxelWorld,
     pub player: Player,
+    pub entities: EntityMap,
     pub command_registry: CommandRegistry,
     pub structures: Structures,
 
@@ -42,6 +43,7 @@ pub struct Settings {
     pub player_speed: f32,
     pub render_distance: i32,
     pub lines: bool,
+    pub draw_hitboxes: bool,
 }
 
 
@@ -57,6 +59,7 @@ impl Game {
 
             world: VoxelWorld::new(),
             structures: Structures::new(),
+            entities: EntityMap::new(),
 
             camera: Camera {
                 position: DVec3::ZERO,
@@ -85,7 +88,6 @@ impl Game {
                 hotbar: PLAYER_ROW_SIZE-1,
                 mining_progress: None,
                 interact_delay: 0.0,
-                pulling: Vec::new(),
                 preview_rotation_offset: 0,
 
                 builders_ruler: None,
@@ -105,6 +107,7 @@ impl Game {
                 player_speed: PLAYER_SPEED,
                 render_distance: RENDER_DISTANCE,
                 lines: false,
+                draw_hitboxes: false,
             },
 
             prev_player_chunk: None,
@@ -143,11 +146,17 @@ impl Game {
             
             for _ in 0..stacks {
                 let item = Item { amount: kind.max_stack_size(), kind };
-                game.world.dropped_items.push(DroppedItem::new(item, game.player.body.position));
+                game.entities.spawn(
+                    EntityKind::dropped_item(item),
+                    game.player.body.position
+                );
             }
 
             let item = Item { amount: rem, kind };
-            game.world.dropped_items.push(DroppedItem::new(item, game.player.body.position));
+            game.entities.spawn(
+                EntityKind::dropped_item(item),
+                game.player.body.position
+            );
 
             Some(())
         });
@@ -205,10 +214,12 @@ impl Game {
     }
 
     
-    pub fn can_place_structure(&mut self,
-                           structure: StructureKind,
-                           pos: IVec3,
-                           direction: CardinalDirection) -> bool {
+    pub fn can_place_structure(
+        &mut self,
+        structure: StructureKind,
+        pos: IVec3,
+        direction: CardinalDirection
+    ) -> bool {
 
         let pos = pos - structure.origin(direction);
         let blocks = structure.blocks(direction);
@@ -326,8 +337,10 @@ impl Game {
                             for index in 0..structure.available_items_len() {
                                 let item = structure.try_take(index, u32::MAX);
                                 if let Some(item) = item {
-                                    let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3());
-                                    self.world.dropped_items.push(dropped_item);
+                                    self.entities.spawn(
+                                        EntityKind::dropped_item(item),
+                                        pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3(),
+                                    );
                                     break;
                                 }
 
@@ -375,13 +388,17 @@ impl Game {
                             if structure.can_accept(item) {
                                 structure.give_item(item);
                             } else {
-                                let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3());
-                                self.world.dropped_items.push(dropped_item);
+                                self.entities.spawn(
+                                    EntityKind::dropped_item(item),
+                                    pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3(),
+                                );
                             }
                         }
                     } else if let Some(item) = item {
-                        let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3());
-                        self.world.dropped_items.push(dropped_item);
+                        self.entities.spawn(
+                            EntityKind::dropped_item(item),
+                            pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3(),
+                        );
                     }
                 }
             }
@@ -439,6 +456,11 @@ impl Game {
                         offset: 1
                     }
                 }
+            }
+
+
+            if input.is_key_just_pressed(KeyCode::F3) {
+                self.settings.draw_hitboxes = !self.settings.draw_hitboxes;
             }
 
 
@@ -517,10 +539,12 @@ impl Game {
                 }
 
 
-                let item = self.world.break_block(&mut self.structures, pos);
-                let dropped_item = DroppedItem::new(item, pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5));
+                let item = self.world.break_block(&mut self.structures, &mut self.entities, pos);
+                self.entities.spawn(
+                    EntityKind::dropped_item(item),
+                    pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5)
+                );
 
-                self.world.dropped_items.push(dropped_item);
                 self.player.mining_progress = None;
             }
 
@@ -831,92 +855,111 @@ impl Game {
             // start pulling them if they are in distance
             // and they have been alive for more than 250ms
             {
-                let mut i = 0;
-                while let Some(item) = self.world.dropped_items.get(i) {
-                    let lifetime = self.current_tick - item.creation_tick;
-                    if item.creation_tick == Tick::NEVER {
-                        self.world.dropped_items[i].creation_tick = self.current_tick;
-                        i += 1;
+                let len = self.entities.entities.len();
+                for i in 0..len {
+                    let Some(entity) = self.entities.entities.entry_at(i)
+                    else { continue };
+
+                    let lifetime = self.current_tick - entity.spawn_tick;
+                    if entity.spawn_tick == Tick::NEVER {
+                        entity.spawn_tick = self.current_tick;
                         continue;
                     }
 
-                    if lifetime.u32() < (0.2 * TICKS_PER_SECOND as f32) as u32 { i += 1; continue }
 
-                    let distance = item.body.position.distance_squared(self.player.body.position);
-                    if distance.abs() as f32 > PLAYER_PULL_DISTANCE*PLAYER_PULL_DISTANCE {
-                        i += 1;
-                        continue;
-                    }
-
-                    if !self.player.can_give(item.item) { i += 1; continue };
-
-                    let item = self.world.dropped_items.remove(i);
-                    self.player.pulling.push(item);
-
-                }
-            }
+                    let EntityKind::DroppedItem { item, is_attracted } = &mut entity.kind
+                    else { continue };
 
 
-            // iterate through the items we are pulling
-            // and collect them if they are in pickup area
-            // else, pull them towards me
-            {
-                let mut i = 0;
-                let mut pulling = core::mem::take(&mut self.player.pulling);
-                while let Some(item) = pulling.get_mut(i) {
-                    let distance = item.body.position.distance_squared(self.player.body.position);
+                    if !*is_attracted {
+                        if lifetime.u32() < (0.2 * TICKS_PER_SECOND as f32) as u32 { continue }
 
-                    let can_give = self.player.can_give(item.item);
-                    if !can_give {
-                        let item = pulling.remove(i);
-                        self.world.dropped_items.push(item);
-                        continue;
-                    }
+                        let distance = entity.body.position.distance_squared(self.player.body.position);
+                        if distance.abs() as f32 > PLAYER_PULL_DISTANCE*PLAYER_PULL_DISTANCE {
+                            continue;
+                        }
 
-                    if distance.abs() < 0.5 {
-                        let item = pulling.remove(i);
-                        self.player.add_item(item.item);
+                        if !self.player.can_give(*item) { continue };
+                        *is_attracted = true;
                     } else {
-                        item.body.position = item.body.position.move_towards(self.player.body.position, 10.0 * (1.0 + distance * 0.1) * delta_time as f64);
-                        i += 1;
+                        let distance = entity.body.position.distance_squared(self.player.body.position);
+
+                        let can_give = self.player.can_give(*item);
+                        if !can_give {
+                            *is_attracted = false;
+                            continue;
+                        }
+
+                        if distance.abs() < 0.5 {
+                            let item = *item;
+                            self.entities.entities.remove_entry_at(i);
+                            self.player.add_item(item);
+
+                        } else {
+                            entity.body.position = entity.body.position
+                                .move_towards(
+                                    self.player.body.position, 
+                                    10.0 * (1.0 + distance * 0.1) * delta_time as f64
+                                );
+                        }
                     }
+
                 }
-
-                self.player.pulling = pulling;
-
             }
 
         }
 
-        // handle item physics
+        // handle entity physics
         {
-            let mut dropped_items = core::mem::take(&mut self.world.dropped_items);
-            for item in dropped_items.iter_mut() {
-                self.world.move_physics_body(delta_time, &mut item.body)
-            }
 
-            self.world.dropped_items = dropped_items;
+            let len = self.entities.entities.len();
+            for i in 0..len {
+                let Some(entity) = self.entities.entities.entry_at(i)
+                else { continue };
+
+                self.world.move_physics_body(delta_time, &mut entity.body)
+            }
         }
 
 
-        self.structures.process(&mut self.world);
+        self.structures.process(&mut self.entities, &mut self.world);
     }
 
 
 
     pub fn render(&mut self, renderer: &mut Renderer, input: &mut InputManager, delta_time: f32) {
-        // render dropped items
-        let items = self.world.dropped_items.iter()
-            .chain(self.player.pulling.iter());
+        // render entities
+        let len = self.entities.entities.len();
+        for i in 0..len {
+            let Some(entity) = self.entities.entities.entry_at(i)
+            else { continue };
 
-        for dropped_item in items {
-            let pos = dropped_item.body.position - self.camera.position;
-            let lifetime = self.current_tick - dropped_item.creation_tick;
+
+            if self.settings.draw_hitboxes {
+                let instance = MeshInstance {
+                    modulate: Vec4::ONE,
+                    model: Mat4::from_scale_rotation_translation(
+                        entity.body.aabb_dims, 
+                        Quat::IDENTITY, 
+                        (entity.body.position - self.camera.position).as_vec3()),
+                };
+
+                renderer.draw_mesh(renderer.assets.block_outline_mesh, instance);
+            }
+
+
+            let EntityKind::DroppedItem { item, .. } = &mut entity.kind
+            else { continue };
+
+
+
+            let pos = entity.body.position - self.camera.position;
+            let lifetime = self.current_tick - entity.spawn_tick;
 
             let scale = Vec3::splat(DROPPED_ITEM_SCALE);
 
             // vary the rotation for each item randomly
-            let hash = fxhash32(&dropped_item.creation_tick);
+            let hash = fxhash32(&entity.spawn_tick);
             let offset = (hash % 1024) as f32;
 
             let rot = (lifetime.u32() as f32 + offset) / TICKS_PER_SECOND as f32;
@@ -927,7 +970,7 @@ impl Game {
             };
 
             renderer.draw_item(
-                dropped_item.item.kind,
+                item.kind,
                 instance,
             );
         }
@@ -1245,14 +1288,72 @@ impl Game {
                 _ => (),
             }
         }
-    }
-}
+
+/*
+
+        // render current ui layer
+        let mut ui_layer = core::mem::replace(&mut self.ui_layer, UILayer::None);
+        ui_layer.render(self, &input, dt);
+        if matches!(self.ui_layer, UILayer::None) {
+            self.ui_layer = ui_layer;
+
+            let current_cm = self.renderer.window.get_cursor_mode();
+            let cm = self.ui_layer.capture_mode();
+            if current_cm != cm {
+                self.renderer.window.set_cursor_mode(cm);
+
+                let window = self.renderer.window.get_size();
+                self.renderer.window.set_cursor_pos(window.0 as f64 / 2.0,
+                                               window.1 as f64 / 2.0);
+                input.move_cursor(Vec2::NAN);
+                input.move_cursor(Vec2::NAN);
+                input.move_cursor(Vec2::NAN);
+            }
+        }
 
 
 
-impl Drop for Game {
-    fn drop(&mut self) {
-        //self.block_outline_mesh.destroy();
+        // render item in hand
+        unsafe { 
+            gl::Clear(gl::DEPTH_BUFFER_BIT);
+        }
+
+        let item = self.player.inventory[self.player.hand_index()];
+        if let Some(item) = item {
+            let mut scale = Vec3::ONE;
+
+            let hand_offset = Vec3::new(1.0, -0.5, 1.0); // right, down, forward
+            if let ItemKind::Structure(structure) = item.kind {
+                let blocks = structure.blocks(CardinalDirection::North);
+                let mut min = IVec3::MAX;
+                let mut max = IVec3::MIN;
+
+                for &block in blocks {
+                    min = min.min(block);
+                    max = max.max(block);
+                }
+
+                let size = (max - min).abs() + IVec3::ONE;
+                let size = size.as_vec3().max_element();
+                scale /= size.abs() * 1.5;
+            }
+
+
+            let model = 
+                Mat4::from_rotation_y(-self.camera.yaw)
+                * Mat4::from_rotation_z(self.camera.pitch)
+                * Mat4::from_translation(hand_offset)
+                * Mat4::from_rotation_y(33f32.to_radians())
+                * Mat4::from_scale(scale * 0.8);
+            self.shader_mesh.set_vec4(c"modulate", Vec4::ONE);
+            let mesh = self.renderer.meshes.get(item.kind);
+            self.shader_mesh.set_matrix4(c"model", model);
+            mesh.draw();
+        }
+
+
+        self.renderer.end();
+*/
     }
 }
 

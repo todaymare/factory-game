@@ -27,6 +27,7 @@ pub mod constants;
 pub mod buddy_allocator;
 pub mod free_list;
 pub mod octree;
+pub mod entities;
 
 use std::{f32::consts::{PI, TAU}, ops::{self}, time::Instant};
 
@@ -39,7 +40,7 @@ use tracing::{error, info, trace, Level};
 use voxel_world::split_world_pos;
 use glam::{DVec2, DVec3, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
 use input::InputManager;
-use items::{DroppedItem, Item};
+use items::{Item};
 use renderer::{create_multisampled_framebuffer, DepthBuffer, Renderer, VoxelShaderUniform};
 use wgpu::{wgt::DrawIndirectArgs, TextureViewDescriptor};
 use winit::{dpi::LogicalSize, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, window::{CursorGrabMode, Window, WindowId}};
@@ -276,7 +277,7 @@ fn main() {
 }
 
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PhysicsBody {
     position: DVec3,
     velocity: Vec3,
@@ -342,7 +343,6 @@ pub struct Player {
     hotbar: usize,
     mining_progress: Option<u32>,
     interact_delay: f32,
-    pulling: Vec<DroppedItem>,
 
     // this is used to rotate a structure's preview
     preview_rotation_offset: u8,
