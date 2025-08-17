@@ -30,6 +30,15 @@ impl WorkQueue {
     pub fn insert(&mut self, tick: Tick, id: StructureId) {
         self.entries.insert((tick, id), ());
     }
+
+
+    pub fn find(&self, id: StructureId) -> Option<Tick> {
+        Some(self.entries.iter().find(|x| x.0.1 == id)?.0.0)
+    }
+
+    pub fn remove(&mut self, tick: Tick, id: StructureId) {
+        self.entries.remove(&(tick, id));
+    }
 }
 
 

@@ -6,9 +6,7 @@
 //
 //
 //
-use crate::{constants::TICKS_PER_SECOND, items::{Item, ItemKind}, structures::{inventory::{Filter, SlotKind, SlotMeta}, strct::StructureKind}, voxel_world::voxel::Voxel};
-use super::Recipe;
-
+use crate::{items::{Item, ItemKind}, structures::{inventory::{Filter, SlotKind, SlotMeta}, strct::StructureKind}, voxel_world::voxel::Voxel, constants::TICKS_PER_SECOND};use super::Recipe;
 pub const FURNACE_RECIPES : &'static [Recipe] = &[
     Recipe {
         requirements: &[Item::new(ItemKind::IronOre, 1)],
@@ -20,8 +18,18 @@ pub const FURNACE_RECIPES : &'static [Recipe] = &[
         result: Item::new(ItemKind::CopperPlate, 1),
         time: TICKS_PER_SECOND,
     },
+    Recipe {
+        requirements: &[Item::new(ItemKind::IronPlate, 5)],
+        result: Item::new(ItemKind::SteelPlate, 1),
+        time: TICKS_PER_SECOND * 5,
+    },
 ];
 pub const RECIPES : &'static [Recipe] = &[
+    Recipe {
+        requirements: &[Item::new(ItemKind::Voxel(Voxel::Stone), 2)],
+        result: Item::new(ItemKind::Brick, 1),
+        time: TICKS_PER_SECOND / 2,
+    },
     Recipe {
         requirements: &[Item::new(ItemKind::IronPlate, 2)],
         result: Item::new(ItemKind::IronGearWheel, 1),
@@ -45,6 +53,11 @@ pub const RECIPES : &'static [Recipe] = &[
     Recipe {
         requirements: &[Item::new(ItemKind::CopperWire, 3), Item::new(ItemKind::CopperPlate, 1)],
         result: Item::new(ItemKind::ElectronicsKit, 1),
+        time: TICKS_PER_SECOND,
+    },
+    Recipe {
+        requirements: &[Item::new(ItemKind::ElectronicsKit, 2), Item::new(ItemKind::IronPlate, 4)],
+        result: Item::new(ItemKind::CircuitBoard, 1),
         time: TICKS_PER_SECOND,
     },
     Recipe {
@@ -78,6 +91,11 @@ pub const RECIPES : &'static [Recipe] = &[
         time: TICKS_PER_SECOND * 2,
     },
     Recipe {
+        requirements: &[Item::new(ItemKind::SteelPlate, 8), Item::new(ItemKind::Brick, 32)],
+        result: Item::new(ItemKind::Structure(StructureKind::SteelFurnace), 1),
+        time: TICKS_PER_SECOND * 12,
+    },
+    Recipe {
         requirements: &[Item::new(ItemKind::MechanicalComponent, 4), Item::new(ItemKind::Voxel(Voxel::Stone), 12)],
         result: Item::new(ItemKind::Structure(StructureKind::Quarry), 1),
         time: TICKS_PER_SECOND * 2,
@@ -87,31 +105,43 @@ pub const RECIPES : &'static [Recipe] = &[
         result: Item::new(ItemKind::Structure(StructureKind::Assembler), 1),
         time: TICKS_PER_SECOND * 2,
     },
+    Recipe {
+        requirements: &[Item::new(ItemKind::SteelPlate, 30), Item::new(ItemKind::CircuitBoard, 20), Item::new(ItemKind::Brick, 50)],
+        result: Item::new(ItemKind::Radar, 1),
+        time: TICKS_PER_SECOND / 10,
+    },
 ];
 pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
     match index {
         0 => {
             const SLOTS : &[SlotMeta] = &[
-                SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronPlate) }),
+                SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS
         },
         1 => {
             const SLOTS : &[SlotMeta] = &[
+                SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronPlate) }),
+                SlotMeta::new(2, SlotKind::Output),
+            ];
+            SLOTS
+        },
+        2 => {
+            const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronPlate) }),
                 SlotMeta::new(4, SlotKind::Output),
             ];
             SLOTS
         },
-        2 => {
+        3 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::CopperPlate) }),
                 SlotMeta::new(6, SlotKind::Output),
             ];
             SLOTS
         },
-        3 => {
+        4 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronRod) }),
                 SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronGearWheel) }),
@@ -119,7 +149,7 @@ pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
             ];
             SLOTS
         },
-        4 => {
+        5 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(6, SlotKind::Input { filter: Filter::ItemKind(ItemKind::CopperWire) }),
                 SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::CopperPlate) }),
@@ -127,7 +157,15 @@ pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
             ];
             SLOTS
         },
-        5 => {
+        6 => {
+            const SLOTS : &[SlotMeta] = &[
+                SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::ElectronicsKit) }),
+                SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronPlate) }),
+                SlotMeta::new(2, SlotKind::Output),
+            ];
+            SLOTS
+        },
+        7 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronGearWheel) }),
                 SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
@@ -135,7 +173,7 @@ pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
             ];
             SLOTS
         },
-        6 => {
+        8 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Structure(StructureKind::Belt)) }),
                 SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::ElectronicsKit) }),
@@ -143,7 +181,7 @@ pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
             ];
             SLOTS
         },
-        7 => {
+        9 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::IronGearWheel) }),
                 SlotMeta::new(32, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
@@ -151,7 +189,7 @@ pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
             ];
             SLOTS
         },
-        8 => {
+        10 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Structure(StructureKind::Chest)) }),
                 SlotMeta::new(128, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
@@ -159,7 +197,7 @@ pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
             ];
             SLOTS
         },
-        9 => {
+        11 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::MechanicalComponent) }),
                 SlotMeta::new(2, SlotKind::Input { filter: Filter::ItemKind(ItemKind::ElectronicsKit) }),
@@ -167,7 +205,7 @@ pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
             ];
             SLOTS
         },
-        10 => {
+        12 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(32, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
                 SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Coal) }),
@@ -175,7 +213,15 @@ pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
             ];
             SLOTS
         },
-        11 => {
+        13 => {
+            const SLOTS : &[SlotMeta] = &[
+                SlotMeta::new(16, SlotKind::Input { filter: Filter::ItemKind(ItemKind::SteelPlate) }),
+                SlotMeta::new(64, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Brick) }),
+                SlotMeta::new(2, SlotKind::Output),
+            ];
+            SLOTS
+        },
+        14 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(8, SlotKind::Input { filter: Filter::ItemKind(ItemKind::MechanicalComponent) }),
                 SlotMeta::new(24, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Voxel(Voxel::Stone)) }),
@@ -183,10 +229,19 @@ pub fn crafting_recipe_inventory(index: usize) -> &'static [SlotMeta] {
             ];
             SLOTS
         },
-        12 => {
+        15 => {
             const SLOTS : &[SlotMeta] = &[
                 SlotMeta::new(6, SlotKind::Input { filter: Filter::ItemKind(ItemKind::MechanicalComponent) }),
                 SlotMeta::new(4, SlotKind::Input { filter: Filter::ItemKind(ItemKind::ElectronicsKit) }),
+                SlotMeta::new(2, SlotKind::Output),
+            ];
+            SLOTS
+        },
+        16 => {
+            const SLOTS : &[SlotMeta] = &[
+                SlotMeta::new(60, SlotKind::Input { filter: Filter::ItemKind(ItemKind::SteelPlate) }),
+                SlotMeta::new(40, SlotKind::Input { filter: Filter::ItemKind(ItemKind::CircuitBoard) }),
+                SlotMeta::new(100, SlotKind::Input { filter: Filter::ItemKind(ItemKind::Brick) }),
                 SlotMeta::new(2, SlotKind::Output),
             ];
             SLOTS

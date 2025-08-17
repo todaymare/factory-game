@@ -1,13 +1,14 @@
 pub mod save_system;
 
-use std::time::Instant;
+use std::{collections::HashSet, time::Instant};
 
 use glam::{DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4, Vec4Swizzles};
+use kira::{sound::static_sound::{StaticSoundData, StaticSoundSettings}, AudioManager, AudioManagerSettings, DefaultBackend, Tween};
 use sti::hash::fxhash::fxhash32;
 use tracing::{info, warn, Instrument};
 use winit::{dpi::LogicalPosition, event::MouseButton, keyboard::KeyCode, window::CursorGrabMode};
 
-use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE_I32, COLOUR_DENY, COLOUR_PASS, DELTA_TICK, DROPPED_ITEM_SCALE, LOAD_DISTANCE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::CardinalDirection, entities::{EntityKind, EntityMap}, frustum::Frustum, input::InputManager, items::{Assets, Item, ItemKind, MeshIndex}, mesh::{Mesh, MeshInstance}, renderer::Renderer, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick};
+use crate::{commands::{Command, CommandRegistry}, constants::{CHUNK_SIZE_I32, COLOUR_DENY, COLOUR_PASS, DELTA_TICK, DROPPED_ITEM_SCALE, LOAD_DISTANCE, MOUSE_SENSITIVITY, PLAYER_HOTBAR_SIZE, PLAYER_INTERACT_DELAY, PLAYER_INVENTORY_SIZE, PLAYER_PULL_DISTANCE, PLAYER_REACH, PLAYER_ROW_SIZE, PLAYER_SPEED, RENDER_DISTANCE, TICKS_PER_SECOND, UI_CROSSAIR_COLOUR, UI_CROSSAIR_SIZE, UI_HOTBAR_SELECTED_BG, UI_HOTBAR_UNSELECTED_BG, UI_ITEM_AMOUNT_SCALE, UI_ITEM_OFFSET, UI_ITEM_SIZE, UI_SLOT_PADDING, UI_SLOT_SIZE}, directions::CardinalDirection, entities::{EntityKind, EntityMap}, frustum::Frustum, input::InputManager, items::{Assets, Item, ItemKind, MeshIndex}, mesh::{Mesh, MeshInstance}, renderer::{Renderer, View}, structures::{strct::{Structure, StructureData, StructureKind}, Structures}, ui::{InventoryMode, UILayer, HOTBAR_KEYS}, voxel_world::{chunker::{ChunkEntry, ChunkPos, MeshEntry, WorldChunkPos}, split_world_pos, voxel::Voxel, VoxelWorld, SURROUNDING_OFFSETS}, Camera, PhysicsBody, Player, Tick};
 
 pub struct Game {
     pub world: VoxelWorld,
@@ -32,8 +33,10 @@ pub struct Game {
     pub settings: Settings,
     prev_player_chunk: Option<WorldChunkPos>,
 
-    //shader_mesh: ShaderProgram,
-    //shader_world: ShaderProgram,
+
+    audio: AudioManager<DefaultBackend>,
+
+
 }
 
 #[derive(Clone, Copy)]
@@ -90,7 +93,6 @@ impl Game {
                 interact_delay: 0.0,
                 preview_rotation_offset: 0,
 
-                builders_ruler: None,
             },
 
             current_tick: Tick::initial(),
@@ -110,7 +112,10 @@ impl Game {
                 draw_hitboxes: false,
             },
 
-            prev_player_chunk: None,
+            prev_player_chunk: Some(WorldChunkPos(IVec3::MAX)),
+
+
+            audio: AudioManager::new(AudioManagerSettings::default()).unwrap(),
         };
 
 
@@ -124,6 +129,7 @@ impl Game {
         this.command_registry.register("rd", |game, cmd| {
             let speed = cmd.arg(0)?.as_i32()?;
             game.settings.render_distance = speed;
+            game.prev_player_chunk = Some(WorldChunkPos(IVec3::MAX));
             Some(())
         });
 
@@ -284,9 +290,6 @@ impl Game {
                 break 'input;
             }
 
-            if input.is_key_pressed(KeyCode::KeyJ) {
-                self.player.body.position.y += 5.0;
-            }
 
             let mut dir = Vec3::ZERO;
             if input.is_key_pressed(KeyCode::KeyW) {
@@ -320,37 +323,6 @@ impl Game {
             }
 
 
-            if input.is_key_pressed(KeyCode::KeyQ) {
-                let raycast = self.world.raycast_voxel(self.camera.position,
-                                                  self.camera.front,
-                                                  PLAYER_REACH);
-                if let Some((pos, n)) = raycast {
-                    let voxel = self.world.get_voxel(pos);
-                    if voxel.is_structure() {
-                        let structure = self.world.structure_blocks.get(&pos).unwrap();
-                        let structure = self.structures.get_mut(*structure);
-
-                        if let StructureData::Inserter { filter, .. } = &mut structure.data {
-                            *filter = None; 
-                        }
-                        else {
-                            for index in 0..structure.available_items_len() {
-                                let item = structure.try_take(index, u32::MAX);
-                                if let Some(item) = item {
-                                    self.entities.spawn(
-                                        EntityKind::dropped_item(item),
-                                        pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3(),
-                                    );
-                                    break;
-                                }
-
-                            }
-                        }
-                    }
-                }
-            }
-
-
             if let Some(item) = self.player.inventory[self.player.hand_index()]
                 && matches!(item.kind, ItemKind::Voxel(_) | ItemKind::Structure(_)) {
                 if input.is_key_just_pressed(KeyCode::KeyR) {
@@ -359,48 +331,6 @@ impl Game {
                 }
             } else {
                 self.player.preview_rotation_offset = 0;
-            }
-
-            if let Some(item) = self.player.inventory[self.player.hand_index()]
-                && item.kind != ItemKind::BuildersRuler {
-                self.player.builders_ruler = None;
-            }
-
-
-
-            if input.is_key_pressed(KeyCode::KeyX) {
-                let raycast = self.world.raycast_voxel(self.camera.position,
-                                                  self.camera.front,
-                                                  PLAYER_REACH);
-                if let Some((pos, n)) = raycast {
-                    let voxel = self.world.get_voxel(pos);
-                    let item = self.player.take_item(self.player.hand_index(), 1);
-                    if let Some(item) = item && voxel.is_structure() {
-                        let structure = self.world.structure_blocks.get(&pos).unwrap();
-                        let structure = self.structures.get_mut(*structure);
-
-                        if let StructureData::Inserter { filter, .. } = &mut structure.data {
-                            *filter = Some(item.kind);
-                            self.player.add_item(item);
-                        }
-
-                        else {
-                            if structure.can_accept(item) {
-                                structure.give_item(item);
-                            } else {
-                                self.entities.spawn(
-                                    EntityKind::dropped_item(item),
-                                    pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3(),
-                                );
-                            }
-                        }
-                    } else if let Some(item) = item {
-                        self.entities.spawn(
-                            EntityKind::dropped_item(item),
-                            pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3(),
-                        );
-                    }
-                }
             }
 
 
@@ -420,6 +350,12 @@ impl Game {
                             inv_kind = InventoryMode::Silo(*structure);
                         } else if structure_kind == StructureKind::Assembler {
                             inv_kind = InventoryMode::Assembler(*structure);
+                        } else if structure_kind == StructureKind::Furnace {
+                            inv_kind = InventoryMode::Furnace(*structure);
+                        } else if structure_kind == StructureKind::SteelFurnace {
+                            inv_kind = InventoryMode::Furnace(*structure);
+                        } else if structure_kind == StructureKind::Inserter {
+                            inv_kind = InventoryMode::Inserter(*structure);
                         }
                     }
                 }
@@ -482,12 +418,12 @@ impl Game {
 
             if input.is_key_pressed(KeyCode::ControlLeft) {
                 let mut offset = None;
-                if input.is_key_just_pressed(KeyCode::Numpad1) { offset = Some(0) }
-                if input.is_key_just_pressed(KeyCode::Numpad2) { offset = Some(1) }
-                if input.is_key_just_pressed(KeyCode::Numpad3) { offset = Some(2) }
-                if input.is_key_just_pressed(KeyCode::Numpad4) { offset = Some(3) }
-                if input.is_key_just_pressed(KeyCode::Numpad5) { offset = Some(4) }
-                if input.is_key_just_pressed(KeyCode::Numpad6) { offset = Some(5) }
+                if input.is_key_just_pressed(KeyCode::Digit1) { offset = Some(5) }
+                if input.is_key_just_pressed(KeyCode::Digit2) { offset = Some(4) }
+                if input.is_key_just_pressed(KeyCode::Digit3) { offset = Some(3) }
+                if input.is_key_just_pressed(KeyCode::Digit4) { offset = Some(2) }
+                if input.is_key_just_pressed(KeyCode::Digit5) { offset = Some(1) }
+                if input.is_key_just_pressed(KeyCode::Digit6) { offset = Some(0) }
 
                 if let Some(offset) = offset {
                     self.player.hotbar = offset;
@@ -577,36 +513,6 @@ impl Game {
                 let Some(Some(item_in_hand)) = self.player.inventory.get(self.player.hand_index())
                 else { break 'input_block };
 
-                if item_in_hand.kind == ItemKind::BuildersRuler {
-                    if let Some(builders_ruler) = self.player.builders_ruler {
-                        let pos1 = builders_ruler;
-                        let pos2 = place_position;
-
-                        let min = pos1.min(pos2);
-                        let max = pos1.max(pos2);
-
-                        for x in min.x..=max.x {
-                            for y in min.y..=max.y {
-                                for z in min.z..=max.z {
-                                    let pos = IVec3::new(x, y, z);
-                                    if self.world.get_voxel(pos) != Voxel::Air { continue }
-
-                                    *self.world.get_voxel_mut(pos) = Voxel::Stone;
-
-                                }
-                            }
-                        }
-
-                        self.player.builders_ruler = None;
-
-                    } else {
-                        self.player.builders_ruler = Some(place_position);
-                    }
-
-
-                    self.player.interact_delay = PLAYER_INTERACT_DELAY * 3.0;
-                    break 'input_block;
-                }
 
                 if let Some(voxel) = item_in_hand.kind.as_voxel() {
                     let _ = self.player.take_item(self.player.hand_index(), 1).unwrap();
@@ -683,65 +589,64 @@ impl Game {
 
             let player_chunk = self.player.body.position.as_ivec3();
             let (player_chunk, _) = split_world_pos(player_chunk);
-            let rd = self.settings.render_distance;
             let ld = LOAD_DISTANCE;
 
-            if let Some(old_chunk) = self.prev_player_chunk {
-                iterate_diff(
-                    &mut self.world,
-                    old_chunk.0 - IVec3::splat(rd),
-                    old_chunk.0 + IVec3::splat(rd),
-                    player_chunk.0 - IVec3::splat(rd),
-                    player_chunk.0 + IVec3::splat(rd),
-                    |world, chunk_pos| {
-                        //world.chunker.unload_chunk(WorldChunkPos(chunk_pos));
-                    },
+            if let Some(old_chunk) = self.prev_player_chunk
+                && old_chunk != player_chunk {
 
-                    |world, chunk_pos| {
-                        println!("hweeeeeleele {chunk_pos:?}");
-                        world.try_get_chunk(WorldChunkPos(chunk_pos));
-                        world.try_get_mesh(chunk_pos);
-                    }
-                );
+                let mut prev_mask = HashSet::new();
+                let mut curr_mask = HashSet::new();
 
-                iterate_diff(
-                    &mut self.world,
-                    old_chunk.0 - IVec3::splat(ld),
-                    old_chunk.0 + IVec3::splat(ld),
-                    player_chunk.0 - IVec3::splat(ld),
-                    player_chunk.0 + IVec3::splat(ld),
-                    |world, chunk_pos| {
-                        //world.chunker.unload_voxel_data_of_chunk(WorldChunkPos(chunk_pos));
-                    },
-                    |world, chunk_pos| {
-                        world.try_get_chunk(WorldChunkPos(chunk_pos));
-                        world.try_get_mesh(chunk_pos);
-                    }
-                );
+                let rd = self.settings.render_distance;
+                if old_chunk.0 != IVec3::MAX {
+                    for z in -rd..rd {
+                        for y in -rd..rd {
+                            for x in -rd..rd {
 
-
-            } else {
-
-                let rd = rd+1;
-                for y in -rd..=rd {
-                    for z in -rd..=rd {
-                        for x in -rd..=rd {
-                            let offset = IVec3::new(x, y, z);
-                            let chunk_pos = offset + player_chunk.0;
-
-                            self.world.try_get_mesh(chunk_pos);
+                                let offset = IVec3::new(x, y, z);
+                                if offset.length_squared() <= rd*rd {
+                                    prev_mask.insert(WorldChunkPos(old_chunk.0 + offset));
+                                }
+                            }
                         }
                     }
                 }
+
+
+                let rd = self.settings.render_distance+1;
+                for z in -rd..rd {
+                    for y in -rd..rd {
+                        for x in -rd..rd {
+
+                            let offset = IVec3::new(x, y, z);
+                            if offset.length_squared() <= rd*rd {
+                                curr_mask.insert(WorldChunkPos(player_chunk.0 + offset));
+                            }
+                        }
+                    }
+                }
+
+
+                /*
+                prev_mask.difference(&curr_mask)
+                    .for_each(|x| self.world.chunker.unload_chunk(*x));
+                    */
+
+
+                curr_mask.difference(&prev_mask)
+                    .for_each(|x| {
+                        self.world.try_get_chunk(*x);
+                        self.world.try_get_mesh(x.0);
+                    });
+
+            } else {
             }
 
             self.prev_player_chunk = Some(player_chunk);
-            self.settings.render_distance += 1;
-            self.settings.render_distance = self.settings.render_distance.min(RENDER_DISTANCE);
         }
 
 
-        if self.current_tick.u32() % (TICKS_PER_SECOND * 5) == 100000 {
+        if self.current_tick.u32() % (TICKS_PER_SECOND * 5) == 10000 {
 
             let time = Instant::now();
             let (player_chunk, _) = split_world_pos(self.player.body.position.as_ivec3());
@@ -769,7 +674,8 @@ impl Game {
                 };
 
 
-                let full_unload = offset > RENDER_DISTANCE*RENDER_DISTANCE;
+                let rd = self.settings.render_distance;
+                let full_unload = offset > rd*rd;
 
                 if self.world.chunker.is_queued_for_meshing(pos) {
                     warn!("skipping cos queued for meshing");
@@ -832,6 +738,15 @@ impl Game {
                 if result.amount != 0 {
                     self.player.add_item(result);
                 }
+
+
+                if result.kind == ItemKind::Radar {
+                    let source = StaticSoundData::from_media_source(std::io::Cursor::new(include_bytes!("../congratz.wav"))).unwrap();
+                    let mut sound = self.audio.play(source.clone()).unwrap();
+                    sound.pause(Tween::default());
+                    self.ui_layer = UILayer::Credits { time: 0.0, audio: sound }
+                }
+
                 self.craft_progress = 0;
             }
         } else {
@@ -928,6 +843,37 @@ impl Game {
 
 
     pub fn render(&mut self, renderer: &mut Renderer, input: &mut InputManager, delta_time: f32) {
+
+        {
+            let mut view = View::default();
+            view.vstack(|view| {
+                view.spacer();
+
+                view.hstack(|view| {
+                    view.spacer();
+                    view.text("3");
+                    view.spacer();
+                });
+
+                view.spacer();
+                view.hstack(|view| {
+                    view.spacer();
+                    view.text("4");
+                    view.spacer();
+                });
+               
+                view.spacer();
+            });
+
+
+            //let spacer_unit = view.spacer_weight(1);
+            let max_size = renderer.window_size();
+            //let mut spacer_unit = (max_size-view.calc_min_size(renderer)) / spacer_unit;
+            //view.render(renderer, max_size, Vec2::ZERO, 1);
+        }
+
+
+
         // render entities
         let len = self.entities.entities.len();
         for i in 0..len {
@@ -1209,9 +1155,11 @@ impl Game {
                     );
 
                     if item.amount > 0 {
+                        let pos = start+UI_ITEM_OFFSET;
+
                         renderer.draw_text(
                             format!("{}", item.amount).as_str(),
-                            start+UI_ITEM_OFFSET,
+                            Vec2::new(pos.x, pos.y),
                             UI_ITEM_AMOUNT_SCALE,
                             Vec4::ONE
                         );
@@ -1272,6 +1220,7 @@ impl Game {
             match &self.structures.get(*structure).data {
                   StructureData::Chest
                 | StructureData::Silo
+                | StructureData::Furnace(_)
                 | StructureData::Assembler { .. } => {
                     let window = renderer.window_size();
                     

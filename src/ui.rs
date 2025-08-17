@@ -1,8 +1,10 @@
 use glam::{DVec3, Vec2, Vec4};
+use kira::{sound::static_sound::{StaticSoundData, StaticSoundHandle}, Tween};
+use sti::hash::hash_map::SlotIdx;
 use winit::{event::MouseButton, keyboard::KeyCode};
 use std::{fmt::Write, ops::Bound};
 
-use crate::{commands::Command, constants::{COLOUR_ADDITIVE_HIGHLIGHT, COLOUR_DARK_GREY, COLOUR_DENY, COLOUR_GREY, COLOUR_PASS, COLOUR_PLAYER_ACTIVE_HOTBAR, COLOUR_SCREEN_DIM, COLOUR_WARN, COLOUR_WHITE, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND, UI_HOVER_ACTION_OFFSET, UI_Z_MAX, UI_Z_MIN}, crafting::{self, Recipe, RECIPES}, entities::{EntityKind, EntityMap}, input::InputManager, items::{Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{Filter, SlotKind, SlotMeta, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{chunker::MeshEntry, split_world_pos, VoxelWorld}, Game, Player};
+use crate::{commands::Command, constants::{COAL_ENERGY_PER_UNIT, COLOUR_ADDITIVE_HIGHLIGHT, COLOUR_DARK_GREY, COLOUR_DENY, COLOUR_GREY, COLOUR_PASS, COLOUR_PLAYER_ACTIVE_HOTBAR, COLOUR_SCREEN_DIM, COLOUR_WARN, COLOUR_WHITE, PLAYER_HOTBAR_SIZE, PLAYER_INVENTORY_SIZE, PLAYER_REACH, PLAYER_ROW_SIZE, TICKS_PER_SECOND, UI_HOVER_ACTION_OFFSET, UI_Z_MAX, UI_Z_MIN}, crafting::{self, Recipe, FURNACE_RECIPES, RECIPES}, entities::{EntityKind, EntityMap}, input::InputManager, items::{self, Item, ItemKind}, renderer::{point_in_rect, Renderer}, structures::{self, inventory::{Filter, SlotKind, SlotMeta, StructureInventory}, strct::{InserterState, StructureData}, StructureId}, voxel_world::{chunker::MeshEntry, split_world_pos, VoxelWorld}, Game, Player};
 
 pub enum UILayer {
     Inventory {
@@ -19,14 +21,22 @@ pub enum UILayer {
         offset: u32,
     },
     Gameplay { smoothed_dt: f32 },
+
+    Credits {
+        time: f32,
+        audio: StaticSoundHandle,
+    },
+
     None,
 }
 
 
 pub enum InventoryMode {
     Chest(StructureId),
+    Furnace(StructureId),
     Silo(StructureId),
     Assembler(StructureId),
+    Inserter(StructureId),
     Recipes,
 }
 
@@ -47,6 +57,7 @@ impl UILayer {
             UILayer::Gameplay { .. } => true,
             UILayer::Inventory { .. } => false,
             UILayer::Console { .. } => false,
+            UILayer::Credits { .. } => false,
             UILayer::None => false,
         }
     }
@@ -57,6 +68,7 @@ impl UILayer {
             UILayer::Gameplay { .. } => false,
             UILayer::Inventory { .. } => true,
             UILayer::Console { .. } => true,
+            UILayer::Credits { .. } => true,
             UILayer::None => false,
         }
     }
@@ -85,6 +97,13 @@ impl UILayer {
 
 
             UILayer::None => (),
+
+
+            UILayer::Credits { time, audio } => {
+                audio.stop(Tween::default());
+                
+                *self = UILayer::Gameplay { smoothed_dt: dt };
+            }
         }
     }
 
@@ -320,6 +339,272 @@ impl UILayer {
                     },
 
 
+
+                    InventoryMode::Inserter(structure_id) => {
+                        let mut corner = window * 0.5 - player_inv_size * 0.5;
+                        corner.x += player_inv_size.x * 0.5;
+                        corner.x += padding * 0.5;
+
+                        let rows = PLAYER_HOTBAR_SIZE;
+                        let cols = PLAYER_ROW_SIZE;
+
+                        let size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
+
+                        let text = "\n  \
+                              §8Left Click §8to §2set §8filter  \n  \
+                              §8Right Click §8any slot to §cremove §8filter  \n\n\
+                        ";
+
+                        let text_size = renderer.text_size(text, 0.6);
+
+                        let text_pos = window * 0.5 - Vec2::new(text_size.x * 0.5, text_size.y + player_inv_size.y * 0.5 + padding);
+                        renderer.draw_rect(text_pos, text_size, Vec4::ONE);
+                        renderer.draw_text(text, text_pos, 0.6, Vec4::new(0.2, 0.2, 0.2, 1.0));
+                        renderer.draw_rect(corner, size, Vec4::ONE);
+
+                        let mouse_pos = renderer.to_point(input.mouse_position());
+
+                        let mut base = corner + padding * 0.5;
+                        for col in 0..cols {
+                            let mut pos = base;
+                            for row in 0..rows {
+                                let index = col*rows+row;
+                                let Some(&curr) = ItemKind::ALL.get(index)
+                                else { break 'mode };
+
+
+                                let mut close = false;
+                                draw_inventory_slot(
+                                    &mut (game.structures.get_mut(*structure_id), &mut close),
+                                    renderer,
+                                    input,
+                                    pos,
+                                    Some(Item::new(curr, 1)),
+                                    COLOUR_GREY,
+                                    |renderer, _| {
+                                        default_hover_action(renderer, mouse_pos, curr);
+                                    },
+
+                                    |_, (s, close)| {
+                                        let StructureData::Inserter { filter, .. } = &mut s.data
+                                        else { unreachable!() };
+
+                                        *filter = Some(curr);
+
+                                        **close = true;
+                                    },
+                                    |_, (s, close)| {
+                                        let StructureData::Inserter { filter, .. } = &mut s.data
+                                        else { unreachable!() };
+
+
+                                        *filter = None;
+                                        **close = true;
+                                    },
+                                    |_, _| {},
+                                );
+
+                                if close {
+                                    self.close(game, dt);
+                                    return;
+                                }
+
+                                pos += Vec2::new(slot_size+padding, 0.0);
+                            }
+
+                            base += Vec2::new(0.0, slot_size+padding);
+                        }
+                    }
+
+
+
+
+                    InventoryMode::Furnace(structure_id) => {
+                        let mut corner = window * 0.5 - player_inv_size * 0.5;
+                        corner.x += player_inv_size.x * 0.5;
+                        corner.x += padding * 0.5;
+
+                        let rows = PLAYER_HOTBAR_SIZE;
+                        let cols = PLAYER_ROW_SIZE;
+
+                        let size = Vec2::new(rows as f32, cols as f32) * (slot_size + padding) as f32;
+
+                        renderer.draw_rect(corner, size, Vec4::ONE);
+
+                        corner += padding;
+                        renderer.draw_rect(corner, Vec2::splat(slot_size), Vec4::ZERO.with_w(1.0));
+
+
+                        let work_slot = game.structures.work_queue.find(*structure_id);
+
+                        let structure = game.structures.get_mut(*structure_id);
+                        let inventory = structure.inventory.as_mut().unwrap();
+
+                        let mouse = renderer.to_point(input.mouse_position());
+                        let input_kind = {
+                            let (input, _) = inventory.input(0);
+                            input.map(|x| x.kind)
+                        };
+
+                        draw_inventory_item(
+                            renderer,
+                            &mut inventory.slots,
+                            game.player.body.position,
+                            &mut game.entities,
+                            &mut Some(&mut game.player.inventory),
+                            input,
+                            holding_item,
+                            Vec2::new(corner.x, corner.y),
+                            0,
+                            COLOUR_GREY,
+                            |kind| FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == kind).is_some()
+                        );
+
+
+
+
+                        draw_inventory_item(
+                            renderer,
+                            &mut inventory.slots,
+                            game.player.body.position,
+                            &mut game.entities,
+                            &mut Some(&mut game.player.inventory),
+                            input,
+                            holding_item,
+                            Vec2::new(corner.x, corner.y+padding+slot_size),
+                            1,
+                            COLOUR_GREY,
+                            |kind| Filter::Fuel.is_valid(kind),
+                        );
+
+
+                        corner.x += padding;
+                        corner.x += slot_size;
+
+                        let mut bar_size = size - slot_size * 2.0 - padding * 4.0;
+                        bar_size.y = slot_size - padding * 2.0;
+                        renderer.draw_rect(
+                            Vec2::new(corner.x, corner.y+padding),
+                            bar_size,
+                            COLOUR_DARK_GREY,
+                        );
+
+
+
+
+                        let StructureData::Furnace(furnace) = &structure.data
+                        else { unreachable!() };
+
+                        // smelt bar
+                        'block: {
+                        if let Some(tick) = work_slot {
+                            // figure out the recipe time
+                            let (Some(item), _)= inventory.input(0)
+                            else { break 'block };
+
+
+                            let Some(recipe) = FURNACE_RECIPES.iter()
+                                .find(|x| x.requirements[0].kind == item.kind)
+                            else { unreachable!() };
+
+
+                            let time = recipe.time * furnace.multiplier;
+                            let start_time = tick.u32() - time;
+                            let diff = game.current_tick.u32() - start_time;
+
+                            let progress = (diff as f64 / time as f64) as f32;
+
+
+                            renderer.draw_rect(
+                                Vec2::new(corner.x, corner.y+padding),
+                                Vec2::new(bar_size.x * progress, bar_size.y),
+                                Vec4::new(0.0, 1.0, 0.0, 1.0),
+                            );
+
+
+                        }
+                        }
+
+
+                        // fuel bar
+                        {
+                            let curr = structure.energy.energy;
+                            let max = COAL_ENERGY_PER_UNIT;
+                            let progress = (curr as f64 / max as f64) as f32;
+
+
+                            renderer.draw_rect(
+                                Vec2::new(corner.x, corner.y+padding+slot_size+padding),
+                                Vec2::new(bar_size.x, bar_size.y),
+                                COLOUR_GREY,
+                            );
+
+                            renderer.draw_rect(
+                                Vec2::new(corner.x, corner.y+padding+slot_size+padding),
+                                Vec2::new(bar_size.x * progress, bar_size.y),
+                                Vec4::new(1.0, 0.0, 0.0, 1.0),
+                            );
+                        }
+
+                        corner.x += bar_size.x;
+                        corner.x += padding;
+
+
+                        draw_inventory_item(
+                            renderer,
+                            &mut inventory.slots,
+                            game.player.body.position,
+                            &mut game.entities,
+                            &mut Some(&mut game.player.inventory),
+                            input,
+                            holding_item,
+                            Vec2::new(corner.x, corner.y),
+                            2,
+                            COLOUR_GREY,
+                            |_| false,
+                        );
+
+                        if let Some(tick) = work_slot {
+                            let (input, _) = inventory.input(0);
+                            let (output, _) = inventory.output(0);
+
+
+                            let should_cancel = match (input, output) {
+                                (None, _) => true,
+                                (Some(input), None) => {
+                                    let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input.kind)
+                                    else { unreachable!() };
+
+
+                                       recipe.requirements[0].amount > input.amount
+                                    || (if let Some(ik) = input_kind { ik != input.kind } else { false })
+
+                                },
+                                (Some(input), Some(output)) => {
+                                    let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input.kind)
+                                    else { unreachable!() };
+
+
+                                       recipe.requirements[0].amount > input.amount
+                                    || (if let Some(ik) = input_kind { ik != input.kind } else { false })
+                                    || recipe.result.kind != output.kind
+                                    || recipe.result.amount + output.amount > output.kind.max_stack_size()
+                                },
+                            };
+
+
+                            if should_cancel {
+                                structure.is_asleep = true;
+                                game.structures.work_queue.remove(tick, *structure_id);
+                            }
+
+                        }
+
+                    }
+
+
+
+
                     InventoryMode::Assembler(structure) => {
                         let mut corner = window * 0.5 - player_inv_size * 0.5;
                         corner.x += player_inv_size.x * 0.5;
@@ -332,6 +617,20 @@ impl UILayer {
 
                         renderer.draw_rect(corner, size, Vec4::ONE);
 
+
+                        let text = "\n  \
+                              §8Left Click §8to §2set §8recipe  \n\n\
+                        ";
+
+                        let text_size = renderer.text_size(text, 0.6);
+
+                        let text_pos = window * 0.5 - Vec2::new(text_size.x * 0.5, text_size.y + player_inv_size.y * 0.5 + padding);
+                        renderer.draw_rect(text_pos, text_size, Vec4::ONE);
+                        renderer.draw_text(text, text_pos, 0.6, Vec4::new(0.2, 0.2, 0.2, 1.0));
+                        renderer.draw_rect(corner, size, Vec4::ONE);
+
+
+
                         let mut base = corner + padding * 0.5;
                         let point = renderer.to_point(input.mouse_position());
                         for col in 0..cols {
@@ -341,51 +640,62 @@ impl UILayer {
                                 let Some(&curr_recipe) = RECIPES.get(recipe_index)
                                 else { break 'mode };
 
-                                let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(slot_size));
-                                let mut colour = COLOUR_GREY; 
 
-                                if is_mouse_intersecting {
-                                    colour += COLOUR_ADDITIVE_HIGHLIGHT;
-                                }
-                               
-                                renderer.draw_rect(pos, Vec2::splat(slot_size), colour);
-                                renderer.draw_item_icon(curr_recipe.result.kind, pos+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
-                                renderer.draw_text(format!("{}", curr_recipe.result.amount).as_str(), pos+slot_size*0.05, 0.5, Vec4::ONE);
+                                if curr_recipe.result.kind == ItemKind::Radar { continue }
+
+                                let mut close = false;
+                                draw_inventory_slot(
+                                    &mut (),
+                                    renderer,
+                                    input,
+                                    pos,
+                                    Some(curr_recipe.result),
+                                    COLOUR_GREY,
+                                    |renderer, _| {
+                                        default_hover_action(renderer, point, curr_recipe.result.kind);
+                                    },
+
+                                    |_, _| {
+                                        let structure = game.structures.get_mut(*structure);
+                                        let StructureData::Assembler { recipe } = &mut structure.data
+                                        else { unreachable!() };
+
+                                        let prev_inv = if recipe.is_some() {
+                                            core::mem::take(&mut structure.inventory.as_mut().unwrap().slots)
+                                        } else { vec![] };
 
 
-                                if is_mouse_intersecting && input.is_button_just_pressed(MouseButton::Left) {
-                                    let structure = game.structures.get_mut(*structure);
-                                    let StructureData::Assembler { recipe } = &mut structure.data
-                                    else { unreachable!() };
+                                        let new_inventory_slots = crafting::crafting_recipe_inventory(recipe_index);
+                                        let new_inv = StructureInventory::new(new_inventory_slots);
 
-                                    let prev_inv = if recipe.is_some() {
-                                        core::mem::take(&mut structure.inventory.as_mut().unwrap().slots)
-                                    } else { vec![] };
+                                        structure.inventory = Some(new_inv);
+                                        *recipe = Some(curr_recipe);
 
+                                        for item in prev_inv {
+                                            let Some(item) = item
+                                            else { continue };
 
-                                    let new_inventory_slots = crafting::crafting_recipe_inventory(recipe_index);
-                                    let new_inv = StructureInventory::new(new_inventory_slots);
-
-                                    structure.inventory = Some(new_inv);
-                                    *recipe = Some(curr_recipe);
-
-                                    for item in prev_inv {
-                                        let Some(item) = item
-                                        else { continue };
-
-                                        if structure.can_accept(item) {
-                                            structure.give_item(item);
-                                        } else {
-                                            game.entities.spawn(
-                                                EntityKind::dropped_item(item),
-                                                game.player.body.position);
+                                            if structure.can_accept(item) {
+                                                structure.give_item(item);
+                                            } else {
+                                                game.entities.spawn(
+                                                    EntityKind::dropped_item(item),
+                                                    game.player.body.position);
+                                            }
                                         }
-                                    }
 
+                                        close = true;
+
+                                    },
+                                    |_, _| {},
+                                    |_, _| {},
+                                );
+
+
+                                if close {
                                     self.close(game, dt);
                                     return;
                                 }
-
 
                                 pos += Vec2::new(slot_size+padding, 0.0);
                             }
@@ -426,8 +736,8 @@ impl UILayer {
                     let colour_code = if fps > 55.0 { 'a' } else if fps > 25.0 { '6' } else { '4' };
 
                     let _ = writeln!(text, "§eFPS: §{colour_code}{fps}§r");
-                    let _ = writeln!(text, "§eTIME ELAPSED: §a{:.1}§r", game.current_tick.u32() as f64 / TICKS_PER_SECOND as f64);
-                    let _ = writeln!(text, "§eDRAW CALLCOUNT: §a{}§r", renderer.draw_count.get());
+                    let _ = writeln!(text, "§eSAVE TIME ELAPSED: §a{:.1}§r", game.current_tick.u32() as f64 / TICKS_PER_SECOND as f64);
+                    let _ = writeln!(text, "§eRENDER DISTANCE: §a{}§r", game.settings.render_distance);
                     let _ = writeln!(text, "§eTRIANGLE COUNT: §a{}§r", renderer.triangle_count.get());
                     renderer.triangle_count.set(0);
                     renderer.draw_count.set(0);
@@ -438,6 +748,7 @@ impl UILayer {
                     let _ = writeln!(text, "§eCHUNK ACTIVE JOBS: §a{}§r", game.world.chunker.chunk_active_jobs_len());
                     let _ = writeln!(text, "§eREMESH QUEUE: §a{}§r", game.world.chunker.mesh_load_queue_len());
                     let _ = writeln!(text, "§eREMESH ACTIVE JOBS: §a{}§r", game.world.chunker.mesh_active_jobs_len());
+                    let _ = writeln!(text, "§eMESH UNLOAD QUEUE JOBS: §a{}§r", game.world.chunker.mesh_unload_queue_len());
 
                     let _ = writeln!(text, "§ePITCH: §a{:.1}({:.1}) §eYAW: §a{:.1}({:.1})§r", game.camera.pitch.to_degrees(), game.camera.pitch, game.camera.yaw.to_degrees(), game.camera.yaw);
                     let _ = writeln!(text, "§ePOSITION: §a{:.1}, {:.1} {:.1}§r", game.camera.position.x, game.camera.position.y, game.camera.position.z);
@@ -477,7 +788,7 @@ impl UILayer {
                             let _ = writeln!(text, "§e- POSITION: §a{}, {}, {}", structure.position.x, structure.position.y, structure.position.z);
                             let _ = writeln!(text, "§e- DIRECTION: §b{:?}", structure.direction);
                             let _ = writeln!(text, "§e- IS ASLEEP: §b{}", structure.is_asleep);
-                            let _ = writeln!(text, "§e- ENERGY: §b{}", structure.energy);
+                            let _ = writeln!(text, "§e- ENERGY: §b{}", structure.energy.energy);
 
                             if let Some(inv) = &structure.inventory {
                                 let input_len = inv.inputs_len();
@@ -575,7 +886,7 @@ impl UILayer {
                                     let _ = writeln!(text, "§e  - RECIPE: §a{crafter:?}");
                                 }
 
-                                StructureData::Furnace => {
+                                StructureData::Furnace(_) => {
                                     let _ = writeln!(text, "Furnace");
                                 }
                             }
@@ -668,6 +979,158 @@ impl UILayer {
                     renderer.draw_text(&text, Vec2::ZERO, 0.4, Vec4::ONE);
                 }
             },
+
+
+            UILayer::Credits { time, audio } => {
+                *time += dt;
+                let window = renderer.window_size();
+                renderer.draw_rect(Vec2::ZERO, window, Vec4::new(0.0, 0.0, 0.0, 1.0));
+
+                let line_time = 1.5f32;
+                let text = r#"
+                §7...
+                §7*You suddenly hear a beep!*
+                §7Initializing radar link...
+                §7Attempting to connect to §eEarth-616
+                §7Signal Strength: §444%
+
+                §eEarth-616: §fWe got a connection!
+                §eEarth-616: §fHello... anyone there?
+
+
+                §eEarth-616: §fUhh?
+                §eEarth-616: §fAre we on the wrong frequency...
+
+                §eEarth-616: §fI guess.
+                
+
+                
+                §4Connection was terminated.
+                "#;
+
+                let credits = r#"
+                §aTHANKS FOR PLAYING!
+
+                §7DIRECTOR:§e Me
+                §7PRODUCER:§e Me
+                §7EXECUTIVE PRODUCER:§e Me
+                §7LEAD DESIGNER:§e Me
+                §7GAMEPLAY DESIGNER:§e Me
+                §7LEVEL DESIGNER:§e Me
+                §7NARRATIVE DESIGNER:§e Me
+                §7STORY WRITER:§e Me
+                §7SCRIPT EDITOR:§e Me
+                §7CUTSCENE DIRECTOR:§e Me
+                §7CINEMATOGRAPHER:§e this doesn't even make sense
+                §7EDITOR:§e Me
+                §7UI/UX DESIGNER:§e yeah.. sorry
+                §7CONCEPT ARTIST:§e Me
+                §7CHARACTER ARTIST:§e Me
+                §7ENVIRONMENT ARTIST:§e Me
+                §7PROP DESIGNER:§e Me
+                §7TEXTURE ARTIST:§e Me
+                §7ANIMATOR:§e Me
+                §7RIGGER:§e Me
+                §7VISUAL EFFECTS:§e Me
+                §7LIGHTING ARTIST:§e Me
+                §7SHADER ARTIST:§e Me
+                §7SOUND DESIGNER:§e what sound?
+                §7SOUND EDITOR:§e Me
+                §7COMPOSER:§e Me
+                §7VOICE DIRECTOR:§e Me
+                §7VOICE ACTING:§e [awkward silence]
+                §7AI PROGRAMMER:§e Me
+                §7GAMEPLAY PROGRAMMER:§e Me
+                §7NETWORK ENGINEER:§e Me
+                §7TOOLS PROGRAMMER:§e Me
+                §7PHYSICS ENGINEER:§e Me
+                §7BUILD ENGINEER:§e Me
+                §7QA LEAD:§e Me
+                §7BUG HUNTER:§e there were bugs?
+                §7QA AUTOMATION:§e Me
+                §7PLAYTESTER:§e Me
+                §7ACCESSIBILITY LEAD:§e Me
+                §7LOCALIZATION LEAD:§e Me
+                §7TRANSLATOR:§e Me
+                §7MARKETING DIRECTOR:§e Me
+                §7COMMUNITY MANAGER:§e Me
+                §7SOCIAL MEDIA INTERN:§e Me
+                §7BRAND STRATEGIST:§e Me
+                §7TECHNICAL SUPPORT:§e Me
+                §7IT DEPARTMENT:§e Me
+                §7LEGAL TEAM:§e Me
+                §7FINANCE:§e Me
+                §7HR MANAGER:§e it's just me bro
+                §7JANITOR:§e Me
+                §7COFFEE SUPPLIER:§e Me
+                §7MORALE OFFICER:§e pizza
+                §7MEME CURATOR:§e Me
+                §7FUN POLICE:§e also me
+                §7SPECIAL THANKS:§e leddoo, Kiniro
+                §7EXTRA NOTE:§e I worked at Blizzard for 6 years btw
+                "#;
+
+
+                let text_size = renderer.text_size(text, 1.0);
+                let pos = (window - text_size) * 0.5;
+                let max_time = text.lines().count() as f32 * line_time + 0.5;
+
+
+                let final_str_len = text.bytes()
+                    .enumerate()
+                    .filter(|x| x.1 == b'\n')
+                    .skip((*time / line_time).floor() as usize)
+                    .next()
+                    .map(|x| x.0)
+                    .unwrap_or(text.len());
+
+                let final_text = &text[..final_str_len];
+
+                let colour = max_time - *time;
+                println!("{colour} {max_time}");
+                renderer.draw_text(final_text, pos, 1.0, Vec4::ONE.with_w(colour));
+
+
+                let time = *time - max_time - 2.5;
+                if time < 0.0 {
+                    return;
+                }
+
+                match audio.state() {
+                    kira::sound::PlaybackState::Paused => {
+                        audio.resume(Tween::default());
+                    },
+                    _ => (),
+                }
+
+                let line_height = renderer.line_size;
+                let mut y = window.y - time * 48.0; 
+
+                for (i, line) in credits.lines().enumerate() {
+                    let scale = if i == 1 { 3.0 } else { 1.0 };
+                    let line = line.trim();
+                    let text_size = renderer.text_size(line, scale);
+                    renderer.draw_text(
+                        line,
+                        Vec2::new((window.x - text_size.x) * 0.5, y),
+                        scale,
+                        Vec4::ONE,
+                    );
+
+                    if line.is_empty() {
+                        y += line_height;
+                    }
+                    y += text_size.y * 1.2;
+                }
+
+
+                if y < -line_height {
+                    self.close(game, dt);
+                }
+                
+
+
+            }
 
 
             UILayer::None => unreachable!(),
@@ -984,8 +1447,8 @@ fn draw_player_inventory(renderer: &mut Renderer, player: &mut Player, world: &m
                          else { COLOUR_GREY }; 
 
 
-            draw_inventory_item(renderer, &mut player.inventory, player.body.position, world, entities, other_inv, input, holding_item,
-                                pos, slot_index, point, colour);
+            draw_inventory_item(renderer, &mut player.inventory, player.body.position, entities, other_inv, input, holding_item,
+                                pos, slot_index, colour, |_| true);
 
             pos += Vec2::new(slot_size+padding, 0.0);
                     
@@ -1041,8 +1504,8 @@ fn draw_inventory(renderer: &mut Renderer, inventory: &mut [Option<Item>],
             let is_mouse_intersecting = point_in_rect(point, pos, Vec2::splat(SLOT_SIZE));
             let colour = COLOUR_GREY; 
 
-            draw_inventory_item(renderer, inventory, player_pos, world, entities, &mut other_inv, input, holding_item,
-                                pos, slot_index, point, colour);
+            draw_inventory_item(renderer, inventory, player_pos, entities, &mut other_inv, input, holding_item,
+                                pos, slot_index, colour, |_| true);
 
             pos += Vec2::new(slot_size+padding, 0.0);
             
@@ -1064,134 +1527,189 @@ fn draw_inventory(renderer: &mut Renderer, inventory: &mut [Option<Item>],
 
 
 
-fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
-                       player_pos: DVec3, world: &mut VoxelWorld, entities: &mut EntityMap,
-                       mut other_inv: &mut Option<&mut [Option<Item>]>,
-                       input: &InputManager, holding_item: &mut Option<Item>,
-                       pos: Vec2, index: usize, mouse: Vec2, mut colour: Vec4) {
+fn draw_inventory_slot<T>(
+    data: &mut T,
+    renderer: &mut Renderer, input: &InputManager, at: Vec2, item: Option<Item>,
+    mut colour: Vec4,
+    hover_action: impl FnOnce(&mut Renderer, &mut T),
+    left_click_action: impl FnOnce(&mut Renderer, &mut T),
+    right_click_action: impl FnOnce(&mut Renderer, &mut T),
+    oth: impl FnOnce(&mut Renderer, &mut T),
+) {
+    let mouse_pos = renderer.to_point(input.mouse_position());
 
-    let is_mouse_intersecting = point_in_rect(mouse, pos, Vec2::splat(SLOT_SIZE));
+    let is_mouse_intersecting = point_in_rect(mouse_pos, at, Vec2::splat(SLOT_SIZE));
+
     if is_mouse_intersecting {
         colour += COLOUR_ADDITIVE_HIGHLIGHT;
     }
 
-    renderer.draw_rect(pos, Vec2::splat(SLOT_SIZE), colour);
+    renderer.draw_rect(at, Vec2::splat(SLOT_SIZE), colour);
 
-    let slot = &mut inventory[index];
-
-    if let Some(item) = *slot {
-        renderer.draw_item_icon(item.kind, pos+SLOT_SIZE*0.05, Vec2::splat(SLOT_SIZE*0.9), Vec4::ONE);
-        renderer.draw_text(format!("{}", item.amount).as_str(), pos+SLOT_SIZE*0.05, 0.5, Vec4::ONE);
+    if let Some(item) = item {
+        renderer.draw_item_icon(item.kind, at+SLOT_SIZE*0.05, Vec2::splat(SLOT_SIZE*0.9), Vec4::ONE);
+        if item.amount > 1 {
+            renderer.draw_text(format!("{}", item.amount).as_str(), at+SLOT_SIZE*0.05, 0.5, Vec4::ONE);
+        }
     }
 
-    if !is_mouse_intersecting { return }
 
-    if let Some(item) = *slot {
-        renderer.with_z(UI_Z_MAX, |renderer| {
-            let item_name = item.kind.name();
-            let scale = 0.5;
-            let padding = 10.0;
-            let size = renderer.text_size(item_name, scale) + Vec2::splat(padding * 2.0);
-
-            let mut pos = mouse + UI_HOVER_ACTION_OFFSET;
-            pos.y -= size.y * 0.5;
-
-            renderer.draw_rect(pos, size, COLOUR_DARK_GREY);
-            renderer.draw_text(item_name, pos+padding, scale, Vec4::ONE);
-        });
-
-    };
-    
+    if !is_mouse_intersecting {
+        return;
+    }
 
 
-    if input.is_button_pressed(MouseButton::Left) && input.is_key_pressed(KeyCode::ShiftLeft) {
-        if let Some(inv_item) = slot && let Some(other_inv) = &mut other_inv {
-            for slot in other_inv.iter_mut() {
-                let Some(item) = slot
-                else { continue };
+    renderer.with_z(UI_Z_MAX, |renderer| {
+        hover_action(renderer, data);
+    });
 
-                if item.kind != inv_item.kind {
-                    continue;
+    if input.is_button_just_pressed(MouseButton::Left) {
+        left_click_action(renderer, data);
+    }
+    else if input.is_button_just_pressed(MouseButton::Right) {
+        right_click_action(renderer, data);
+    }
+
+    oth(renderer, data);
+
+
+}
+
+
+fn default_hover_action(renderer: &mut Renderer, mouse_pos: Vec2, item: ItemKind) {
+    let item_name = item.name();
+    let scale = 0.5;
+    let padding = 10.0;
+    let size = renderer.text_size(item_name, scale) + Vec2::splat(padding * 2.0);
+
+    let mut pos = mouse_pos + UI_HOVER_ACTION_OFFSET;
+    pos.y -= size.y * 0.5;
+
+    renderer.draw_rect(pos, size, COLOUR_DARK_GREY);
+    renderer.draw_text(item_name, pos+padding, scale, Vec4::ONE);
+}
+
+
+
+fn draw_inventory_item(renderer: &mut Renderer, inventory: &mut [Option<Item>],
+                       player_pos: DVec3, entities: &mut EntityMap,
+                       other_inv: &mut Option<&mut [Option<Item>]>,
+                       input: &InputManager, holding_item: &mut Option<Item>,
+                       pos: Vec2, index: usize, colour: Vec4, filter: impl FnOnce(ItemKind) -> bool) {
+
+    let mouse_pos = renderer.to_point(input.mouse_position());
+    let item_slot = &mut inventory[index];
+    let item = *item_slot;
+    draw_inventory_slot(
+        &mut (item_slot, holding_item),
+        renderer, input, pos, item, colour,
+        |renderer, (item_slot, _)| {
+            let Some(item) = item_slot
+            else { return; };
+            default_hover_action(renderer, mouse_pos, item.kind);
+        }, 
+
+
+        |_, (item_slot, holding_item)| {
+            if input.is_key_pressed(KeyCode::ShiftLeft)
+                && let Some(other_inv) = other_inv 
+                && let Some(inv_item) = item_slot {
+                for slot in other_inv.iter_mut() {
+                    let Some(item) = slot
+                    else { continue };
+
+                    if item.kind != inv_item.kind {
+                        continue;
+                    }
+
+                    let addition = inv_item.amount.min(item.kind.max_stack_size() - item.amount);
+                    inv_item.amount -= addition;
+                    item.amount += addition;
+                    if inv_item.amount != 0 {
+                        continue;
+                    }
+
+                    **item_slot = None;
+                    return;
                 }
 
-                let addition = inv_item.amount.min(item.kind.max_stack_size() - item.amount);
-                inv_item.amount -= addition;
-                item.amount += addition;
-                if inv_item.amount != 0 {
-                    continue;
+
+                for slot in other_inv.iter_mut() {
+                    if slot.is_some() { continue }
+
+                    if inv_item.amount != 0 {
+                        *slot = Some(*inv_item);
+                    }
+
+                    **item_slot = None;
+                    return ;
+                }
+            } else {
+                if let Some(item) = holding_item && !filter(item.kind) {
+                    return;
+                }
+                if let Some(inv_item) = item_slot
+                   && let Some(item) = holding_item
+                   && inv_item.kind == item.kind {
+
+                    let addition = item.amount.min(inv_item.kind.max_stack_size().max(inv_item.amount) - inv_item.amount);
+
+                    inv_item.amount += addition;
+
+                    item.amount -= addition;
+                    if item.amount == 0 {
+                        **holding_item = None;
+                    }
+                    return;
                 }
 
-                let slot = &mut inventory[index];
-                *slot = None;
+                let item = **item_slot;
+                **item_slot = **holding_item;
+                **holding_item = item;
                 return;
             }
 
+        },
 
-            for slot in other_inv.iter_mut() {
-                if slot.is_some() { continue }
 
-                if inv_item.amount != 0 {
-                    *slot = Some(*inv_item);
+        |_, (item_slot, holding_item)| {
+            if let Some(item) = item_slot && holding_item.is_none() {
+                let amount = item.amount;
+                item.amount -= amount / 2;
+
+                let mut new_item = *item;
+                new_item.amount = amount / 2;
+                if new_item.amount != 0 {
+                    **holding_item = Some(new_item);
+                    return;
+                }
+            }
+
+            let item = **item_slot;
+            **item_slot = **holding_item;
+            **holding_item = item;
+        },
+
+
+        |_, (item_slot, _)| {
+            if input.is_key_just_pressed(KeyCode::KeyQ)
+                && let Some(item) = item_slot {
+
+                let mut drop_item = *item;
+                if input.is_alt_pressed() {
+                    drop_item.amount = 1;
                 }
 
-                let slot = &mut inventory[index];
-                *slot = None;
-                return ;
+                item.amount -= drop_item.amount;
+                let item = *item;
+                if item.amount == 0 {
+                    **item_slot = None;
+                }
+
+                entities.spawn(EntityKind::dropped_item(item), player_pos);
             }
 
         }
 
-    } else if input.is_button_just_pressed(MouseButton::Left) {
-        if let Some(inv_item) = slot
-           && let Some(item) = holding_item
-           && inv_item.kind == item.kind {
-
-            let addition = item.amount.min(inv_item.kind.max_stack_size().max(inv_item.amount) - inv_item.amount);
-
-            inv_item.amount += addition;
-
-            item.amount -= addition;
-            if item.amount == 0 {
-                *holding_item = None;
-            }
-            return;
-        }
-
-        let item = *slot;
-        *slot = *holding_item;
-        *holding_item = item;
-        return;
-    } else if input.is_button_just_pressed(MouseButton::Right) {
-        if let Some(item) = slot && holding_item.is_none() {
-            let amount = item.amount;
-            item.amount -= amount / 2;
-
-            let mut new_item = *item;
-            new_item.amount = amount / 2;
-            if new_item.amount != 0 {
-                *holding_item = Some(new_item);
-                return;
-            }
-        }
-
-        let item = *slot;
-        *slot = *holding_item;
-        *holding_item = item;
-        return;
-    } else if input.is_key_just_pressed(KeyCode::KeyQ)
-        && let Some(item) = slot {
-        let mut drop_item = *item;
-        if input.is_alt_pressed() {
-            drop_item.amount = 1;
-        }
-
-        item.amount -= drop_item.amount;
-        let item = *item;
-        if item.amount == 0 {
-            *slot = None;
-        }
-
-        entities.spawn(EntityKind::dropped_item(item), player_pos);
-    }
-
+    );
 }

@@ -185,6 +185,7 @@ impl Chunker {
 
                 MeshEntry::Loaded(chunk_meshes) => {
                     if let Some(meshes) = chunk_meshes.meshes.take() {
+                        *mesh = MeshEntry::None;
                         let leaf = region.octree.get_mut(meshes);
                         let prev_meshes = &mut leaf.mesh;
 
@@ -195,6 +196,8 @@ impl Chunker {
                             framedata.remove(mesh.chunk_mesh_data_index);
                             instance_allocator.free(mesh.quads);
                         }
+                    } else {
+                        *mesh = MeshEntry::None;
                     }
 
                     region.octree.remove(chunk_pos.chunk());
@@ -781,6 +784,7 @@ impl Chunker {
 
             (_, MeshEntry::None) => {
                 self.mesh_load_queue.insert(pos);
+                self.mesh_unload_queue.remove(&pos);
                 None
             },
         }

@@ -25,6 +25,8 @@ rayon = "*"
 tracing = "*"
 tracing-subscriber = "*"
 
+kira = "0.10.8"
+
 [profile.release]
 debug = 1
 debug-assertions = true

@@ -312,7 +312,7 @@ impl VoxelWorld {
         }).map(|x| x.0).collect::<Vec<_>>();
 
         for pos in chunks { self.chunker.save_chunk(pos); }
-        while self.chunker.chunk_save_jobs.fetch_add(0, std::sync::atomic::Ordering::SeqCst) > 0 { spin_loop(); }
+        //while self.chunker.chunk_save_jobs.fetch_add(0, std::sync::atomic::Ordering::SeqCst) > 0 { spin_loop(); }
 
         info!("voxel-save-system: saved the world in {:?}", time.elapsed());
     }
@@ -450,9 +450,6 @@ impl VoxelWorld {
                         let a11 = quad_ao >> 6 & 0x3;
 
                         let mut flip = a00 + a11 < a01 + a10;
-                        if voxel_pos == IVec3::new(23, 5, 0) && d == 1 {
-                            dbg!(a00, a01, a11, a10);
-                        }
 
                         if a00 == 3 && a01 == 2 && a10 == 2 && a11 == 0 {
                             flip = !flip;

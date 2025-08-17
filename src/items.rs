@@ -27,14 +27,17 @@ pub enum ItemKind {
 
     IronPlate,
     CopperPlate,
+    SteelPlate,
 
     IronGearWheel,
     IronRod,
     CopperWire,
     MechanicalComponent,
     ElectronicsKit,
+    CircuitBoard,
+    Brick,
 
-    BuildersRuler,
+    Radar,
 }
 
 
@@ -75,12 +78,15 @@ impl ItemKind {
 
         ItemKind::IronPlate,
         ItemKind::CopperPlate,
+        ItemKind::SteelPlate,
 
         ItemKind::IronGearWheel,
         ItemKind::IronRod,
         ItemKind::CopperWire,
         ItemKind::MechanicalComponent,
         ItemKind::ElectronicsKit,
+        ItemKind::CircuitBoard,
+        ItemKind::Brick,
 
         ItemKind::Structure(StructureKind::Quarry),
         ItemKind::Structure(StructureKind::Inserter),
@@ -90,8 +96,9 @@ impl ItemKind {
         ItemKind::Structure(StructureKind::Splitter),
         ItemKind::Structure(StructureKind::Assembler),
         ItemKind::Structure(StructureKind::Furnace),
+        ItemKind::Structure(StructureKind::SteelFurnace),
 
-        ItemKind::BuildersRuler,
+        ItemKind::Radar,
     ];
 
 
@@ -108,19 +115,23 @@ impl ItemKind {
             ItemKind::Structure(StructureKind::Quarry) => "quarry",
             ItemKind::Structure(StructureKind::Assembler) => "assembler",
             ItemKind::Structure(StructureKind::Furnace) => "furnace",
+            ItemKind::Structure(StructureKind::SteelFurnace) => "steel_furnace",
             ItemKind::Voxel(Voxel::Dirt) => "dirt_block",
             ItemKind::Voxel(Voxel::Stone) => "stone_block",
 
             ItemKind::IronPlate => "iron_plate",
             ItemKind::CopperPlate => "copper_plate",
+            ItemKind::SteelPlate => "steel_plate",
 
             ItemKind::IronGearWheel => "iron_gear_wheel",
             ItemKind::IronRod => "iron_rod",
             ItemKind::CopperWire => "copper_wire",
             ItemKind::MechanicalComponent => "mechanical_component",
             ItemKind::ElectronicsKit => "electronics_kit",
+            ItemKind::CircuitBoard => "circuit_board",
+            ItemKind::Brick => "brick",
 
-            ItemKind::BuildersRuler => "builders_ruler",
+            ItemKind::Radar => "radar",
 
             ItemKind::Voxel(_) => "invalid",
         }
@@ -140,19 +151,23 @@ impl ItemKind {
             ItemKind::Structure(StructureKind::Quarry) => "§eQuarry",
             ItemKind::Structure(StructureKind::Assembler) => "§eAssembler",
             ItemKind::Structure(StructureKind::Furnace) => "§eFurnace",
+            ItemKind::Structure(StructureKind::SteelFurnace) => "§eSteel Furnace",
             ItemKind::Voxel(Voxel::Dirt) => "Dirt Block",
             ItemKind::Voxel(Voxel::Stone) => "Stone Block",
 
             ItemKind::IronPlate => "Iron Plate",
             ItemKind::CopperPlate => "Copper Plate",
+            ItemKind::SteelPlate => "Steel Plate",
 
             ItemKind::IronGearWheel => "Iron Gear Wheel",
             ItemKind::IronRod => "Iron Rod",
             ItemKind::CopperWire => "Copper Wire",
             ItemKind::MechanicalComponent => "Mechanical Component",
             ItemKind::ElectronicsKit => "Electronics Kit",
+            ItemKind::CircuitBoard => "Circuit Board",
+            ItemKind::Brick => "Brick",
 
-            ItemKind::BuildersRuler => "builders_ruler",
+            ItemKind::Radar => "§dRadar",
 
             ItemKind::Voxel(_) => "invalid",
         }

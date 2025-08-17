@@ -9,9 +9,19 @@ furnace_recipes = {
         "amount": 1,
         "time": 1,
     },
+    "SteelPlate": {
+        "requirements": [("IronPlate", 5)],
+        "amount": 1,
+        "time": 5,
+    },
 }
 
 recipes = {
+    "Brick": {
+        "requirements": [("Voxel(Voxel::Stone)", 2)],
+        "amount": 1,
+        "time": 0.5,
+    },
     "IronGearWheel": {
         "requirements": [("IronPlate", 2)],
         "amount": 1,
@@ -39,6 +49,14 @@ recipes = {
         "requirements": [
             ("CopperWire", 3),
             ("CopperPlate", 1),
+        ],
+        "amount": 1,
+        "time": 1,
+    },
+    "CircuitBoard": {
+        "requirements": [
+            ("ElectronicsKit", 2),
+            ("IronPlate", 4),
         ],
         "amount": 1,
         "time": 1,
@@ -91,6 +109,14 @@ recipes = {
         "amount": 1,
         "time": 2,
     },
+    "Structure(StructureKind::SteelFurnace)": {
+        "requirements": [
+            ("SteelPlate", 8),
+            ("Brick", 32),
+        ],
+        "amount": 1,
+        "time": 12,
+    },
     "Structure(StructureKind::Quarry)": {
         "requirements": [
             ("MechanicalComponent", 4),
@@ -106,6 +132,16 @@ recipes = {
         ],
         "amount": 1,
         "time": 2,
+    },
+
+    "Radar": {
+        "requirements": [
+            ("SteelPlate", 30),
+            ("CircuitBoard", 20),
+            ("Brick", 50),
+        ],
+        "amount": 1,
+        "time": 0.1,
     },
 }
 
@@ -165,7 +201,7 @@ def generate_slot_meta(index, data):
         kind = req[0]
         amount = req[1]
         slots = 2 * amount
-        lines.append(f"                SlotMeta::new({slots}, SlotKind::Input {{ filter: Some(ItemKind::{kind}) }}),")
+        lines.append(f"                SlotMeta::new({slots}, SlotKind::Input {{ filter: Filter::ItemKind(ItemKind::{kind}) }}),")
     amount = data["amount"] * 2
     lines.append(f"                SlotMeta::new({amount}, SlotKind::Output),")
     lines.append("            ];")
@@ -193,7 +229,7 @@ string += "// CHECK `scripts/generate_recipes.py` for more info\n"
 string += "//\n"
 string += "//\n"
 string += "//\n"
-string += "use crate::{items::{Item, ItemKind}, structures::{inventory::{SlotKind, SlotMeta}, strct::StructureKind}, voxel_world::voxel::Voxel, TICKS_PER_SECOND};"
+string += "use crate::{items::{Item, ItemKind}, structures::{inventory::{Filter, SlotKind, SlotMeta}, strct::StructureKind}, voxel_world::voxel::Voxel, constants::TICKS_PER_SECOND};"
 string += "use super::Recipe;"
 string += "\n"
 string += generate_furnace_recipes(furnace_recipes)

@@ -1,6 +1,6 @@
 use glam::IVec3;
 
-use crate::{constants::COAL_ENERGY_PER_UNIT, crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh, structures::inventory::Filter};
+use crate::{constants::{COAL_ENERGY_PER_UNIT, FURNACE_COST_PER_SMELT}, crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, items::{Item, ItemKind}, mesh::Mesh, structures::{inventory::Filter}};
 
 use super::inventory::{SlotKind, SlotMeta, StructureInventory};
 
@@ -11,7 +11,7 @@ pub struct Structure {
     pub data: StructureData,
 
     pub inventory: Option<StructureInventory>,
-    pub energy: u32,
+    pub energy: StructureEnergy,
 
     pub is_asleep: bool,
 }
@@ -41,7 +41,7 @@ pub enum StructureData {
         recipe: Option<Recipe>,
     },
 
-    Furnace,
+    Furnace(Furnace),
 }
 
 
@@ -62,7 +62,67 @@ pub enum StructureKind {
     Splitter,
     Assembler,
     Furnace,
+    SteelFurnace,
 }
+
+
+
+
+#[derive(Debug)]
+pub struct StructureEnergy {
+    pub energy: u32,
+}
+
+
+impl StructureEnergy {
+    pub fn consume_energy(&mut self, inv: &mut StructureInventory, amount: u32) -> bool {
+        if self.energy < amount {
+            for i in 0..inv.inputs_len() {
+                let (_, meta) = inv.input(i);
+                let entry = inv.input_mut(i);
+
+                match meta.kind {
+                    SlotKind::Input { filter: Filter::Fuel } => (),
+                    _ => continue,
+                };
+
+
+                let Some(item) = entry
+                else { continue; };
+
+
+                let energy_per_unit = match item.kind {
+                    ItemKind::Coal => COAL_ENERGY_PER_UNIT,
+
+                    _ => panic!("not a fuel source"),
+
+                };
+
+                let units_required = amount.div_ceil(energy_per_unit);
+
+                if item.amount >= units_required {
+                    item.amount -= units_required;
+                    if item.amount == 0 {
+                        *entry = None;
+                    }
+
+                    self.energy += units_required * energy_per_unit;
+                    break;
+                }
+            }
+        }
+
+
+        if self.energy < amount {
+            return false;
+        }
+
+        self.energy -= amount;
+        true
+    }
+}
+
+
 
 
 impl StructureData {
@@ -114,7 +174,17 @@ impl StructureData {
                     SlotMeta::new(u32::MAX, SlotKind::Output)
                 ];
 
-                (Self::Furnace, Some(StructureInventory::new(SLOTS)))
+                (Self::Furnace(Furnace::new(2)), Some(StructureInventory::new(SLOTS)))
+            },
+
+            StructureKind::SteelFurnace => {
+                const SLOTS : &[SlotMeta] = &[
+                    SlotMeta::new(u32::MAX, SlotKind::Input { filter: Filter::Reserved }), 
+                    SlotMeta::new(10, SlotKind::Input { filter: Filter::Fuel }), 
+                    SlotMeta::new(u32::MAX, SlotKind::Output)
+                ];
+
+                (Self::Furnace(Furnace::new(1)), Some(StructureInventory::new(SLOTS)))
             },
         }
     }
@@ -129,7 +199,9 @@ impl StructureData {
             StructureData::Belt { .. } => StructureKind::Belt,
             StructureData::Splitter { .. } => StructureKind::Splitter,
             StructureData::Assembler { .. } => StructureKind::Assembler,
-            StructureData::Furnace { .. } => StructureKind::Furnace,
+            StructureData::Furnace(furnace) if furnace.multiplier == 2 => StructureKind::Furnace,
+            StructureData::Furnace(furnace) if furnace.multiplier == 1 => StructureKind::SteelFurnace,
+            StructureData::Furnace(_) => unreachable!(),
         }
     }
 }
@@ -145,58 +217,13 @@ impl Structure {
             direction,
             is_asleep: true,
             inventory: inv,
-            energy: 0,
+            energy: StructureEnergy { energy: COAL_ENERGY_PER_UNIT/2 },
         }
     }
 
 
     pub fn consume_energy(&mut self, amount: u32) -> bool {
-        let Some(inv) = &mut self.inventory
-        else { return false; };
-
-        if self.energy < amount {
-            for i in 0..inv.inputs_len() {
-                let (_, meta) = inv.input(i);
-                let entry = inv.input_mut(i);
-
-                match meta.kind {
-                    SlotKind::Input { filter: Filter::Fuel } => (),
-                    _ => continue,
-                };
-
-
-                let Some(item) = entry
-                else { continue; };
-
-
-                let energy_per_unit = match item.kind {
-                    ItemKind::Coal => COAL_ENERGY_PER_UNIT,
-
-                    _ => panic!("not a fuel source"),
-
-                };
-
-                let units_required = amount.div_ceil(energy_per_unit);
-
-                if item.amount >= units_required {
-                    item.amount -= units_required;
-                    if item.amount == 0 {
-                        *entry = None;
-                    }
-
-                    self.energy += units_required * energy_per_unit;
-                    break;
-                }
-            }
-        }
-
-
-        if self.energy < amount {
-            return false;
-        }
-
-        self.energy -= amount;
-        true
+        self.energy.consume_energy(self.inventory.as_mut().unwrap(), amount)
     }
 
 
@@ -207,7 +234,7 @@ impl Structure {
 
     pub fn can_accept(&self, item: Item) -> bool {
         match self.data {
-            StructureData::Furnace => {
+            StructureData::Furnace(_) => {
                 let inv = self.inventory.as_ref().unwrap();
 
                 let output = *inv.output(0).0;
@@ -241,7 +268,7 @@ impl Structure {
 
     pub fn can_accept_from_player(&self, item: Item) -> bool {
         match self.data {
-            StructureData::Furnace => {
+            StructureData::Furnace(_) => {
                 let inv = self.inventory.as_ref().unwrap();
 
                 let output = *inv.output(0).0;
@@ -275,7 +302,7 @@ impl Structure {
 
     pub fn give_item(&mut self, item: Item) {
         match &mut self.data {
-            StructureData::Furnace => {
+            StructureData::Furnace(_) => {
                 let inv = self.inventory.as_mut().unwrap();
 
                 let output = *inv.output(0).0;
@@ -477,6 +504,23 @@ impl StructureKind {
                     IVec3::new(0, 2, 2), IVec3::new(1, 2, 2), IVec3::new(2, 2, 2)
                 )
             }
+
+
+            StructureKind::SteelFurnace => {
+                blocks_arr!(dir,
+                    IVec3::new(0, 0, 0), IVec3::new(1, 0, 0), IVec3::new(2, 0, 0),
+                    IVec3::new(0, 0, 1), IVec3::new(1, 0, 1), IVec3::new(2, 0, 1),
+                    IVec3::new(0, 0, 2), IVec3::new(1, 0, 2), IVec3::new(2, 0, 2),
+
+                    IVec3::new(0, 1, 0), IVec3::new(1, 1, 0), IVec3::new(2, 1, 0),
+                    IVec3::new(0, 1, 1), IVec3::new(1, 1, 1), IVec3::new(2, 1, 1),
+                    IVec3::new(0, 1, 2), IVec3::new(1, 1, 2), IVec3::new(2, 1, 2),
+
+                    IVec3::new(0, 2, 0), IVec3::new(1, 2, 0), IVec3::new(2, 2, 0),
+                    IVec3::new(0, 2, 1), IVec3::new(1, 2, 1), IVec3::new(2, 2, 1),
+                    IVec3::new(0, 2, 2), IVec3::new(1, 2, 2), IVec3::new(2, 2, 2)
+                )
+            }
         }
     }
 
@@ -491,6 +535,7 @@ impl StructureKind {
             StructureKind::Splitter => rotate_block_vector(dir, IVec3::new(0, 0, 0)),
             StructureKind::Assembler => rotate_block_vector(dir, IVec3::new(2, 0, 1)),
             StructureKind::Furnace => rotate_block_vector(dir, IVec3::new(2, 0, 1)),
+            StructureKind::SteelFurnace => rotate_block_vector(dir, IVec3::new(2, 0, 1)),
         }
     }
 
@@ -505,6 +550,7 @@ impl StructureKind {
             StructureKind::Splitter => Mesh::from_vmf(device, "assets/models/splitter.vmf"),
             StructureKind::Assembler => Mesh::from_vmf(device, "assets/models/assembler.vmf"),
             StructureKind::Furnace => Mesh::from_vmf(device, "assets/models/furnace.vmf"),
+            StructureKind::SteelFurnace => Mesh::from_vmf(device, "assets/models/steel_furnace.vmf"),
         }
     }
 }
@@ -521,4 +567,82 @@ pub const fn rotate_block_vector(dir: CardinalDirection, v: IVec3) -> IVec3 {
 
 
 
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct Furnace {
+    pub multiplier: u32,
+}
 
+
+impl Furnace {
+    pub fn new(multiplier: u32) -> Self {
+        Self {
+            multiplier,
+        }
+    }
+
+
+    pub fn attempt(&self, inv: &mut StructureInventory, energy: &mut StructureEnergy) -> Option<u32> {
+        let output = *inv.output(0).0;
+        let input = inv.input_mut(0);
+
+        if let Some(input_item) = input {
+            let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
+            else { unreachable!() };
+
+
+            if input_item.amount < recipe.requirements[0].amount {
+                return None;
+            }
+
+            if let Some(output) = output {
+                if output.kind != recipe.result.kind 
+                    || output.amount + recipe.result.amount > output.kind.max_stack_size() {
+                    return None;
+                }
+            }
+
+            if !energy.consume_energy(inv, FURNACE_COST_PER_SMELT) {
+                return None;
+            }
+
+            return Some(recipe.time * self.multiplier);
+        }  
+
+        None
+    }
+
+
+
+    pub fn process(&self, inv: &mut StructureInventory) {
+        let input = inv.input(0).0;
+        let output = inv.output_mut(0);
+
+        if let Some(input_item) = input {
+            let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
+            else { unreachable!() };
+
+            let successful = input_item.amount >= recipe.requirements[0].amount &&
+            if let Some(output) = output {
+                if output.kind == recipe.result.kind {
+                    output.amount += recipe.result.amount;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                *output = Some(recipe.result);
+                true
+            };
+
+            if successful {
+                let input = inv.input_mut(0);
+                let input_item = input.as_mut().unwrap();
+
+                input_item.amount -= recipe.requirements[0].amount;
+                if input_item.amount == 0 {
+                    *input = None;
+                }
+            }
+        }
+    }
+}

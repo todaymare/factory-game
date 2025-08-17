@@ -147,7 +147,8 @@ impl ApplicationHandler for App {
                 };
 
 
-                if self.input.is_key_just_pressed(winit::keyboard::KeyCode::Escape) {
+                if self.input.is_key_pressed(winit::keyboard::KeyCode::ShiftLeft) 
+                    && self.input.is_key_just_pressed(winit::keyboard::KeyCode::Escape) {
                     event_loop.exit();
                 }
             }
@@ -346,9 +347,6 @@ pub struct Player {
 
     // this is used to rotate a structure's preview
     preview_rotation_offset: u8,
-
-    // this is for builders ruler
-    builders_ruler: Option<IVec3>,
 }
 
 

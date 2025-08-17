@@ -62,9 +62,8 @@ impl StructureInventory {
             let available = match &self.slots[index] {
                 Some(curr_item) => {
                     if curr_item.kind != item.kind { continue }
-                    debug_assert!(curr_item.amount <= max_amount);
 
-                    max_amount - curr_item.amount
+                    max_amount - curr_item.amount.min(max_amount)
                 },
 
                 None => {

@@ -79,6 +79,11 @@ impl Game {
             };
 
 
+            buf.clear();
+            write!(buf, "structure[{i}].energy");
+            let energy = hm.get(buf.as_str()).copied().unwrap_or(Value::Num(0.0)).as_u32();
+
+
             let mut inventory = None;
             let data = match kind {
                 StructureKind::Quarry => {
@@ -86,7 +91,7 @@ impl Game {
                     write!(buf, "structure[{i}].current_progress");
                     let current_progress = hm[buf.as_str()].as_u32();
 
-                    StructureData::Quarry { current_progress }
+                    Some(StructureData::Quarry { current_progress })
                 },
 
 
@@ -110,20 +115,8 @@ impl Game {
                         _ => unreachable!(),
                     };
 
-                    StructureData::Inserter { state, filter }
+                    Some(StructureData::Inserter { state, filter })
                 },
-
-
-                StructureKind::Chest => StructureData::Chest,
-
-
-                StructureKind::Silo => StructureData::Silo,
-
-
-                StructureKind::Belt => {
-                    StructureData::Belt
-                },
-
 
                 StructureKind::Splitter => {
                     let priority = [
@@ -141,7 +134,7 @@ impl Game {
                     ];
 
 
-                    StructureData::Splitter { priority }
+                    Some(StructureData::Splitter { priority })
 
                 },
 
@@ -154,19 +147,20 @@ impl Game {
                         Some(RECIPES[recipe_index as usize])
                     } else { None };
 
-                    StructureData::Assembler { recipe }
+                    Some(StructureData::Assembler { recipe })
                 }
 
 
-
-                StructureKind::Furnace => {
-                    StructureData::Furnace
-                }
+                _ => None,
             };
 
 
             let mut structure = Structure::from_kind(kind, origin, direction);
-            structure.data = data;
+            if let Some(data) = data {
+                structure.data = data;
+            }
+
+            structure.energy.energy = energy;
             if let Some(inv) = inventory {
                 structure.inventory = Some(StructureInventory::new(inv));
             }
@@ -236,6 +230,7 @@ impl Game {
             i += 1;
             v.push((format_in!(&arena, "{buf}.kind").leak(), Value::String(structure.data.as_kind().item_kind().to_string())));
             v.push((format_in!(&arena, "{buf}.origin").leak(), Value::Vec3(structure.position.as_vec3())));
+            v.push((format_in!(&arena, "{buf}.energy").leak(), Value::Num(structure.energy.energy as _)));
 
             let direction = match structure.direction {
                 CardinalDirection::North => "north",
@@ -305,7 +300,7 @@ impl Game {
                 }
 
 
-                StructureData::Furnace => {}
+                StructureData::Furnace(_) => {},
             };
         }
 

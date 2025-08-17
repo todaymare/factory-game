@@ -11,7 +11,7 @@ use strct::{rotate_block_vector, InserterState, Structure, StructureData, Struct
 use tracing::warn;
 use work_queue::WorkQueue;
 
-use crate::{constants::{DROPPED_ITEM_SCALE, FURNACE_COST_PER_SMELT, TICKS_PER_SECOND}, crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, entities::EntityMap, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, mesh::MeshInstance, renderer::Renderer, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick};
+use crate::{constants::{DROPPED_ITEM_SCALE, FURNACE_COST_PER_SMELT, TICKS_PER_SECOND}, crafting::{Recipe, FURNACE_RECIPES}, directions::CardinalDirection, entities::EntityMap, gen_map::{KGenMap, KeyGen}, items::{Item, ItemKind}, mesh::MeshInstance, renderer::Renderer, structures::inventory::SlotKind, voxel_world::{split_world_pos, voxel::Voxel, VoxelWorld}, Camera, Tick};
 
 define_key!(pub StructureKey(u32));
 define_key!(pub StructureGen(u32));
@@ -240,7 +240,6 @@ impl Structures {
 
 }
 
-
 impl PartialOrd for StructureId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.0.key.partial_cmp(&other.0.key)
@@ -440,61 +439,15 @@ impl Structure {
             }
 
 
-            StructureData::Furnace => {
-                let inv = structure.inventory.as_mut().unwrap();
-                let input = inv.input(0).0;
-                let output = inv.output_mut(0);
-
-                if let Some(input_item) = input {
-                    let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
-                    else { unreachable!() };
-
-                    if let Some(output) = output {
-                        assert_eq!(recipe.result.kind, output.kind);
-                        output.amount += recipe.result.amount;
-
-                    } else {
-                        *output = Some(recipe.result);
-                    }
+            StructureData::Furnace(furnace) => {
+                furnace.process(structure.inventory.as_mut().unwrap());
+                if let Some(schedule) = furnace.attempt(structure.inventory.as_mut().unwrap(), &mut structure.energy) {
+                    structures.schedule_in(id, schedule);
+                } else {
+                    structure.is_asleep = true;
                 }
 
-                let output = *inv.output(0).0;
-                let input = inv.input_mut(0);
-
-                if let Some(input_item) = input {
-                    let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
-                    else { unreachable!() };
-
-                    if let Some(output) = output {
-                        if output.kind != recipe.result.kind 
-                            || output.amount + recipe.result.amount > output.kind.max_stack_size() {
-                            structure.is_asleep = true;
-                            return;
-                        }
-                    }
-
-                    if !structure.consume_energy(20) {
-                        structure.is_asleep = true;
-                        return;
-                    }
-
-                    let inv = structure.inventory.as_mut().unwrap();
-                    let input = inv.input_mut(0);
-                    let input_item = input.as_mut().unwrap();
-
-                    input_item.amount -= 1;
-                    if input_item.amount == 0 {
-                        *input = None;
-                    }
-
-                    structures.schedule_in(id, recipe.time);
-                    return;
-                }  
-
-                structure.is_asleep = true;
-
             }
-
 
             StructureData::Chest { .. } => {},
             StructureData::Silo { .. } => {},
@@ -561,45 +514,12 @@ impl Structure {
             }
 
 
-            StructureData::Furnace => {
-                let inv = structure.inventory.as_mut().unwrap();
-
-                let output = *inv.output(0).0;
-                let input = inv.input_mut(0);
-
-                if let Some(input_item) = input {
-                    let Some(recipe) = FURNACE_RECIPES.iter().find(|x| x.requirements[0].kind == input_item.kind)
-                    else { unreachable!() };
-
-                    if let Some(output) = output {
-                        if output.kind != recipe.result.kind 
-                            || output.amount + recipe.result.amount > output.kind.max_stack_size() {
-                            structure.is_asleep = true;
-                            return;
-                        }
-                    }
-
-                    if !structure.consume_energy(FURNACE_COST_PER_SMELT) {
-                        structure.is_asleep = true;
-                        return;
-                    }
-
-                    let inv = structure.inventory.as_mut().unwrap();
-                    let input = inv.input_mut(0);
-                    let input_item = input.as_mut().unwrap();
-
-                    input_item.amount -= 1;
-                    if input_item.amount == 0 {
-                        *input = None;
-                    }
-
-                    structures.schedule_in(id, recipe.time);
-                    return;
-                }  
-
-                structure.is_asleep = true;
-
-
+            StructureData::Furnace(furnace) => {
+                if let Some(schedule) = furnace.attempt(structure.inventory.as_mut().unwrap(), &mut structure.energy) {
+                    structures.schedule_in(id, schedule);
+                } else {
+                    structure.is_asleep = true;
+                }
             }
 
 

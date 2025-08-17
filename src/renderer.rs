@@ -3,10 +3,10 @@ pub mod uniform;
 pub mod ssbo;
 pub mod gpu_allocator;
 
-use std::{cell::Cell, collections::HashMap, mem::offset_of, ptr::null_mut, time::{SystemTime, UNIX_EPOCH}};
+use std::{cell::Cell, collections::HashMap, mem::offset_of, ops::{Deref, DerefMut}, ptr::null_mut, time::{SystemTime, UNIX_EPOCH}};
 
 use bytemuck::{Pod, Zeroable};
-use glam::{IVec2, IVec3, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles};
+use glam::{IVec2, IVec3, Mat4, UVec3, Vec2, Vec2Swizzles, Vec3, Vec3Swizzles, Vec4, Vec4Swizzles};
 use gpu_allocator::GPUAllocator;
 use image::{EncodableLayout, GenericImage, GenericImageView, RgbaImage};
 use ssbo::{ResizableBuffer, SSBO};
@@ -921,6 +921,7 @@ impl Renderer {
                     &frustum,
                     &mut indirect,
                     &mut buf,
+                    settings.render_distance as i32,
                     triangle_count,
                 );
             }
@@ -1244,6 +1245,69 @@ impl Renderer {
                 line_size = line_size.max(h);
 
                 let dims = Vec2::new(w, h);
+                self.draw_tex_rect(Vec2::new(xpos, ypos), dims, ch.texture, active_colour.with_w(default_colour.w));
+            }
+
+
+        }
+    }
+
+
+    pub fn draw_text_z(&mut self, text: &str, pos: Vec3, scale: f32, default_colour: Vec4) {
+        let mut x;
+        let mut y = pos.y;
+        let mut active_colour = default_colour;
+
+        for l in text.lines() {
+            x = pos.x;
+            y += self.line_size * scale;
+
+
+            let mut line_size = 0.0f32;
+            let mut iter = l.chars();
+            while let Some(c) = iter.next() {
+                if c == '§' {
+                    let colour_code = iter.next().unwrap();
+
+                    active_colour = match colour_code {
+                        '0' => Vec4::ZERO,
+                        '1' => Vec4::new(0.0, 0.0, 0.4, 1.0),
+                        '2' => Vec4::new(0.0, 0.4, 0.0, 1.0),
+                        '3' => Vec4::new(0.0, 0.4, 0.4, 1.0),
+                        '4' => Vec4::new(0.4, 0.0, 0.0, 1.0),
+                        '5' => Vec4::new(0.4, 0.0, 0.4, 1.0),
+                        '6' => Vec4::new(1.0, 0.4, 0.0, 1.0),
+                        '7' => Vec4::new(0.4, 0.4, 0.4, 1.0),
+                        '8' => Vec4::new(0.1, 0.1, 0.1, 1.0),
+                        '9' => Vec4::new(0.1, 0.1, 1.0, 1.0),
+                        'a' => Vec4::new(0.1, 1.0, 0.1, 1.0),
+                        'b' => Vec4::new(0.1, 1.0, 1.0, 1.0),
+                        'c' => Vec4::new(1.0, 0.1, 0.1, 1.0),
+                        'd' => Vec4::new(1.0, 0.1, 1.0, 1.0),
+                        'e' => Vec4::new(1.0, 1.0, 0.5, 1.0),
+                        'f' => Vec4::ONE,
+                        'r' => default_colour,
+
+                        _ => {
+                            warn!("invalid colour code '§{}', resetting to default colour", colour_code);
+                            default_colour
+                        },
+                    };
+                    continue
+                }
+
+                let Some(ch) = self.characters.get(&c)
+                else { warn!("[renderer] draw-text: character not registered '{c}'"); continue };
+
+                let xpos = x + ch.bearing.x as f32 * scale;
+                let ypos = y - (ch.size.y + ch.bearing.y) as f32 * scale * 0.5;
+                x += (ch.advance >> 6) as f32 * scale;
+
+                let w = ch.size.x as f32 * scale;
+                let h = ch.size.y as f32 * scale;
+                line_size = line_size.max(h);
+
+                let dims = Vec2::new(w, h);
                 self.draw_tex_rect(Vec2::new(xpos, ypos), dims, ch.texture, active_colour);
             }
 
@@ -1286,12 +1350,27 @@ impl Renderer {
 
 
     pub fn draw_tex_rect(&mut self, pos: Vec2, dims: Vec2, tex: TextureId, modulate: Vec4) {
+        if modulate.w == 0.0 { return };
+
         let rect = DrawRect {
             modulate,
             pos,
             dims,
             tex,
             z: None,
+        };
+
+        self.rects.push(rect);
+    }
+
+
+    pub fn draw_tex_rect_z(&mut self, pos: Vec3, dims: Vec2, tex: TextureId, modulate: Vec4) {
+        let rect = DrawRect {
+            modulate,
+            pos: Vec2::new(pos.x, pos.y),
+            dims,
+            tex,
+            z: Some(pos.z),
         };
 
         self.rects.push(rect);
@@ -1552,6 +1631,301 @@ pub fn create_multisampled_framebuffer(
     device
         .create_texture(multisampled_frame_descriptor)
         .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+
+#[derive(Default, Debug)]
+pub struct View {
+    elements: Vec<Element>,
+    direction: ViewDirection,
+}
+
+
+#[derive(Default, Debug)]
+enum ViewDirection {
+    #[default]
+    None,
+
+    V,
+    H,
+
+}
+
+
+impl View {
+    pub fn hstack<'a>(&'a mut self, lambda: impl FnOnce(&mut View)) -> Stack<'a> {
+        let mut view = View::default();
+        view.direction = ViewDirection::H;
+
+        lambda(&mut view);
+
+        Stack {
+            parent: self,
+            body: view,
+        }
+    }
+
+
+    pub fn vstack<'a>(&'a mut self, lambda: impl FnOnce(&mut View)) -> Stack<'a> {
+        let mut view = View::default();
+        view.direction = ViewDirection::V;
+
+        lambda(&mut view);
+
+        Stack {
+            parent: self,
+            body: view,
+        }
+    }
+
+
+    pub fn zstack<'a>(&'a mut self, lambda: impl FnOnce(&mut View)) -> Stack<'a> {
+        let mut view = View::default();
+        view.direction = ViewDirection::None;
+
+        lambda(&mut view);
+
+        Stack {
+            parent: self,
+            body: view,
+        }
+    }
+
+
+    pub fn spacer(&mut self) {
+        self.elements.push(Element::Rect(ElementRect { colour: Vec4::ZERO, kind: RectKind::Flexbox, min: Vec2::ZERO }));
+    }
+
+
+    pub fn rect<'a>(&'a mut self) -> Rect<'a> {
+        Rect {
+            parent: self,
+            element_rect: ElementRect {
+                colour: Vec4::ONE,
+                kind: RectKind::Flexbox,
+                min: Vec2::ZERO
+            },
+        }
+    }
+
+
+    pub fn text(&mut self, str: &str) {
+        self.elements.push(Element::Text(str.to_string()));
+    }
+
+
+    pub fn calc_min_size(&self, renderer: &Renderer) -> Vec2 {
+        let mut min_size = Vec2::ZERO;
+        for element in &self.elements {
+            let size = match element {
+                Element::Rect(rect) => {
+                    rect.min
+                },
+
+                Element::View(view) => {
+                    view.calc_min_size(renderer)
+                },
+
+                Element::Text(str) => {
+                    let size = renderer.text_size(str, 1.0);
+                    size
+                },
+            };
+
+
+            let d = match self.direction {
+                ViewDirection::None => continue,
+                ViewDirection::H => 0,
+                ViewDirection::V => 1,
+            };
+
+            min_size[d] += size[d];
+            let d = (d+1) % 2;
+            min_size[d] = min_size[d].max(size[d]);
+        }
+
+        min_size
+    }
+
+
+    pub fn render(
+        &self, renderer: &mut Renderer,
+        given_size: Vec2,
+        start_pos: Vec2, depth: u32
+    ) -> Vec2 {
+
+
+        let min_size = self.calc_min_size(renderer);
+        let flex_boxes_count = self.elements.iter()
+            .map(|x| if matches!(x, Element::Rect(ElementRect { kind: RectKind::Flexbox, .. })) { 1 } else { 0 })
+            .sum::<u32>();
+        let left_over_space = given_size - min_size;
+        let spacer_size = left_over_space / flex_boxes_count as f32;
+
+
+        let mut pos = start_pos;
+        let mut curr_size = Vec2::ZERO;
+
+        
+        let d = match self.direction {
+            ViewDirection::None => None,
+            ViewDirection::H => Some(0),
+            ViewDirection::V => Some(1),
+        };
+
+        
+        for elem in &self.elements {
+            let size = match elem {
+                Element::Rect(rect) => {
+                    if let Some(d) = d && let RectKind::Flexbox = rect.kind {
+                        let mut size = rect.min;
+                        size[d] = size[d].max(spacer_size[d]);
+                        renderer.draw_rect(pos.xy(), size.xy(), rect.colour);
+                        dbg!(rect.colour);
+
+                        size
+
+                    } else if let RectKind::Frame = rect.kind {
+                        renderer.draw_rect(pos.xy(), rect.min.xy(), rect.colour);
+                        rect.min
+
+                    } else {
+                        warn!("uhhh?");
+                        continue;
+                    }
+                }
+
+
+                Element::View(view) => {
+                    let mut view_size = given_size - pos;
+                    if let Some(d) = d && flex_boxes_count != 0 {
+                        view_size[d] = view.calc_min_size(renderer)[d];
+                    }
+
+                    view.render(renderer, view_size, pos, depth)
+                },
+
+
+                Element::Text(text) => {
+                    let size = renderer.text_size(text, 1.0);
+                    renderer.draw_rect(pos.xy(), size, Vec4::ZERO);
+                    renderer.draw_text(text, pos.xy(), 1.0, Vec4::ONE);
+                    size
+                },
+            };
+
+
+            renderer.draw_rect(pos.xy(), size.xy(), Vec4::new(0.5, 0.0, 0.0, 0.3));
+
+            if let Some(d) = d {
+                pos[d] += size[d];
+
+                curr_size[d] = curr_size[d].max(size[d]);
+                let d = (d+1) % 2;
+                curr_size[d] = curr_size[d].max(size[d]);
+            } else {
+                curr_size = curr_size.max(size);
+            }
+        }
+
+
+        if let Some(d) = d && flex_boxes_count != 0 {
+            curr_size[d] = given_size[d];
+        }
+
+
+
+        renderer.draw_rect(start_pos.xy(), curr_size.xy(), Vec4::new(0.0, 0.1, 0.0, 0.1));
+        curr_size
+    }
+}
+
+
+#[derive(Debug)]
+enum Element {
+    Rect(ElementRect),
+
+    View(View),
+
+    Text(String),
+}
+
+
+pub struct Rect<'a> {
+    parent: &'a mut View,
+
+    element_rect: ElementRect,
+}
+
+
+
+#[derive(Default, Debug)]
+pub struct ElementRect {
+    colour: Vec4,
+    kind: RectKind,
+    min: Vec2,
+}
+
+
+#[derive(Default, Debug)]
+pub enum RectKind {
+    #[default]
+    Frame,
+    Flexbox,
+}
+
+
+impl<'a> Drop for Rect<'a> {
+    fn drop(&mut self) {
+        self.parent.elements.push(Element::Rect(core::mem::take(&mut self.element_rect)));
+    }
+}
+
+
+impl<'a> Deref for Rect<'a> {
+    type Target = ElementRect;
+
+
+    fn deref(&self) -> &Self::Target {
+        &self.element_rect
+    }
+
+}
+
+
+impl<'a> DerefMut for Rect<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.element_rect
+    }
+}
+
+
+pub struct VStack<'a> {
+    parent: &'a mut View,
+    body: View,
+
+}
+
+
+impl<'a> Drop for VStack<'a> {
+    fn drop(&mut self) {
+        self.parent.elements.push(Element::View(core::mem::take(&mut self.body)));
+    }
+}
+
+
+
+pub struct Stack<'a> {
+    parent: &'a mut View,
+    body: View,
+
+}
+
+
+impl<'a> Drop for Stack<'a> {
+    fn drop(&mut self) {
+        self.parent.elements.push(Element::View(core::mem::take(&mut self.body)));
+    }
 }
 
 

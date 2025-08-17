@@ -47,7 +47,7 @@ pub const PLAYER_HOTBAR_SIZE : usize = 5;
 pub const PLAYER_ROW_SIZE : usize = 6;
 pub const PLAYER_INVENTORY_SIZE : usize = PLAYER_ROW_SIZE * PLAYER_HOTBAR_SIZE;
 
-pub const RENDER_DISTANCE : i32 = 4;
+pub const RENDER_DISTANCE : i32 = 16;
 pub const LOAD_DISTANCE : i32 = 4;
 
 pub const FONT_SIZE : u32 = 48;
@@ -59,7 +59,7 @@ pub const DELTA_TICK : f32 = 1.0 / TICKS_PER_SECOND as f32;
 
 
 pub const COAL_ENERGY_PER_UNIT : u32 = 200;
-pub const FURNACE_COST_PER_SMELT : u32 = 25;
+pub const FURNACE_COST_PER_SMELT : u32 = 50;
 
 
 pub const QUAD_VERTICES : &[i32] = &[
