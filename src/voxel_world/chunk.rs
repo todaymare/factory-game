@@ -56,9 +56,9 @@ impl Noise {
             let base_scale = 0.0003;
             let detail_scale = 0.02;
 
-            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 360.0 + 160.0;
+            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 180.0 + 40.0;
 
-            let detail = self.simplex.sample([x * detail_scale + 1337.0, z * detail_scale + 420.0]) * 16.0;
+            let detail = self.simplex.sample([x * detail_scale + 1337.0, z * detail_scale + 420.0]) * 8.0;
             base + detail
         };
 
@@ -67,9 +67,9 @@ impl Noise {
             let base_scale = 0.003;
             let detail_scale = 0.02;
 
-            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 40.0 + 40.0;
+            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 10.0;
 
-            let detail = self.simplex.sample([x * detail_scale + 1337.0, z * detail_scale + 420.0]) * 8.0;
+            let detail = self.simplex.sample([x * detail_scale + 1337.0, z * detail_scale + 420.0]) * 4.0;
             base + detail
         };
 
@@ -77,9 +77,9 @@ impl Noise {
             let base_scale = 0.005;
             let detail_scale = 0.02;
 
-            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 3.0;
+            let base = self.perlin.sample([x * base_scale, z * base_scale]) * 1.5;
 
-            let detail = self.simplex.sample([x * detail_scale + 1337.0, z * detail_scale + 420.0]) * 1.0;
+            let detail = self.simplex.sample([x * detail_scale + 1337.0, z * detail_scale + 420.0]) * 0.5;
             base + detail
         };
 

@@ -1206,12 +1206,28 @@ fn draw_recipes(game: &mut Game, input: &InputManager, renderer: &mut Renderer, 
                 let text_size = renderer.text_size(recipe.result.kind.name(), scale);
                 let ingredient_size = Vec2::new(recipe.requirements.len() as f32, 1.0) * (padding*0.5 + slot_size);
 
+                let time_text = format!("§e{}s §fCrafting time", recipe.time as f32 / TICKS_PER_SECOND as f32);
+                let time_text_size = renderer.text_size(&time_text, scale);
+
+                let mut str = String::new();
+                let max_text_size = {
+                    let mut size = text_size.x.max(time_text_size.x);
+                    for item in recipe.requirements.iter() {
+                        str.clear();
+                        write!(str, "{}x {}", item.amount, item.kind.name()).unwrap();
+                        let text_size = renderer.text_size(&str, scale);
+                        size = size.max((text_size + padding + slot_size).x);
+                    }
+
+                    size
+                };
+
                 let size = Vec2::splat(padding * 0.5)
-                            + Vec2::new(ingredient_size.x.max(text_size.x), 0.0)
+                            + Vec2::new(max_text_size, ingredient_size.x)
                             + Vec2::new(0.0, text_size.y)
                             + Vec2::new(0.0, padding)
-                            + Vec2::new(0.0, ingredient_size.y)
-                            + Vec2::splat(padding);
+                            + Vec2::new(0.0, time_text_size.y)
+                            + Vec2::splat(padding * 2.0);
 
 
                 renderer.with_z(UI_Z_MAX, |renderer| {
@@ -1237,15 +1253,27 @@ fn draw_recipes(game: &mut Game, input: &InputManager, renderer: &mut Renderer, 
 
                     renderer.draw_rect(base, Vec2::splat(slot_size), colour);
                     renderer.draw_item_icon(item.kind, base+slot_size*0.05, Vec2::splat(slot_size*0.9), Vec4::ONE);
-                    renderer.draw_text(format!("{}", item.amount).as_str(), base+slot_size*0.05, scale, Vec4::ONE);
-                    base += Vec2::new(slot_size+padding*0.5, 0.0);
+
+                    str.clear();
+                    write!(str, "{}x {}", item.amount, item.kind.name()).unwrap();
+                    let text_size = renderer.text_size(&str, scale);
+
+                    renderer.draw_text_ex(&str, base + Vec2::new(padding + slot_size, (slot_size - text_size.y) * 0.5), scale, colour, true);
+                    base += Vec2::new(0.0, slot_size+padding*0.5);
                 }
 
+                base.y += padding * 0.5;
+                renderer.draw_text(&time_text, base, scale, Vec4::ONE);
+                base.y += padding * 0.5;
                 });
+
             }
             pos += Vec2::new(slot_size+padding, 0.0);
+
         }
         base += Vec2::new(0.0, slot_size+padding);
+
+
     }
 }
 

@@ -1191,6 +1191,10 @@ impl Renderer {
 
 
     pub fn draw_text(&mut self, text: &str, pos: Vec2, scale: f32, default_colour: Vec4) {
+        self.draw_text_ex(text, pos, scale, default_colour, false);
+    }
+
+    pub fn draw_text_ex(&mut self, text: &str, pos: Vec2, scale: f32, default_colour: Vec4, discard_colour_codes: bool) {
         let mut x;
         let mut y = pos.y;
         let mut active_colour = default_colour;
@@ -1206,6 +1210,7 @@ impl Renderer {
                 if c == '§' {
                     let colour_code = iter.next().unwrap();
 
+                    if discard_colour_codes { continue };
                     active_colour = match colour_code {
                         '0' => Vec4::ZERO,
                         '1' => Vec4::new(0.0, 0.0, 0.4, 1.0),

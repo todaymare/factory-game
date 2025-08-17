@@ -770,7 +770,7 @@ pub fn try_consume(inventory: &mut StructureInventory, recipe: Recipe) -> bool {
 
 pub fn quarry_efficiency(y_pos: f32) -> f32 {
     if y_pos > 0.0 { return 1.0 }
-    1.0 + (y_pos * 0.005).powi(2)
+    1.0 + (y_pos * 0.001).powi(2)
 }
 
 

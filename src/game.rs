@@ -416,6 +416,41 @@ impl Game {
             }
 
 
+
+
+            if input.is_key_pressed(KeyCode::KeyQ) {
+                let raycast = self.world.raycast_voxel(self.camera.position,
+                                                  self.camera.front,
+                                                  PLAYER_REACH);
+                if let Some((pos, n)) = raycast {
+                    let voxel = self.world.get_voxel(pos);
+                    if voxel.is_structure() {
+                        let structure = self.world.structure_blocks.get(&pos).unwrap();
+                        let structure = self.structures.get_mut(*structure);
+
+                        if let StructureData::Inserter { filter, .. } = &mut structure.data {
+                            *filter = None; 
+                        }
+                        else {
+                            for index in 0..structure.available_items_len() {
+                                let item = structure.try_take(index, u32::MAX);
+                                if let Some(item) = item {
+                                    self.entities.spawn(
+                                        EntityKind::dropped_item(item),
+                                        pos.as_dvec3() + DVec3::new(0.5, 0.5, 0.5) + n.as_dvec3(),
+                                    );
+                                    break;
+                                }
+
+                            }
+                        }
+                    }
+                }
+            }
+
+
+
+
             if input.is_key_pressed(KeyCode::ControlLeft) {
                 let mut offset = None;
                 if input.is_key_just_pressed(KeyCode::Digit1) { offset = Some(5) }

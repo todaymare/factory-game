@@ -12,19 +12,19 @@ furnace_recipes = {
     "SteelPlate": {
         "requirements": [("IronPlate", 5)],
         "amount": 1,
-        "time": 5,
+        "time": 10,
     },
 }
 
 recipes = {
     "Brick": {
-        "requirements": [("Voxel(Voxel::Stone)", 2)],
+        "requirements": [("Voxel(Voxel::Stone)", 5)],
         "amount": 1,
         "time": 0.5,
     },
     "IronGearWheel": {
         "requirements": [("IronPlate", 2)],
-        "amount": 1,
+        "amount": 3,
         "time": 0.5,
     },
     "IronRod": {
@@ -55,11 +55,11 @@ recipes = {
     },
     "CircuitBoard": {
         "requirements": [
-            ("ElectronicsKit", 2),
-            ("IronPlate", 4),
+            ("ElectronicsKit", 8),
+            ("IronPlate", 1),
         ],
         "amount": 1,
-        "time": 1,
+        "time": 12,
     },
     "Structure(StructureKind::Belt)": {
         "requirements": [
@@ -111,7 +111,7 @@ recipes = {
     },
     "Structure(StructureKind::SteelFurnace)": {
         "requirements": [
-            ("SteelPlate", 8),
+            ("SteelPlate", 1),
             ("Brick", 32),
         ],
         "amount": 1,
@@ -136,9 +136,9 @@ recipes = {
 
     "Radar": {
         "requirements": [
-            ("SteelPlate", 30),
-            ("CircuitBoard", 20),
-            ("Brick", 50),
+            ("SteelPlate", 160),
+            ("CircuitBoard", 200),
+            ("Brick", 500),
         ],
         "amount": 1,
         "time": 0.1,
