@@ -90,8 +90,7 @@ impl ApplicationHandler for App {
         ) {
         match event {
             winit::event::DeviceEvent::MouseMotion { delta } => {
-                let delta = Vec2::new(delta.0 as f32, delta.1 as f32);
-                self.input.move_cursor(self.input.mouse_position() - delta);
+                self.input.set_delta(DVec2::new(delta.0, delta.1).as_vec2());
             },
             _ => (),
         }

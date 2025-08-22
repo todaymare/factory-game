@@ -591,7 +591,7 @@ impl Game {
 
 
         /*
-        if self.settings.render_distance < RENDER_DISTANCE
+        if self.settings.render_distance < self.settings.target_render_distance 
             && self.world.chunker.mesh_load_queue_len() == 0
             && self.world.chunker.chunk_load_queue_len() == 0
             && self.world.chunker.chunk_active_jobs_len() == 0
@@ -617,7 +617,8 @@ impl Game {
             self.settings.render_distance += 1;
             self.settings.render_distance = self.settings.render_distance.min(RENDER_DISTANCE);
             println!("heyo {}", self.settings.render_distance);
-        }*/
+        }
+        */
 
 
         {
@@ -673,7 +674,6 @@ impl Game {
                         self.world.try_get_chunk(*x);
                         self.world.try_get_mesh(x.0);
                     });
-
             } else {
             }
 

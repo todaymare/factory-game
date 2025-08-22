@@ -62,10 +62,12 @@ impl InputManager {
     }
 
 
+    pub fn set_delta(&mut self, delta: Vec2) {
+        self.delta_mouse_pos = delta;
+    }
+
+
     pub fn move_cursor(&mut self, new_pos: Vec2) {
-        if !self.mouse_pos.is_nan() {
-            self.delta_mouse_pos = new_pos - self.mouse_pos;
-        }
         self.mouse_pos = new_pos;
     }
 

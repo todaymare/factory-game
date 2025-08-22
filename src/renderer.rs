@@ -578,7 +578,7 @@ impl Renderer {
 
             unsafe { freetype::freetype::FT_Set_Pixel_Sizes(face, FONT_SIZE, FONT_SIZE) };
             for c in 0..128 {
-                if unsafe { freetype::freetype::FT_Load_Char(face, c as u64, freetype::freetype::FT_LOAD_RENDER as _) } != 0 {
+                if unsafe { freetype::freetype::FT_Load_Char(face, c as _, freetype::freetype::FT_LOAD_RENDER as _) } != 0 {
                     panic!("failed to load glyph '{}'", char::from_u32(c).unwrap());
                 }
 
